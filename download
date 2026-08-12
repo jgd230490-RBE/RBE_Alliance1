@@ -1,0 +1,16 @@
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Local dev database (SQLite fallback)
+backend/forecasts_local.db
+
+# OS noise
+.DS_Store
+Thumbs.db

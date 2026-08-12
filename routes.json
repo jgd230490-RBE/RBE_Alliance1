@@ -1,0 +1,554 @@
+[
+ {
+  "route_id": "HR-EW-ANELEMALIM-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Anelema limestone",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-ANELEMALIM-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Anelema limestone",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-ANELEMALIM-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Anelema limestone",
+  "dest": "Urge station (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-ANELEMALIM-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Anelema limestone",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-EASSALUIII-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Eassalu III sand",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-EASSALUIII-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Eassalu III sand",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-EASSALUIII-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Eassalu III sand",
+  "dest": "Urge station (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-EASSALUIII-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Eassalu III sand",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-KIVIMÃ„EIII-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Kivimäe III gravel",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-KIVIMÃ„EIII-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Kivimäe III gravel",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-KIVIMÃ„EIII-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Kivimäe III gravel",
+  "dest": "Urge station (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-KIVIMÃ„EIII-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Kivimäe III gravel",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-KOBRALIMES-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Kobra Limestone",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-KOBRALIMES-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Kobra Limestone",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-KOBRALIMES-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Kobra Limestone",
+  "dest": "Urge station (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-KOBRALIMES-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Kobra Limestone",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-PARNUBASE-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Hub Distribution",
+  "origin": "Pärnu Construction Base",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-EW-PARNUBASE-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Hub Distribution",
+  "origin": "Pärnu Construction Base",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-EW-PARNUBASE-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Hub Distribution",
+  "origin": "Pärnu Construction Base",
+  "dest": "Urge station (EW)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-EW-PARNUBASE-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Hub Distribution",
+  "origin": "Pärnu Construction Base",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-EW-POTSEPAII-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Potsepa II gravel",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-POTSEPAII-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Potsepa II gravel",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-POTSEPAII-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Potsepa II gravel",
+  "dest": "Urge station (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-POTSEPAII-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Potsepa II gravel",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-POTSEPASAN-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Potsepa sand",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-POTSEPASAN-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Potsepa sand",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-POTSEPASAN-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Potsepa sand",
+  "dest": "Urge station (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-POTSEPASAN-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Potsepa sand",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-TAMMISTUGR-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Tammistu gravel",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-TAMMISTUGR-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Tammistu gravel",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-TAMMISTUGR-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Tammistu gravel",
+  "dest": "Urge station (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-TAMMISTUGR-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Tammistu gravel",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-TARVAIII-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Tarva III limestone",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-TARVAIII-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Tarva III limestone",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-TARVAIII-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Tarva III limestone",
+  "dest": "Urge station (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-TARVAIII-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Tarva III limestone",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-TARVALIMES-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Tarva limestone",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-TARVALIMES-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Tarva limestone",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-TARVALIMES-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Tarva limestone",
+  "dest": "Urge station (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-TARVALIMES-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Tarva limestone",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Limestone - rockfill"
+ },
+ {
+  "route_id": "HR-EW-VANGUSAND-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Vangu sand",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-VANGUSAND-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Vangu sand",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-VANGUSAND-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Vangu sand",
+  "dest": "Urge station (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-VANGUSAND-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Vangu sand",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-VILUVEREII-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Viluvere II gravel",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-VILUVEREII-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Viluvere II gravel",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-VILUVEREII-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Viluvere II gravel",
+  "dest": "Urge station (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-VILUVEREII-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Viluvere II gravel",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Gravel"
+ },
+ {
+  "route_id": "HR-EW-VILUVERESA-IPT1-WS1",
+  "ipt": "IPT 1",
+  "leg": "Primary/Direct",
+  "origin": "Viluvere sand",
+  "dest": "Tootsi Station (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-VILUVERESA-IPT2-WS2",
+  "ipt": "IPT 2",
+  "leg": "Primary/Direct",
+  "origin": "Viluvere sand",
+  "dest": "Timmermanni Viadukt (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-VILUVERESA-IPT3-WS3",
+  "ipt": "IPT 3",
+  "leg": "Primary/Direct",
+  "origin": "Viluvere sand",
+  "dest": "Urge station (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-EW-VILUVERESA-IPT5-WS5",
+  "ipt": "IPT 5",
+  "leg": "Primary/Direct",
+  "origin": "Viluvere sand",
+  "dest": "Jõekääru (EW)",
+  "material_guess": "Sand"
+ },
+ {
+  "route_id": "HR-RAIL-ESTONIAMIN-PARNUBASE",
+  "ipt": "IPT 3",
+  "leg": "Primary Freight Hub",
+  "origin": "Estonia mine",
+  "dest": "Pärnu Construction Base (Railhead)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-MUUGA-PARNU-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Muuga Harbour (Main HGV Gate)",
+  "dest": "Pärnu Freight Terminal (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-MUUGA-SOODEVAHE-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Muuga Harbour (Main HGV Gate)",
+  "dest": "Soodevahe kaubaterminal (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-MUUGA-STOCKPILE1-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Muuga Harbour (Main HGV Gate)",
+  "dest": "Tõdva-Hageri viadukt (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-MUUGA-STOCKPILE2-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Muuga Harbour (Main HGV Gate)",
+  "dest": "Röa Ã¶kodukt (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-MUUGA-STOCKPILE3-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Muuga Harbour (Main HGV Gate)",
+  "dest": "Rapla Station (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-MUUGA-STOCKPILE4-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Muuga Harbour (Main HGV Gate)",
+  "dest": "Nolva viadukt (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-MUUGA-STOCKPILE5-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Muuga Harbour (Main HGV Gate)",
+  "dest": "Tootsi Station (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-MUUGA-STOCKPILE6-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Muuga Harbour (Main HGV Gate)",
+  "dest": "Kivisilla viadukt (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-PARNU-PARNU-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Port of Pärnu (Verified HGV Gate)",
+  "dest": "Pärnu Freight Terminal (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-PARNU-SOODEVAHE-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Port of Pärnu (Verified HGV Gate)",
+  "dest": "Soodevahe kaubaterminal (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-PARNU-STOCKPILE1-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Port of Pärnu (Verified HGV Gate)",
+  "dest": "Tõdva-Hageri viadukt (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-PARNU-STOCKPILE2-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Port of Pärnu (Verified HGV Gate)",
+  "dest": "Röa Ã¶kodukt (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-PARNU-STOCKPILE3-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Port of Pärnu (Verified HGV Gate)",
+  "dest": "Rapla Station (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-PARNU-STOCKPILE4-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Port of Pärnu (Verified HGV Gate)",
+  "dest": "Nolva viadukt (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-PARNU-STOCKPILE5-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Port of Pärnu (Verified HGV Gate)",
+  "dest": "Tootsi Station (TM)",
+  "material_guess": "Soil"
+ },
+ {
+  "route_id": "HR-TM-PARNU-STOCKPILE6-IPT6-WS7",
+  "ipt": "IPT 6",
+  "leg": "Primary/Direct",
+  "origin": "Port of Pärnu (Verified HGV Gate)",
+  "dest": "Kivisilla viadukt (TM)",
+  "material_guess": "Soil"
+ }
+]

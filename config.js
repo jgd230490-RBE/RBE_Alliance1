@@ -1,0 +1,25 @@
+// ============================================================
+//  RBE Alliance 1 Logistics — Map configuration
+//  Edit values here; no need to touch index.html.
+// ============================================================
+window.CONFIG = {
+  // Mapbox public token. This is a browser (pk.) token and is safe to expose,
+  // but you SHOULD restrict it by URL in your Mapbox account, and can rotate it here.
+  MAPBOX_TOKEN: "pk.eyJ1IjoiamdkMjMwNDE5OTAiLCJhIjoiY21xbnJzaTRrMDYyOTJxcXowczRxNTlxdyJ9.xujuSc3O8RcgKIitWNGIWg",
+
+  // Where the forecast API lives. "/api" = same server that serves this map.
+  API_BASE: "/api",
+
+  // Unit the map paints forecasts in: "vehicles" | "t" | "m3"
+  FORECAST_UNIT: "vehicles",
+
+  // Brand palette (Rail Baltica). Change a hex here to restyle the map.
+  COLORS: {
+    brand:             "#003787",  // primary navy
+    brandDark:         "#0A1446",  // deep navy (headings)
+    forecast:          "#3398DB",  // forecast route highlight
+    forecastLabelHalo: "#003787",  // halo behind forecast labels
+    peak:              "#BF2E55",  // alerts / peak values (theme red)
+    green:             "#039E86"   // success / confirmations
+  }
+};

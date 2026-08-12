@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>RBE Alliance 1 Logistics</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.js"></script>
+    <script src="config.js"></script>
+    <script src="data/a1_data.js"></script>
+    <script src="data/alignment.js"></script>
+    <script src="data/chainage.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; background-color: #f5f5f5; color: #333; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; right: 0; left: 320px; transition: left 0.3s ease; }
+        #menu-toggle { position: absolute; top: 15px; left: 15px; z-index: 1000; background: #ffffff; color: #003787; border: 1px solid #ccc; padding: 10px 15px; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: all 0.2s; }
+        .sidebar { position: absolute; top: 0; bottom: 0; left: 0; width: 280px; background-color: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-right: 1px solid #ddd; padding: 20px; z-index: 10; display: flex; flex-direction: column; gap: 15px; box-shadow: 4px 0 24px rgba(0,0,0,0.1); overflow-y: auto; transition: transform 0.3s ease; }
+        .sidebar.closed { transform: translateX(-100%); }
+        .sidebar h2 { margin: 0; font-size: 18px; font-weight: 700; color: #003787; text-transform: uppercase; padding-top: 40px; }
+        .sidebar h3 { margin: 0; font-size: 11px; color: #666; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        .kpi-container { display: flex; flex-direction: column; gap: 8px; }
+        .kpi-card { background: #f9f9f9; padding: 10px; border-radius: 6px; border: 1px solid #eaeaea; }
+        .kpi-val { font-size: 18px; font-weight: 700; color: #003787; margin-bottom: 2px; }
+        .kpi-lbl { font-size: 10px; color: #555; text-transform: uppercase; font-weight: 600; }
+        select, button { width: 100%; box-sizing: border-box; background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 8px; color: #333; font-size: 12px; margin-bottom: 5px; outline: none; }
+        button { background: #003787; color: #fff; font-weight: bold; cursor: pointer; border: none; }
+        .control-group { display: flex; flex-direction: column; gap: 6px; }
+        .control-item { display: flex; align-items: center; justify-content: space-between; font-size: 12px; background: #f9f9f9; padding: 6px 10px; border-radius: 4px; border: 1px solid #eee; }
+        .control-item label { display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%; font-weight: 500; }
+        .color-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-left: auto; }
+        body.sidebar-closed #map { left: 0; }
+        .mapboxgl-popup-content { background: #fff !important; color: #333 !important; border-radius: 8px !important; border: 1px solid #ccc !important; padding: 12px !important; box-shadow: 0 4px 15px rgba(0,0,0,0.15) !important; font-family: 'Segoe UI', sans-serif; }
+        .bottleneck-row { background-color: #fff0f0; }
+    </style>
+</head>
+<body>
+<div id="menu-toggle" onclick="toggleSidebar()">☰ Control Panel</div>
+<div class="sidebar" id="main-sidebar">
+    <h2 class="rb-title">RBE Alliance 1 Logistics</h2>
+    <div class="kpi-container">
+        <h3>Live Filtered Metrics</h3>
+        <div class="kpi-card"><div class="kpi-val" id="kpi-routes">0</div><div class="kpi-lbl">Active HGV Routes</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="kpi-capacity">0</div><div class="kpi-lbl">Network Shift Capacity</div></div>
+    </div>
+    
+    <div class="control-group">
+        <h3>Advanced Route Filtering</h3>
+        <select id="filter-origin" onchange="applyFilters()"><option value="ALL">All Origins (Quarries/Ports)</option></select>
+        <select id="filter-dest" onchange="applyFilters()"><option value="ALL">All Destinations (Compounds)</option></select>
+        <select id="filter-leg" onchange="applyFilters()"><option value="ALL">All Route Legs</option></select>
+        <select id="filter-ipt" onchange="applyFilters()"><option value="ALL">All Sector IPTs</option></select>
+        <button onclick="resetFilters()" style="background: #666;">Reset Filters</button>
+    </div>
+
+    <div class="control-group">
+        <h3>Basemap Engine</h3>
+        <select id="basemap-select" onchange="changeBasemap(this.value)">
+            <option value="mapbox://styles/mapbox/standard">Mapbox Standard (3D)</option>
+            <option value="mapbox://styles/mapbox/light-v11" selected>Light / Clean</option>
+            <option value="mapbox://styles/mapbox/dark-v11">Dark Mode</option>
+            <option value="mapbox://styles/mapbox/satellite-v9">Satellite Only</option>
+            <option value="mapbox://styles/mapbox/satellite-streets-v12">Satellite Streets</option>
+        </select>
+    </div>
+
+    <div class="control-group">
+        <h3>Infrastructure Overlays</h3>
+        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleLayer('rail-alignment', this.checked)"> Rail Alignment</label><span class="color-dot" style="background-color: #000000; border-radius: 0; width: 12px; height: 2px;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-chainage" checked onchange="toggleLayer('chainage-global', this.checked); toggleLayer('chainage-labels', this.checked);"> Chainage Markers</label><span class="color-dot" style="background-color: #333333;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-rail" checked onchange="toggleLayer('rail-link', this.checked)"> Multimodal Rail Link</label><span class="color-dot" style="background-color: #1e90ff; border-radius: 0; width: 12px; height: 3px;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-nodes" checked onchange="toggleNodes(this.checked)"> Sites & Assets</label><span class="color-dot" style="background-color: #00FFFF;"></span></div>
+    </div>
+    
+    <div class="control-group">
+        <h3>Logistics Paths</h3>
+        <div class="control-item"><label><input type="checkbox" id="layer-inbound" checked onchange="applyFilters()"> Inbound</label><span class="color-dot" style="background-color: #039E86;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-outbound" checked onchange="applyFilters()"> Outbound</label><span class="color-dot" style="background-color: #ff8c00;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-temp" checked onchange="applyFilters()"> Temp Haul</label><span class="color-dot" style="background-color: #cc00ff;"></span></div>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<script>
+    const a1_data = window.a1_data;
+    const alignment_data = window.alignment_data;
+    const chainage_global_data = window.chainage_global_data;
+
+    mapboxgl.accessToken = CONFIG.MAPBOX_TOKEN;
+    const map = new mapboxgl.Map({ container: 'map', style: 'mapbox://styles/mapbox/light-v11', center: [24.85, 58.75], zoom: 7.8 });
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+    
+    const nodeMarkersArray = [];
+    let hoveredRouteId = null;
+
+    function toggleSidebar() { document.getElementById('main-sidebar').classList.toggle('closed'); document.body.classList.toggle('sidebar-closed'); setTimeout(() => map.resize(), 300); }
+    if (window.innerWidth <= 768) toggleSidebar();
+
+    function populateFilters() {
+        const origins = new Set(); const dests = new Set();
+        const legs = new Set(); const ipts = new Set();
+        
+        a1_data.features.forEach(f => {
+            if (f.properties.origin) origins.add(f.properties.origin);
+            if (f.properties.dest) dests.add(f.properties.dest);
+            if (f.properties.leg && f.properties.leg !== 'Unknown Leg') legs.add(f.properties.leg);
+            if (f.properties.ipt && f.properties.ipt !== 'Unknown_IPT') ipts.add(f.properties.ipt);
+        });
+        
+        [...origins].filter(Boolean).sort().forEach(o => { document.getElementById('filter-origin').innerHTML += `<option value="${o}">${o}</option>`; });
+        [...dests].filter(Boolean).sort().forEach(d => { document.getElementById('filter-dest').innerHTML += `<option value="${d}">${d}</option>`; });
+        [...legs].filter(Boolean).sort().forEach(l => { document.getElementById('filter-leg').innerHTML += `<option value="${l}">${l}</option>`; });
+        [...ipts].filter(Boolean).sort().forEach(i => { document.getElementById('filter-ipt').innerHTML += `<option value="${i}">${i}</option>`; });
+    }
+
+    function calculateKPIs(oFilter, dFilter, lFilter, iFilter) {
+        let routesCount = 0; let totalLoads = 0;
+        a1_data.features.forEach(f => {
+            if (f.geometry.type === 'LineString' && f.properties.type === 'Inbound Highway') {
+                const props = f.properties;
+                if ((oFilter === 'ALL' || props.origin === oFilter) && 
+                    (dFilter === 'ALL' || props.dest === dFilter) &&
+                    (lFilter === 'ALL' || props.leg === lFilter) &&
+                    (iFilter === 'ALL' || props.ipt === iFilter)) {
+                    routesCount++; totalLoads += parseFloat(props.max_loads) || 0;
+                }
+            }
+        });
+        document.getElementById('kpi-routes').innerText = routesCount;
+        document.getElementById('kpi-capacity').innerText = totalLoads.toLocaleString() + " Deliveries";
+    }
+
+    function applyFilters() {
+        const o = document.getElementById('filter-origin').value; const d = document.getElementById('filter-dest').value;
+        const l = document.getElementById('filter-leg').value; const i = document.getElementById('filter-ipt').value;
+        const inVis = document.getElementById('layer-inbound').checked; const outVis = document.getElementById('layer-outbound').checked; const tempVis = document.getElementById('layer-temp').checked;
+        
+        calculateKPIs(o, d, l, i);
+        let filterArr = ['all'];
+        if (o !== 'ALL') filterArr.push(['==', 'origin', o]);
+        if (d !== 'ALL') filterArr.push(['==', 'dest', d]);
+        if (l !== 'ALL') filterArr.push(['==', 'leg', l]);
+        if (i !== 'ALL') filterArr.push(['==', 'ipt', i]);
+
+        if (map.getLayer('inbound-lines')) map.setFilter('inbound-lines', inVis ? ['all', ['==', 'type', 'Inbound Highway'], ...filterArr.slice(1)] : ['==', 'type', 'NONE']);
+        if (map.getLayer('outbound-lines')) map.setFilter('outbound-lines', outVis ? ['all', ['==', 'type', 'Outbound Highway'], ...filterArr.slice(1)] : ['==', 'type', 'NONE']);
+        if (map.getLayer('temp-lines')) map.setFilter('temp-lines', tempVis ? ['all', ['==', 'type', 'Temp Haul Track'], ...filterArr.slice(1)] : ['==', 'type', 'NONE']);
+    }
+
+    function resetFilters() { 
+        document.getElementById('filter-origin').value = 'ALL'; document.getElementById('filter-dest').value = 'ALL'; 
+        document.getElementById('filter-leg').value = 'ALL'; document.getElementById('filter-ipt').value = 'ALL';
+        applyFilters(); 
+    }
+
+    function filterByNode(nodeName, nodeType) {
+        resetFilters();
+        if (nodeType === 'Quarry' || nodeType === 'Hub') { document.getElementById('filter-origin').value = nodeName; }
+        else if (nodeType === 'Compound') { document.getElementById('filter-dest').value = nodeName; }
+        applyFilters(); if(window.innerWidth <= 768) toggleSidebar(); 
+    }
+
+    map.on('style.load', () => {
+        if (!map.getSource('routes-source')) map.addSource('routes-source', { type: 'geojson', data: a1_data });
+        if (!map.getSource('alignment-source')) map.addSource('alignment-source', { type: 'geojson', data: alignment_data });
+        if (!map.getSource('chainage-source')) map.addSource('chainage-source', { type: 'geojson', data: chainage_global_data });
+
+        // --- PROFESSIONAL MAPBOX STYLING (Corporate Palette + Highway Offsets) ---
+        
+        // 1. INBOUND ROUTES (Deep Sapphire Blue)
+        // Casing (Halo)
+        map.addLayer({
+            'id': 'inbound-lines-casing',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Inbound'], 
+            'paint': { 
+                'line-color': '#003787', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 8], 
+                'line-opacity': 0.3,
+                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4]
+            }
+        });
+        // Core Line
+        map.addLayer({
+            'id': 'inbound-lines',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Inbound'], 
+            'paint': { 
+                'line-color': '#0d6efd', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.5, 12, 4], 
+                'line-opacity': 0.9,
+                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4]
+            }
+        });
+
+        // 2. OUTBOUND ROUTES (Bright Cyan/Teal)
+        // Casing (Halo)
+        map.addLayer({
+            'id': 'outbound-lines-casing',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Outbound'], 
+            'paint': { 
+                'line-color': '#055160', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 8], 
+                'line-opacity': 0.3,
+                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, 1, 12, 4]
+            }
+        });
+        // Core Line
+        map.addLayer({
+            'id': 'outbound-lines',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Outbound'], 
+            'paint': { 
+                'line-color': '#0dcaf0', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.5, 12, 4], 
+                'line-opacity': 0.9,
+                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, 1, 12, 4]
+            }
+        });
+
+        // 3. TEMP HAUL ROUTES (Slate Purple)
+        map.addLayer({
+            'id': 'temp-lines',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Temporary Haul Route'], 
+            'paint': { 
+                'line-color': '#6610f2', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2, 12, 5], 
+                'line-opacity': 0.85, 
+                'line-dasharray': [1.5, 1.5] 
+            }
+        });
+
+        // Alignment thinner (1.5)
+        map.addLayer({ 'id': 'rail-alignment', 'type': 'line', 'source': 'alignment-source', 'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' }, 'paint': { 'line-color': '#000000', 'line-width': 1.5 } });
+        map.addLayer({ 'id': 'chainage-global', 'type': 'circle', 'source': 'chainage-source', 'layout': { 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none' }, 'paint': { 'circle-color': '#ffffff', 'circle-radius': 3, 'circle-stroke-width': 1, 'circle-stroke-color': '#333' } });
+        map.addLayer({ 'id': 'chainage-labels', 'type': 'symbol', 'source': 'chainage-source', 'minzoom': 11, 'layout': { 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none', 'text-field': ['get', 'chaintxt'], 'text-size': 10, 'text-offset': [0, 1.2] }, 'paint': { 'text-color': '#333333', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
+
+        applyFilters(); 
+        setupHoverEvents(); 
+    });
+
+    function setupHoverEvents() {
+        ['inbound-lines', 'outbound-lines', 'temp-lines', 'rail-link'].forEach(lId => {
+            map.on('mousemove', lId, (e) => {
+                if (e.features.length > 0) {
+                    map.getCanvas().style.cursor = 'pointer';
+                    hoveredRouteId = e.features[0].properties.route_id;
+                    ['inbound-lines', 'outbound-lines'].forEach(layer => {
+                        if (map.getLayer(layer)) {
+                            map.setPaintProperty(layer, 'line-width', ['case', ['==', ['get', 'route_id'], hoveredRouteId], 6, 3]);
+                            map.setPaintProperty(layer, 'line-opacity', ['case', ['==', ['get', 'route_id'], hoveredRouteId], 1.0, 0.4]);
+                        }
+                    });
+                }
+            });
+            map.on('mouseleave', lId, () => {
+                map.getCanvas().style.cursor = '';
+                hoveredRouteId = null;
+                ['inbound-lines', 'outbound-lines'].forEach(layer => {
+                    if (map.getLayer(layer)) {
+                        map.setPaintProperty(layer, 'line-width', 3);
+                        map.setPaintProperty(layer, 'line-opacity', 0.4);
+                    }
+                });
+            });
+            map.on('click', lId, (e) => {
+                if (e.features.length > 0) new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(e.features[0].properties.html).addTo(map);
+            });
+        });
+    }
+
+    map.once('load', () => {
+        populateFilters();
+        a1_data.features.forEach(f => {
+            if (f.geometry.type === 'Point') {
+                const props = f.properties; const el = document.createElement('div');
+                let markerColor = '#00ffff'; let iconSymbol = '🏢';
+
+                if (props.node_type === 'Hub') { markerColor = '#1e90ff'; iconSymbol = props.name.includes('Mine') ? '🚂' : '⚓'; } 
+                else if (props.node_type === 'Quarry') {
+                    if (props.material.toLowerCase().includes('sand')) markerColor = '#ffd700';
+                    else if (props.material.toLowerCase().includes('limestone')) markerColor = '#ffffff';
+                    else markerColor = '#a0522d'; iconSymbol = '⛏️';
+                }
+                el.style.backgroundColor = markerColor; el.style.width = '24px'; el.style.height = '24px';
+                el.style.borderRadius = '50%'; el.style.display = 'flex'; el.style.alignItems = 'center';
+                el.style.justifyContent = 'center'; el.style.fontSize = '12px'; el.style.border = '2px solid #333';
+                el.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)'; el.style.cursor = 'pointer'; el.innerHTML = iconSymbol;
+
+                let popupMarkup = `<div style='min-width: 180px;'><h3 style='margin:0 0 5px 0; color:#003787; border-bottom: 1px solid #eee; padding-bottom:4px;'>${props.name}</h3><p style='margin:4px 0;'><b>Type:</b> ${props.node_type}</p>`;
+                if (props.node_type === 'Compound') popupMarkup += `<p style='margin:4px 0;'><b>Sector IPT:</b> ${props.ipt}</p>`;
+                else if (props.node_type === 'Quarry') popupMarkup += `<p style='margin:4px 0;'><b>Material:</b> ${props.material}</p>`;
+                if (props.aux_info) popupMarkup += props.aux_info;
+                popupMarkup += `<button onclick="filterByNode('${props.name}', '${props.node_type}')" style="margin-top:10px; width:100%; background:#003787; color:#fff; border:none; padding:8px; border-radius:4px; font-weight:bold; cursor:pointer;">Filter Routes to this Location</button></div>`;
+
+                new mapboxgl.Marker(el).setLngLat(f.geometry.coordinates).setPopup(new mapboxgl.Popup({ offset: 12 }).setHTML(popupMarkup)).addTo(map);
+                nodeMarkersArray.push(el);
+            }
+        });
+    });
+    function changeBasemap(styleUrl) { map.setStyle(styleUrl); }
+    function toggleLayer(id, visible) { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'); }
+    function toggleNodes(visible) { nodeMarkersArray.forEach(el => el.style.display = visible ? 'flex' : 'none'); }
+</script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        /* Rail Baltica Estonia Professional Theme Overrides */
+        body { font-family: 'Inter', sans-serif !important; }
+        
+        .sidebar {
+            background-color: rgba(255, 255, 255, 0.98) !important;
+            box-shadow: 4px 0 24px rgba(0,0,0,0.08) !important;
+            border-right: none !important;
+            padding: 24px !important;
+        }
+
+        .rb-title {
+            color: #1a1f36 !important;
+            font-size: 19px !important;
+            font-weight: 700 !important;
+            letter-spacing: -0.3px;
+            margin-bottom: 20px !important;
+            padding-bottom: 10px !important;
+            border-bottom: 3px solid #BF2E55 !important;
+            text-transform: none !important;
+        }
+
+        .control-group, .forecast-box, .kpi-card {
+            background: #ffffff !important;
+            border: 1px solid #e2e8f0 !important;
+            border-radius: 8px !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+            padding: 14px !important;
+            margin-bottom: 12px !important;
+            transition: all 0.2s ease;
+        }
+        
+        .control-group:hover, .forecast-box:hover { box-shadow: 0 4px 6px rgba(0,0,0,0.06) !important; }
+
+        h3 { color: #475569 !important; font-size: 12px !important; font-weight: 600 !important; letter-spacing: 0.5px; }
+        .kpi-val { color: #BF2E55 !important; font-size: 24px !important; }
+        
+        select {
+            appearance: none; background-color: #f8fafc !important; border: 1px solid #cbd5e1 !important;
+            border-radius: 6px !important; padding: 8px 12px !important; font-family: 'Inter', sans-serif !important;
+            font-weight: 500 !important; color: #0f172a !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
+        }
+
+        /* ----------------------------------------------------------------- */
+        /* V5.0 UPGRADE: ENTERPRISE POPUPS & HOVER EFFECTS                   */
+        /* ----------------------------------------------------------------- */
+        
+        /* 1. Massive, Responsive Popups */
+        .mapboxgl-popup { z-index: 1000 !important; }
+        .mapboxgl-popup-content {
+            width: max-content !important;
+            min-width: 280px !important;
+            max-width: 450px !important; /* Much wider for text */
+            padding: 20px !important;
+            border-radius: 12px !important;
+            box-shadow: 0 12px 28px rgba(0,0,0,0.15) !important;
+            border: 1px solid #e2e8f0 !important;
+            font-family: 'Inter', sans-serif !important;
+        }
+        .mapboxgl-popup-close-button {
+            font-size: 20px; color: #94a3b8; padding: 6px 12px; transition: color 0.2s;
+        }
+        .mapboxgl-popup-close-button:hover { background-color: transparent !important; color: #BF2E55; }
+
+        /* 2. Tactile Icon Hover Effects */
+        .custom-marker > div {
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.3s ease !important;
+        }
+        .custom-marker:hover > div {
+            transform: scale(1.18) translateY(-3px) !important; /* Smooth pop-out */
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2) !important;
+            border: 2px solid #BF2E55 !important; /* Rail Baltica Red Border */
+            z-index: 999;
+        }
+
+        /* Widget Styling */
+        .custom-map-widget {
+            display: flex; flex-direction: column; background: #fff; border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15); overflow: hidden; border: 1px solid #e2e8f0;
+        }
+        .widget-btn {
+            background: #fff; border: none; padding: 10px; cursor: pointer; border-bottom: 1px solid #f1f5f9;
+            transition: background 0.2s; font-size: 16px; color: #475569; display: flex; align-items: center; justify-content: center;
+        }
+        .widget-btn:hover { background: #f8fafc; color: #0f172a; }
+        .widget-btn.active { background: #BF2E55; color: white; }
+    </style>
+
+    <script>
+        // --------------------------------------------------------------------
+        // UI INJECTION & MAP STYLE OVERRIDES
+        // --------------------------------------------------------------------
+        window.addEventListener('DOMContentLoaded', (event) => {
+            let oldBasemap = document.getElementById('basemap-select');
+            if(oldBasemap) oldBasemap.parentElement.style.display = 'none';
+
+            let sidebar = document.querySelector('.sidebar');
+            if(sidebar) {
+                let pluginUI = `
+                <div class="forecast-box">
+                    <h3 style="margin: 0 0 10px 0; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">Forecasted Traffic Volume</h3>
+                    <div style="display:flex; justify-content:space-between; margin-bottom: 12px;">
+                        <div style="width: 48%;">
+                            <label style="font-size:11px; font-weight:600; color:#64748b;">From:</label>
+                            <select id="forecast-from" style="width:100%;" onchange="if(document.getElementById('toggle-forecast').checked) toggleForecastPlugin();">
+                                <option value="1">Month 1</option><option value="2">Month 2</option><option value="3">Month 3</option>
+                                <option value="4">Month 4</option><option value="5" selected>Month 5</option><option value="6">Month 6</option>
+                                <option value="7">Month 7</option><option value="8">Month 8</option><option value="9">Month 9</option>
+                                <option value="10">Month 10</option><option value="11">Month 11</option><option value="12">Month 12</option>
+                            </select>
+                        </div>
+                        <div style="width: 48%;">
+                            <label style="font-size:11px; font-weight:600; color:#64748b;">To:</label>
+                            <select id="forecast-to" style="width:100%;" onchange="if(document.getElementById('toggle-forecast').checked) toggleForecastPlugin();">
+                                <option value="1">Month 1</option><option value="2">Month 2</option><option value="3">Month 3</option>
+                                <option value="4">Month 4</option><option value="5">Month 5</option><option value="6">Month 6</option>
+                                <option value="7">Month 7</option><option value="8">Month 8</option><option value="9">Month 9</option>
+                                <option value="10">Month 10</option><option value="11" selected>Month 11</option><option value="12">Month 12</option>
+                            </select>
+                        </div>
+                    </div>
+                    <label style="font-size: 12px; cursor: pointer; display: flex; align-items: center; font-weight: 600; background: #f1f5f9; padding: 8px; border-radius: 6px; transition: background 0.2s;">
+                        <input type="checkbox" id="toggle-forecast" onchange="toggleForecastPlugin()" style="margin-right: 8px;"> Show Forecast Routes
+                    </label>
+                    <div id="forecast-status" style="margin-top: 10px; font-size: 11px; font-weight: 600; color: #94a3b8;">Waiting to calculate...</div>
+                </div>`;
+                sidebar.insertAdjacentHTML('beforeend', pluginUI);
+            }
+        });
+
+        // --------------------------------------------------------------------
+        // V5 HOVER ENGINE & WIDGET INJECTION
+        // --------------------------------------------------------------------
+        let mapReadyInterval = setInterval(() => {
+            if (typeof map !== 'undefined' && map.loaded()) {
+                clearInterval(mapReadyInterval);
+                
+                // Add Mapbox Basemap Widget
+                class BasemapWidgetControl {
+                    onAdd(map) {
+                        this._map = map;
+                        this._container = document.createElement('div');
+                        this._container.className = 'mapboxgl-ctrl custom-map-widget';
+                        this._container.innerHTML = `
+                            <button class="widget-btn active" title="Light Theme" onclick="changeTheme(this, 'mapbox://styles/mapbox/light-v11')">☀️</button>
+                            <button class="widget-btn" title="Dark Theme" onclick="changeTheme(this, 'mapbox://styles/mapbox/dark-v11')">🌙</button>
+                            <button class="widget-btn" title="Satellite" onclick="changeTheme(this, 'mapbox://styles/mapbox/satellite-streets-v12')">🌍</button>
+                            <button class="widget-btn" title="Streets" onclick="changeTheme(this, 'mapbox://styles/mapbox/streets-v12')">🛣️</button>
+                        `;
+                        return this._container;
+                    }
+                    onRemove() { this._container.parentNode.removeChild(this._container); this._map = undefined; }
+                }
+                map.addControl(new BasemapWidgetControl(), 'bottom-left');
+
+                // Identify Base Data Source
+                let allSources = Object.keys(map.getStyle().sources);
+                let targetSource = allSources.find(s => s.includes('route') || s.includes('a1')) || 'routes';
+
+                const applySolidColors = () => {
+                    // Force Solid Colors on Baseline Routes
+                    if (map.getLayer('inbound-lines')) {
+                        map.setPaintProperty('inbound-lines', 'line-color', '#039E86'); 
+                        map.setPaintProperty('inbound-lines', 'line-opacity', 1.0);
+                    }
+                    if (map.getLayer('outbound-lines')) {
+                        map.setPaintProperty('outbound-lines', 'line-color', '#f59e0b'); 
+                        map.setPaintProperty('outbound-lines', 'line-opacity', 1.0);
+                    }
+                    if (map.getLayer('temp-lines')) {
+                        map.setPaintProperty('temp-lines', 'line-color', '#8b5cf6'); 
+                        map.setPaintProperty('temp-lines', 'line-opacity', 1.0);
+                    }
+
+                    // Setup Universal Hover Glow Layer (Sits behind the routes)
+                    if (!map.getLayer('global-route-hover')) {
+                        map.addLayer({
+                            id: 'global-route-hover',
+                            type: 'line',
+                            source: targetSource,
+                            paint: {
+                                'line-color': '#ffffff',
+                                'line-width': 12,       /* Wide for glow effect */
+                                'line-opacity': 0.6,
+                                'line-blur': 4          /* Softens the edges */
+                            },
+                            filter: ['==', 'name', 'IMPOSSIBLE_VALUE'] // Hidden initially
+                        }, 'inbound-lines'); // Place it UNDER the route layers
+                    }
+                };
+
+                applySolidColors();
+                
+                // Track mouse over any route layer
+                const interactiveLayers = ['inbound-lines', 'outbound-lines', 'temp-lines', 'forecast-layer'];
+                interactiveLayers.forEach(layer => {
+                    // Check dynamically when mouse moves in case layer is added later
+                    map.on('mousemove', (e) => {
+                        let features = map.queryRenderedFeatures(e.point, { layers: interactiveLayers.filter(l => map.getLayer(l)) });
+                        if (features.length > 0) {
+                            map.getCanvas().style.cursor = 'pointer';
+                            let p = features[0].properties;
+                            // Match using whatever ID field exists
+                            let idMatch = p.Route_ID || p.route_id || p.name || p.ID || p.id;
+                            
+                            if (map.getLayer('global-route-hover') && idMatch) {
+                                map.setFilter('global-route-hover', [
+                                    'any',
+                                    ['==', 'Route_ID', idMatch],
+                                    ['==', 'route_id', idMatch],
+                                    ['==', 'name', idMatch],
+                                    ['==', 'ID', idMatch],
+                                    ['==', 'id', idMatch]
+                                ]);
+                            }
+                        } else {
+                            map.getCanvas().style.cursor = '';
+                            if (map.getLayer('global-route-hover')) {
+                                map.setFilter('global-route-hover', ['==', 'name', 'IMPOSSIBLE_VALUE']);
+                            }
+                        }
+                    });
+                });
+                
+                map.on('style.load', () => {
+                    setTimeout(() => {
+                        applySolidColors();
+                        if(document.getElementById('toggle-forecast') && document.getElementById('toggle-forecast').checked) {
+                            toggleForecastPlugin();
+                        }
+                    }, 500);
+                });
+            }
+        }, 500);
+
+        window.changeTheme = function(btn, styleUrl) {
+            document.querySelectorAll('.widget-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            map.setStyle(styleUrl);
+        };
+
+        // --------------------------------------------------------------------
+        // FORECAST ENGINE
+        // --------------------------------------------------------------------
+        async function toggleForecastPlugin() {
+            let isChecked = document.getElementById('toggle-forecast').checked;
+            let status = document.getElementById('forecast-status');
+
+            if (!isChecked) {
+                if(map.getLayer('forecast-labels')) map.removeLayer('forecast-labels');
+                if(map.getLayer('forecast-layer')) map.removeLayer('forecast-layer');
+                status.innerHTML = "Forecast cleared.";
+                status.style.color = "#64748b";
+                return;
+            }
+
+            let fromM = parseInt(document.getElementById('forecast-from').value);
+            let toM = parseInt(document.getElementById('forecast-to').value);
+            if (fromM > toM) {
+                status.innerHTML = "\u274c 'From' month must be before 'To' month!";
+                status.style.color = CONFIG.COLORS.peak;
+                return;
+            }
+
+            const unit = CONFIG.FORECAST_UNIT || 'vehicles';
+            status.innerHTML = "Fetching approved forecasts\u2026";
+            status.style.color = CONFIG.COLORS.forecast;
+
+            try {
+                let url = `${CONFIG.API_BASE}/public/route-forecasts?from=${fromM}&to=${toM}&unit=${unit}`;
+                let response = await fetch(url);
+                if (!response.ok) throw new Error("API " + response.status);
+                let raw = await response.json();
+
+                let forecastMap = {};
+                Object.keys(raw).forEach(k => { forecastMap[k.toString().trim().toLowerCase()] = raw[k]; });
+
+                let src = map.getSource('routes-source');
+                let currentData = src._data;
+                let matchCount = 0;
+
+                currentData.features.forEach(f => {
+                    if (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString') {
+                        let rid = (f.properties.route_id || '').toString().trim().toLowerCase();
+                        let m = rid && forecastMap[rid];
+                        if (m) {
+                            f.properties.is_forecast = true;
+                            f.properties.f_avg = m.avg;
+                            f.properties.f_peak = m.peak;
+                            f.properties.f_total = m.total;
+                            f.properties.f_unit = m.unit;
+                            f.properties.f_time = `M${fromM}\u2013M${toM}`;
+                            matchCount++;
+                        } else {
+                            f.properties.is_forecast = false;
+                        }
+                    }
+                });
+                src.setData(currentData);
+
+                if (!map.getLayer('forecast-layer')) {
+                    map.addLayer({
+                        id: 'forecast-layer', type: 'line', source: 'routes-source',
+                        filter: ['==', 'is_forecast', true],
+                        paint: { 'line-color': CONFIG.COLORS.forecast, 'line-width': 7, 'line-opacity': 0.9 }
+                    });
+                    map.addLayer({
+                        id: 'forecast-labels', type: 'symbol', source: 'routes-source',
+                        filter: ['==', 'is_forecast', true],
+                        layout: { 'symbol-placement': 'line-center', 'text-field': ['concat', ['get', 'f_avg'], ' ', ['get', 'f_unit']], 'text-size': 13, 'text-offset': [0,-1] },
+                        paint: { 'text-color': '#ffffff', 'text-halo-color': CONFIG.COLORS.forecastLabelHalo, 'text-halo-width': 2 }
+                    });
+
+                    map.on('click', 'forecast-layer', function(e) {
+                        let p = e.features[0].properties;
+                        let rId = p.route_id || 'Route';
+                        let html = `<div style="font-family:'Segoe UI', sans-serif; min-width:210px;">
+                            <h4 style="margin:0 0 8px 0; border-bottom:2px solid #e2e8f0; padding-bottom:4px; color:${CONFIG.COLORS.brandDark};">${rId} (Forecast)</h4>
+                            <p style="margin:4px 0; font-size:12px; color:#475569;"><b>Window:</b> ${p.f_time}</p>
+                            <div style="background:#f8fafc; padding:10px; margin-top:8px; border-radius:6px; border:1px solid #e2e8f0;">
+                                <p style="margin:3px 0; font-size:12px;"><b>Avg / month:</b> ${p.f_avg} ${p.f_unit}</p>
+                                <p style="margin:3px 0; font-size:12px;"><b>Peak month:</b> <span style="color:${CONFIG.COLORS.peak}; font-weight:600;">${p.f_peak} ${p.f_unit}</span></p>
+                                <p style="margin:3px 0; font-size:12px;"><b>Window total:</b> ${p.f_total} ${p.f_unit}</p>
+                            </div></div>`;
+                        new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
+                    });
+                }
+
+                if (matchCount > 0) {
+                    status.innerHTML = `\u2705 Showing ${matchCount} route(s) with approved forecasts.`;
+                    status.style.color = CONFIG.COLORS.green;
+                } else {
+                    status.innerHTML = `<span style="color:${CONFIG.COLORS.peak};">No approved forecasts in M${fromM}\u2013M${toM}.</span>`;
+                }
+            } catch (e) {
+                status.innerHTML = "\u274c Failed: " + e.message;
+                status.style.color = CONFIG.COLORS.peak;
+            }
+        }
+    </script>
+    
+</html>

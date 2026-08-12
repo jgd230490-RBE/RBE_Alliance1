@@ -1,0 +1,20 @@
+{
+  "_README": "EDIT THIS FILE to tune forecasting conversions. No code changes needed. Densities are bulk/loose tonnes per cubic metre. Payloads are usable tonnes per vehicle load. '_default' is used for any material/vehicle not listed. After editing, commit to GitHub; Render redeploys automatically.",
+
+  "material_density_t_per_m3": {
+    "Limestone - rockfill": 1.6,
+    "Sand": 1.5,
+    "Gravel": 1.7,
+    "Limestone (Shale aggregate)": 1.5,
+    "Soil": 1.4,
+    "_default": 1.6
+  },
+
+  "vehicle_payload_t": {
+    "8x4 Tipper": 20,
+    "Artic Tipper": 28,
+    "ADT / Dumper": 30,
+    "Rigid 6-wheeler": 12,
+    "_default": 20
+  }
+}
