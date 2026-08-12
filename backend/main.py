@@ -241,6 +241,42 @@ def public_route_forecasts(
     return out
 
 
+@app.get("/api/public/forecast-matrix")
+def public_forecast_matrix(
+    from_: int = Query(1, alias="from", ge=1, le=MONTH_COUNT),
+    to: int = Query(MONTH_COUNT, ge=1, le=MONTH_COUNT),
+    unit: str = Query("vehicles"),
+):
+    """
+    Approved forecasts as a month-by-month grid (for the map's detail table).
+    Returns a list, one entry per route, each with a {month_index: quantity} map
+    in the requested unit, plus the route's material and vehicle.
+    """
+    if unit not in conversions.UNITS:
+        raise HTTPException(400, f"unit must be one of {conversions.UNITS}")
+    lo, hi = min(from_, to), max(from_, to)
+    rows = db.query(
+        "SELECT * FROM forecasts WHERE status = 'Approved' AND month_index BETWEEN ? AND ? ORDER BY route_id, month_index",
+        (lo, hi),
+    )
+    factors = conversions.load_factors()
+    by_route = {}
+    for r in rows:
+        g = by_route.setdefault(r["route_id"], {
+            "route_id": r["route_id"], "material_type": r["material_type"],
+            "vehicle_type": r["vehicle_type"], "monthly": {}, "total": 0.0,
+        })
+        v = conversions.convert(r["quantity"], r["unit"], unit,
+                                r["material_type"], r["vehicle_type"], factors)
+        g["monthly"][str(r["month_index"])] = conversions.round_for_unit(v, unit)
+        g["total"] += v
+    out = list(by_route.values())
+    for g in out:
+        g["total"] = conversions.round_for_unit(g["total"], unit)
+    out.sort(key=lambda x: x["total"], reverse=True)
+    return {"unit": unit, "from": lo, "to": hi, "routes": out}
+
+
 # ------------------------------------------------------------------ static
 # Map (Mapbox app) at /map/ ; must be mounted before the catch-all "/".
 app.mount("/map", StaticFiles(directory=str(ROOT / "map"), html=True), name="map")

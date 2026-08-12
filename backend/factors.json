@@ -1,5 +1,5 @@
 {
-  "_README": "EDIT THIS FILE to tune forecasting conversions. No code changes needed. Densities are bulk/loose tonnes per cubic metre. Payloads are usable tonnes per vehicle load. '_default' is used for any material/vehicle not listed. After editing, commit to GitHub; Render redeploys automatically.",
+  "_README": "EDIT THIS FILE to tune all forecasting + planning numbers. No code changes needed. After editing, commit to GitHub; Render redeploys automatically. Sources noted per section.",
 
   "material_density_t_per_m3": {
     "Limestone - rockfill": 1.6,
@@ -16,5 +16,23 @@
     "ADT / Dumper": 30,
     "Rigid 6-wheeler": 12,
     "_default": 20
+  },
+
+  "_carbon_note": "kg CO2e per vehicle-km, diesel, average-laden basis. Defaults derived from UK DEFRA/BEIS 2025 GHG conversion factors (articulated HGV ~0.89 kg/km; rigid >17t higher per km due to lower payload; ADT is off-highway plant, higher). Carbon is estimated as trips x round-trip distance x factor (loaded out, empty return).",
+  "vehicle_emissions_kg_co2e_per_km": {
+    "8x4 Tipper": 0.95,
+    "Artic Tipper": 0.89,
+    "ADT / Dumper": 1.30,
+    "Rigid 6-wheeler": 0.60,
+    "_default": 0.90
+  },
+
+  "_planning_note": "Used to estimate haul-cycle turnaround, trips/day and fleet size for route planning. All editable.",
+  "planning": {
+    "avg_haul_speed_kmh": 45,
+    "load_minutes": 12,
+    "unload_minutes": 8,
+    "working_days_per_month": 22,
+    "shift_hours_per_day": 10
   }
 }
