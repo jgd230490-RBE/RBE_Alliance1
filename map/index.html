@@ -6,77 +6,129 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link href="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.css" rel="stylesheet">
     <script src="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="config.js"></script>
     <script src="data/a1_data.js"></script>
     <script src="data/alignment.js"></script>
     <script src="data/chainage.js"></script>
     <style>
-        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; background-color: #f5f5f5; color: #333; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; right: 0; left: 320px; transition: left 0.3s ease; }
-        #menu-toggle { position: absolute; top: 15px; left: 15px; z-index: 1000; background: #ffffff; color: #003787; border: 1px solid #ccc; padding: 10px 15px; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: all 0.2s; }
-        .sidebar { position: absolute; top: 0; bottom: 0; left: 0; width: 280px; background-color: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-right: 1px solid #ddd; padding: 20px; z-index: 10; display: flex; flex-direction: column; gap: 15px; box-shadow: 4px 0 24px rgba(0,0,0,0.1); overflow-y: auto; transition: transform 0.3s ease; }
-        .sidebar.closed { transform: translateX(-100%); }
-        .sidebar h2 { margin: 0; font-size: 18px; font-weight: 700; color: #003787; text-transform: uppercase; padding-top: 40px; }
-        .sidebar h3 { margin: 0; font-size: 11px; color: #666; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px; }
-        .kpi-container { display: flex; flex-direction: column; gap: 8px; }
-        .kpi-card { background: #f9f9f9; padding: 10px; border-radius: 6px; border: 1px solid #eaeaea; }
-        .kpi-val { font-size: 18px; font-weight: 700; color: #003787; margin-bottom: 2px; }
-        .kpi-lbl { font-size: 10px; color: #555; text-transform: uppercase; font-weight: 600; }
-        select, button { width: 100%; box-sizing: border-box; background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 8px; color: #333; font-size: 12px; margin-bottom: 5px; outline: none; }
-        button { background: #003787; color: #fff; font-weight: bold; cursor: pointer; border: none; }
-        .control-group { display: flex; flex-direction: column; gap: 6px; }
-        .control-item { display: flex; align-items: center; justify-content: space-between; font-size: 12px; background: #f9f9f9; padding: 6px 10px; border-radius: 4px; border: 1px solid #eee; }
-        .control-item label { display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%; font-weight: 500; }
-        .color-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-left: auto; }
-        body.sidebar-closed #map { left: 0; }
-        .mapboxgl-popup-content { background: #fff !important; color: #333 !important; border-radius: 8px !important; border: 1px solid #ccc !important; padding: 12px !important; box-shadow: 0 4px 15px rgba(0,0,0,0.15) !important; font-family: 'Segoe UI', sans-serif; }
-        .bottleneck-row { background-color: #fff0f0; }
+        :root{
+            --navy:#003787; --navy-deep:#0A1446; --ink:#1f2937; --muted:#6b7280;
+            --line:#e8eaed; --bg:#fbfbfc; --accent:#BF2E55; --green:#039E86;
+        }
+        *{ box-sizing:border-box; }
+        body { margin:0; padding:0; font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var(--ink); overflow:hidden; -webkit-font-smoothing:antialiased; }
+        #map { position:absolute; top:0; bottom:0; right:0; left:300px; transition:left .25s ease; }
+        body.sidebar-closed #map, .sidebar.closed ~ #map { left:0; }
+
+        #menu-toggle { position:absolute; top:14px; left:14px; z-index:1000; background:#fff; color:var(--navy); border:1px solid var(--line); padding:8px 13px; border-radius:8px; cursor:pointer; font-weight:600; font-size:13px; box-shadow:0 1px 3px rgba(16,24,40,.08); }
+        #menu-toggle:hover{ border-color:#d0d3d8; }
+
+        .sidebar { position:absolute; top:0; bottom:0; left:0; width:300px; background:#fff; border-right:1px solid var(--line); padding:20px 18px 24px; z-index:10; display:flex; flex-direction:column; gap:22px; overflow-y:auto; transition:transform .25s ease; }
+        .sidebar.closed { transform:translateX(-100%); }
+        .sidebar h2 { margin:0; font-size:15px; font-weight:700; letter-spacing:-.01em; color:var(--navy-deep); padding-top:42px; display:flex; align-items:center; gap:9px; }
+        .sidebar h2::before{ content:""; width:8px; height:22px; background:var(--navy); border-radius:2px; }
+        .sidebar h2 small{ display:block; font-size:9.5px; font-weight:500; letter-spacing:.16em; text-transform:uppercase; color:var(--muted); margin-top:3px; }
+        .sidebar h3 { margin:0 0 9px; font-size:10.5px; font-weight:600; letter-spacing:.08em; color:var(--muted); text-transform:uppercase; }
+
+        select, button, input { font-family:inherit; }
+        select { width:100%; background:#fff; border:1px solid var(--line); border-radius:7px; padding:8px 9px; color:var(--ink); font-size:12.5px; outline:none; margin-bottom:6px; transition:border-color .15s; }
+        select:focus { border-color:var(--navy); }
+        .btn { width:100%; border:none; border-radius:7px; padding:8px; font-size:12.5px; font-weight:600; cursor:pointer; background:var(--navy); color:#fff; }
+        .btn-ghost { background:#f3f4f6; color:var(--ink); }
+        .btn-ghost:hover{ background:#eceef1; }
+
+        .control-group { display:flex; flex-direction:column; }
+        .control-item { display:flex; align-items:center; justify-content:space-between; font-size:12.5px; padding:7px 2px; }
+        .control-item + .control-item{ border-top:1px solid var(--line); }
+        .control-item label { display:flex; align-items:center; gap:9px; cursor:pointer; width:100%; font-weight:500; color:var(--ink); }
+        .control-item input[type=checkbox]{ accent-color:var(--navy); width:14px; height:14px; }
+        .color-dot { width:11px; height:11px; border-radius:50%; display:inline-block; margin-left:auto; }
+
+        .fc-box h3{ border:none; }
+        .fc-row{ display:flex; gap:10px; margin-bottom:10px; }
+        .fc-row > div{ flex:1; }
+        .fc-row label{ font-size:10.5px; font-weight:600; color:var(--muted); display:block; margin-bottom:3px; }
+        .fc-toggle{ font-size:12.5px; cursor:pointer; display:flex; align-items:center; gap:9px; font-weight:600; background:#f6f8fb; border:1px solid var(--line); padding:9px 11px; border-radius:8px; }
+        .fc-toggle input{ accent-color:var(--navy); }
+        #forecast-status{ margin-top:9px; font-size:11px; font-weight:500; color:var(--muted); line-height:1.5; }
+        #btn-detail{ margin-top:8px; display:none; }
+
+        .mapboxgl-popup-content { border-radius:10px !important; border:1px solid var(--line) !important; padding:13px 14px !important; box-shadow:0 8px 28px rgba(16,24,40,.14) !important; font-family:'Inter',sans-serif !important; }
+        .mapboxgl-popup-content h3, .mapboxgl-popup-content h4{ font-family:'Inter',sans-serif; }
+        .rb-popup-btn{ margin-top:10px; width:100%; background:var(--navy); color:#fff; border:none; padding:8px; border-radius:6px; font-weight:600; font-size:12px; cursor:pointer; }
+
+        /* Bottom drawer: route analysis + forecast detail */
+        #route-drawer{ position:absolute; left:300px; right:0; bottom:0; z-index:20; background:#fff; border-top:1px solid var(--line); box-shadow:0 -8px 28px rgba(16,24,40,.10); transform:translateY(100%); transition:transform .28s ease; max-height:46vh; display:flex; flex-direction:column; }
+        #route-drawer.open{ transform:translateY(0); }
+        body.sidebar-closed #route-drawer{ left:0; }
+        .drawer-head{ display:flex; align-items:center; gap:4px; padding:10px 16px; border-bottom:1px solid var(--line); }
+        .drawer-tab{ border:none; background:none; font-size:12.5px; font-weight:600; color:var(--muted); padding:6px 10px; cursor:pointer; border-radius:6px; }
+        .drawer-tab.active{ color:var(--navy); background:#eef3fb; }
+        .drawer-close{ margin-left:auto; border:none; background:none; font-size:20px; line-height:1; color:var(--muted); cursor:pointer; padding:2px 8px; }
+        .drawer-body{ overflow:auto; padding:16px; }
+        .an-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; }
+        .an-card{ border:1px solid var(--line); border-radius:9px; padding:11px 13px; }
+        .an-val{ font-size:19px; font-weight:700; color:var(--navy-deep); letter-spacing:-.02em; }
+        .an-lbl{ font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); margin-top:3px; }
+        .an-sub{ font-size:11px; color:var(--muted); margin-top:1px; }
+        .an-title{ font-size:14px; font-weight:700; color:var(--navy-deep); }
+        .an-route{ font-size:12px; color:var(--muted); margin:2px 0 14px; }
+        table.fc-matrix{ border-collapse:collapse; font-size:11.5px; width:100%; }
+        table.fc-matrix th, table.fc-matrix td{ padding:6px 8px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line); }
+        table.fc-matrix th:first-child, table.fc-matrix td:first-child{ text-align:left; position:sticky; left:0; background:#fff; }
+        table.fc-matrix thead th{ position:sticky; top:0; background:#fff; font-weight:600; color:var(--muted); }
+        .mat-chip{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; vertical-align:middle; }
     </style>
 </head>
 <body>
 <div id="menu-toggle" onclick="toggleSidebar()">☰ Control Panel</div>
 <div class="sidebar" id="main-sidebar">
-    <h2 class="rb-title">RBE Alliance 1 Logistics</h2>
-    <div class="kpi-container">
-        <h3>Live Filtered Metrics</h3>
-        <div class="kpi-card"><div class="kpi-val" id="kpi-routes">0</div><div class="kpi-lbl">Active HGV Routes</div></div>
-        <div class="kpi-card"><div class="kpi-val" id="kpi-capacity">0</div><div class="kpi-lbl">Network Shift Capacity</div></div>
-    </div>
-    
+    <h2 class="rb-title">RBE Alliance 1 Logistics<small>Route map &amp; forecast</small></h2>
+
     <div class="control-group">
-        <h3>Advanced Route Filtering</h3>
-        <select id="filter-origin" onchange="applyFilters()"><option value="ALL">All Origins (Quarries/Ports)</option></select>
-        <select id="filter-dest" onchange="applyFilters()"><option value="ALL">All Destinations (Compounds)</option></select>
-        <select id="filter-leg" onchange="applyFilters()"><option value="ALL">All Route Legs</option></select>
-        <select id="filter-ipt" onchange="applyFilters()"><option value="ALL">All Sector IPTs</option></select>
-        <button onclick="resetFilters()" style="background: #666;">Reset Filters</button>
+        <h3>Route filtering</h3>
+        <select id="filter-origin" onchange="applyFilters()"><option value="ALL">All origins</option></select>
+        <select id="filter-dest" onchange="applyFilters()"><option value="ALL">All destinations</option></select>
+        <select id="filter-leg" onchange="applyFilters()"><option value="ALL">All route legs</option></select>
+        <select id="filter-ipt" onchange="applyFilters()"><option value="ALL">All sector IPTs</option></select>
+        <button class="btn btn-ghost" onclick="resetFilters()">Reset filters</button>
     </div>
 
     <div class="control-group">
-        <h3>Basemap Engine</h3>
+        <h3>Basemap</h3>
         <select id="basemap-select" onchange="changeBasemap(this.value)">
-            <option value="mapbox://styles/mapbox/standard">Mapbox Standard (3D)</option>
-            <option value="mapbox://styles/mapbox/light-v11" selected>Light / Clean</option>
-            <option value="mapbox://styles/mapbox/dark-v11">Dark Mode</option>
-            <option value="mapbox://styles/mapbox/satellite-v9">Satellite Only</option>
-            <option value="mapbox://styles/mapbox/satellite-streets-v12">Satellite Streets</option>
+            <option value="mapbox://styles/mapbox/light-v11" selected>Light</option>
+            <option value="mapbox://styles/mapbox/standard">Standard (3D)</option>
+            <option value="mapbox://styles/mapbox/dark-v11">Dark</option>
+            <option value="mapbox://styles/mapbox/satellite-streets-v12">Satellite</option>
         </select>
     </div>
 
     <div class="control-group">
-        <h3>Infrastructure Overlays</h3>
-        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleLayer('rail-alignment', this.checked)"> Rail Alignment</label><span class="color-dot" style="background-color: #000000; border-radius: 0; width: 12px; height: 2px;"></span></div>
-        <div class="control-item"><label><input type="checkbox" id="layer-chainage" checked onchange="toggleLayer('chainage-global', this.checked); toggleLayer('chainage-labels', this.checked);"> Chainage Markers</label><span class="color-dot" style="background-color: #333333;"></span></div>
-        <div class="control-item"><label><input type="checkbox" id="layer-rail" checked onchange="toggleLayer('rail-link', this.checked)"> Multimodal Rail Link</label><span class="color-dot" style="background-color: #1e90ff; border-radius: 0; width: 12px; height: 3px;"></span></div>
-        <div class="control-item"><label><input type="checkbox" id="layer-nodes" checked onchange="toggleNodes(this.checked)"> Sites & Assets</label><span class="color-dot" style="background-color: #00FFFF;"></span></div>
+        <h3>Overlays</h3>
+        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleLayer('rail-alignment', this.checked)"> Rail alignment</label><span class="color-dot" style="background:#334155; border-radius:0; width:13px; height:2px;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-chainage" onchange="toggleLayer('chainage-global', this.checked); toggleLayer('chainage-labels', this.checked);"> Chainage markers</label><span class="color-dot" style="background:#94a3b8;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-nodes" checked onchange="toggleNodes(this.checked)"> Sites &amp; assets</label><span class="color-dot" style="background:#003787;"></span></div>
     </div>
-    
+
     <div class="control-group">
-        <h3>Logistics Paths</h3>
-        <div class="control-item"><label><input type="checkbox" id="layer-inbound" checked onchange="applyFilters()"> Inbound</label><span class="color-dot" style="background-color: #039E86;"></span></div>
-        <div class="control-item"><label><input type="checkbox" id="layer-outbound" checked onchange="applyFilters()"> Outbound</label><span class="color-dot" style="background-color: #ff8c00;"></span></div>
-        <div class="control-item"><label><input type="checkbox" id="layer-temp" checked onchange="applyFilters()"> Temp Haul</label><span class="color-dot" style="background-color: #cc00ff;"></span></div>
+        <h3>Haul routes</h3>
+        <div class="control-item"><label><input type="checkbox" id="layer-inbound" checked onchange="applyFilters()"> Inbound</label><span class="color-dot" style="background:#3E5C82;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-outbound" checked onchange="applyFilters()"> Outbound</label><span class="color-dot" style="background:#7BA0C4;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-temp" checked onchange="applyFilters()"> Temporary haul</label><span class="color-dot" style="background:#9aa7b4;"></span></div>
     </div>
+</div>
+
+<div id="route-drawer">
+  <div class="drawer-head">
+    <button class="drawer-tab active" id="tab-analysis" onclick="showDrawerTab('analysis')">Route analysis</button>
+    <button class="drawer-tab" id="tab-detail" onclick="showDrawerTab('detail')">Forecast detail</button>
+    <button class="drawer-close" onclick="closeDrawer()" title="Close">&times;</button>
+  </div>
+  <div class="drawer-body" id="drawer-analysis"></div>
+  <div class="drawer-body" id="drawer-detail" style="display:none;"></div>
 </div>
 
 <div id="map"></div>
@@ -126,8 +178,8 @@
                 }
             }
         });
-        document.getElementById('kpi-routes').innerText = routesCount;
-        document.getElementById('kpi-capacity').innerText = totalLoads.toLocaleString() + " Deliveries";
+        const er = document.getElementById('kpi-routes'); if (er) er.innerText = routesCount;
+        const ec = document.getElementById('kpi-capacity'); if (ec) ec.innerText = totalLoads.toLocaleString();
     }
 
     function applyFilters() {
@@ -175,9 +227,9 @@
             'source': 'routes-source',
             'filter': ['==', ['get', 'route_leg'], 'Inbound'], 
             'paint': { 
-                'line-color': '#003787', 
-                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 8], 
-                'line-opacity': 0.3,
+                'line-color': '#24405E', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 7], 
+                'line-opacity': 0.35,
                 'line-offset': ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4]
             }
         });
@@ -188,7 +240,7 @@
             'source': 'routes-source',
             'filter': ['==', ['get', 'route_leg'], 'Inbound'], 
             'paint': { 
-                'line-color': '#0d6efd', 
+                'line-color': '#3E5C82', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.5, 12, 4], 
                 'line-opacity': 0.9,
                 'line-offset': ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4]
@@ -203,7 +255,7 @@
             'source': 'routes-source',
             'filter': ['==', ['get', 'route_leg'], 'Outbound'], 
             'paint': { 
-                'line-color': '#055160', 
+                'line-color': '#4E6E90', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 8], 
                 'line-opacity': 0.3,
                 'line-offset': ['interpolate', ['linear'], ['zoom'], 7, 1, 12, 4]
@@ -216,7 +268,7 @@
             'source': 'routes-source',
             'filter': ['==', ['get', 'route_leg'], 'Outbound'], 
             'paint': { 
-                'line-color': '#0dcaf0', 
+                'line-color': '#7BA0C4', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.5, 12, 4], 
                 'line-opacity': 0.9,
                 'line-offset': ['interpolate', ['linear'], ['zoom'], 7, 1, 12, 4]
@@ -230,7 +282,7 @@
             'source': 'routes-source',
             'filter': ['==', ['get', 'route_leg'], 'Temporary Haul Route'], 
             'paint': { 
-                'line-color': '#6610f2', 
+                'line-color': '#9AA7B4', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2, 12, 5], 
                 'line-opacity': 0.85, 
                 'line-dasharray': [1.5, 1.5] 
@@ -270,9 +322,6 @@
                     }
                 });
             });
-            map.on('click', lId, (e) => {
-                if (e.features.length > 0) new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(e.features[0].properties.html).addTo(map);
-            });
         });
     }
 
@@ -289,10 +338,10 @@
                     else if (props.material.toLowerCase().includes('limestone')) markerColor = '#ffffff';
                     else markerColor = '#a0522d'; iconSymbol = '⛏️';
                 }
-                el.style.backgroundColor = markerColor; el.style.width = '24px'; el.style.height = '24px';
+                el.style.backgroundColor = markerColor; el.style.width = '18px'; el.style.height = '18px';
                 el.style.borderRadius = '50%'; el.style.display = 'flex'; el.style.alignItems = 'center';
-                el.style.justifyContent = 'center'; el.style.fontSize = '12px'; el.style.border = '2px solid #333';
-                el.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)'; el.style.cursor = 'pointer'; el.innerHTML = iconSymbol;
+                el.style.justifyContent = 'center'; el.style.fontSize = '9px'; el.style.border = '1.5px solid #475569';
+                el.style.boxShadow = '0 1px 3px rgba(16,24,40,0.25)'; el.style.cursor = 'pointer'; el.innerHTML = iconSymbol;
 
                 let popupMarkup = `<div style='min-width: 180px;'><h3 style='margin:0 0 5px 0; color:#003787; border-bottom: 1px solid #eee; padding-bottom:4px;'>${props.name}</h3><p style='margin:4px 0;'><b>Type:</b> ${props.node_type}</p>`;
                 if (props.node_type === 'Compound') popupMarkup += `<p style='margin:4px 0;'><b>Sector IPT:</b> ${props.ipt}</p>`;
@@ -313,91 +362,14 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
     <style>
-        /* Rail Baltica Estonia Professional Theme Overrides */
-        body { font-family: 'Inter', sans-serif !important; }
-        
-        .sidebar {
-            background-color: rgba(255, 255, 255, 0.98) !important;
-            box-shadow: 4px 0 24px rgba(0,0,0,0.08) !important;
-            border-right: none !important;
-            padding: 24px !important;
-        }
-
-        .rb-title {
-            color: #1a1f36 !important;
-            font-size: 19px !important;
-            font-weight: 700 !important;
-            letter-spacing: -0.3px;
-            margin-bottom: 20px !important;
-            padding-bottom: 10px !important;
-            border-bottom: 3px solid #BF2E55 !important;
-            text-transform: none !important;
-        }
-
-        .control-group, .forecast-box, .kpi-card {
-            background: #ffffff !important;
-            border: 1px solid #e2e8f0 !important;
-            border-radius: 8px !important;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
-            padding: 14px !important;
-            margin-bottom: 12px !important;
-            transition: all 0.2s ease;
-        }
-        
-        .control-group:hover, .forecast-box:hover { box-shadow: 0 4px 6px rgba(0,0,0,0.06) !important; }
-
-        h3 { color: #475569 !important; font-size: 12px !important; font-weight: 600 !important; letter-spacing: 0.5px; }
-        .kpi-val { color: #BF2E55 !important; font-size: 24px !important; }
-        
-        select {
-            appearance: none; background-color: #f8fafc !important; border: 1px solid #cbd5e1 !important;
-            border-radius: 6px !important; padding: 8px 12px !important; font-family: 'Inter', sans-serif !important;
-            font-weight: 500 !important; color: #0f172a !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
-        }
-
-        /* ----------------------------------------------------------------- */
-        /* V5.0 UPGRADE: ENTERPRISE POPUPS & HOVER EFFECTS                   */
-        /* ----------------------------------------------------------------- */
-        
-        /* 1. Massive, Responsive Popups */
-        .mapboxgl-popup { z-index: 1000 !important; }
-        .mapboxgl-popup-content {
-            width: max-content !important;
-            min-width: 280px !important;
-            max-width: 450px !important; /* Much wider for text */
-            padding: 20px !important;
-            border-radius: 12px !important;
-            box-shadow: 0 12px 28px rgba(0,0,0,0.15) !important;
-            border: 1px solid #e2e8f0 !important;
-            font-family: 'Inter', sans-serif !important;
-        }
-        .mapboxgl-popup-close-button {
-            font-size: 20px; color: #94a3b8; padding: 6px 12px; transition: color 0.2s;
-        }
-        .mapboxgl-popup-close-button:hover { background-color: transparent !important; color: #BF2E55; }
-
-        /* 2. Tactile Icon Hover Effects */
-        .custom-marker > div {
-            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.3s ease !important;
-        }
-        .custom-marker:hover > div {
-            transform: scale(1.18) translateY(-3px) !important; /* Smooth pop-out */
-            box-shadow: 0 8px 16px rgba(0,0,0,0.2) !important;
-            border: 2px solid #BF2E55 !important; /* Rail Baltica Red Border */
-            z-index: 999;
-        }
-
-        /* Widget Styling */
-        .custom-map-widget {
-            display: flex; flex-direction: column; background: #fff; border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15); overflow: hidden; border: 1px solid #e2e8f0;
-        }
-        .widget-btn {
-            background: #fff; border: none; padding: 10px; cursor: pointer; border-bottom: 1px solid #f1f5f9;
-            transition: background 0.2s; font-size: 16px; color: #475569; display: flex; align-items: center; justify-content: center;
-        }
-        .widget-btn:hover { background: #f8fafc; color: #0f172a; }
-        .widget-btn.active { background: #BF2E55; color: white; }
+        /* Theme refinements — base minimalist theme lives in the <head> block */
+        body { font-family:'Inter',system-ui,sans-serif !important; }
+        .sidebar { box-shadow:none !important; border-right:1px solid var(--line) !important; padding:20px 18px 24px !important; background:#fff !important; }
+        .rb-title { border:none !important; text-transform:none !important; }
+        .control-group, .fc-box { background:transparent !important; border:none !important; box-shadow:none !important; padding:0 !important; margin:0 !important; }
+        .mapboxgl-popup-content { min-width:210px !important; max-width:360px !important; padding:13px 14px !important; border-radius:10px !important; box-shadow:0 8px 28px rgba(16,24,40,.14) !important; }
+        .mapboxgl-popup-close-button { font-size:18px; color:#94a3b8; padding:4px 9px; }
+        .mapboxgl-popup-close-button:hover { color:var(--accent); background:transparent !important; }
     </style>
 
     <script>
@@ -405,40 +377,21 @@
         // UI INJECTION & MAP STYLE OVERRIDES
         // --------------------------------------------------------------------
         window.addEventListener('DOMContentLoaded', (event) => {
-            let oldBasemap = document.getElementById('basemap-select');
-            if(oldBasemap) oldBasemap.parentElement.style.display = 'none';
-
             let sidebar = document.querySelector('.sidebar');
             if(sidebar) {
                 let pluginUI = `
-                <div class="forecast-box">
-                    <h3 style="margin: 0 0 10px 0; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">Forecasted Traffic Volume</h3>
-                    <div style="display:flex; justify-content:space-between; margin-bottom: 12px;">
-                        <div style="width: 48%;">
-                            <label style="font-size:11px; font-weight:600; color:#64748b;">From:</label>
-                            <select id="forecast-from" style="width:100%;" onchange="if(document.getElementById('toggle-forecast').checked) toggleForecastPlugin();">
-                                <option value="1">Month 1</option><option value="2">Month 2</option><option value="3">Month 3</option>
-                                <option value="4">Month 4</option><option value="5" selected>Month 5</option><option value="6">Month 6</option>
-                                <option value="7">Month 7</option><option value="8">Month 8</option><option value="9">Month 9</option>
-                                <option value="10">Month 10</option><option value="11">Month 11</option><option value="12">Month 12</option>
-                            </select>
-                        </div>
-                        <div style="width: 48%;">
-                            <label style="font-size:11px; font-weight:600; color:#64748b;">To:</label>
-                            <select id="forecast-to" style="width:100%;" onchange="if(document.getElementById('toggle-forecast').checked) toggleForecastPlugin();">
-                                <option value="1">Month 1</option><option value="2">Month 2</option><option value="3">Month 3</option>
-                                <option value="4">Month 4</option><option value="5">Month 5</option><option value="6">Month 6</option>
-                                <option value="7">Month 7</option><option value="8">Month 8</option><option value="9">Month 9</option>
-                                <option value="10">Month 10</option><option value="11" selected>Month 11</option><option value="12">Month 12</option>
-                            </select>
-                        </div>
+                <div class="control-group fc-box">
+                    <h3>Forecast traffic volume</h3>
+                    <div class="fc-row">
+                        <div><label>From</label><select id="forecast-from" onchange="if(document.getElementById('toggle-forecast').checked) toggleForecastPlugin();"></select></div>
+                        <div><label>To</label><select id="forecast-to" onchange="if(document.getElementById('toggle-forecast').checked) toggleForecastPlugin();"></select></div>
                     </div>
-                    <label style="font-size: 12px; cursor: pointer; display: flex; align-items: center; font-weight: 600; background: #f1f5f9; padding: 8px; border-radius: 6px; transition: background 0.2s;">
-                        <input type="checkbox" id="toggle-forecast" onchange="toggleForecastPlugin()" style="margin-right: 8px;"> Show Forecast Routes
-                    </label>
-                    <div id="forecast-status" style="margin-top: 10px; font-size: 11px; font-weight: 600; color: #94a3b8;">Waiting to calculate...</div>
+                    <label class="fc-toggle"><input type="checkbox" id="toggle-forecast" onchange="toggleForecastPlugin()"> Show forecast routes</label>
+                    <button class="btn btn-ghost" id="btn-detail" onclick="openForecastDetail()">Forecast detail table</button>
+                    <div id="forecast-status">Approved forecasts only.</div>
                 </div>`;
                 sidebar.insertAdjacentHTML('beforeend', pluginUI);
+                populateForecastMonths();
             }
         });
 
@@ -561,10 +514,11 @@
             let status = document.getElementById('forecast-status');
 
             if (!isChecked) {
-                if(map.getLayer('forecast-labels')) map.removeLayer('forecast-labels');
-                if(map.getLayer('forecast-layer')) map.removeLayer('forecast-layer');
-                status.innerHTML = "Forecast cleared.";
-                status.style.color = "#64748b";
+                ['forecast-labels','forecast-layer','forecast-casing'].forEach(l => { if(map.getLayer(l)) map.removeLayer(l); });
+                status.innerHTML = "Approved forecasts only.";
+                status.style.color = "#6b7280";
+                const bd = document.getElementById('btn-detail'); if(bd) bd.style.display = 'none';
+                if (typeof closeDrawer === 'function' && drawerTab === 'detail') closeDrawer();
                 return;
             }
 
@@ -614,37 +568,31 @@
 
                 if (!map.getLayer('forecast-layer')) {
                     map.addLayer({
+                        id: 'forecast-casing', type: 'line', source: 'routes-source',
+                        filter: ['==', 'is_forecast', true],
+                        paint: { 'line-color': CONFIG.COLORS.forecastCasing, 'line-width': 6, 'line-opacity': 0.9 }
+                    });
+                    map.addLayer({
                         id: 'forecast-layer', type: 'line', source: 'routes-source',
                         filter: ['==', 'is_forecast', true],
-                        paint: { 'line-color': CONFIG.COLORS.forecast, 'line-width': 7, 'line-opacity': 0.9 }
+                        paint: { 'line-color': CONFIG.COLORS.forecast, 'line-width': 3.5, 'line-opacity': 0.95 }
                     });
                     map.addLayer({
                         id: 'forecast-labels', type: 'symbol', source: 'routes-source',
                         filter: ['==', 'is_forecast', true],
-                        layout: { 'symbol-placement': 'line-center', 'text-field': ['concat', ['get', 'f_avg'], ' ', ['get', 'f_unit']], 'text-size': 13, 'text-offset': [0,-1] },
+                        layout: { 'symbol-placement': 'line-center', 'text-field': ['concat', ['get', 'f_avg'], ' ', ['get', 'f_unit']], 'text-size': 12, 'text-offset': [0,-1] },
                         paint: { 'text-color': '#ffffff', 'text-halo-color': CONFIG.COLORS.forecastLabelHalo, 'text-halo-width': 2 }
-                    });
-
-                    map.on('click', 'forecast-layer', function(e) {
-                        let p = e.features[0].properties;
-                        let rId = p.route_id || 'Route';
-                        let html = `<div style="font-family:'Segoe UI', sans-serif; min-width:210px;">
-                            <h4 style="margin:0 0 8px 0; border-bottom:2px solid #e2e8f0; padding-bottom:4px; color:${CONFIG.COLORS.brandDark};">${rId} (Forecast)</h4>
-                            <p style="margin:4px 0; font-size:12px; color:#475569;"><b>Window:</b> ${p.f_time}</p>
-                            <div style="background:#f8fafc; padding:10px; margin-top:8px; border-radius:6px; border:1px solid #e2e8f0;">
-                                <p style="margin:3px 0; font-size:12px;"><b>Avg / month:</b> ${p.f_avg} ${p.f_unit}</p>
-                                <p style="margin:3px 0; font-size:12px;"><b>Peak month:</b> <span style="color:${CONFIG.COLORS.peak}; font-weight:600;">${p.f_peak} ${p.f_unit}</span></p>
-                                <p style="margin:3px 0; font-size:12px;"><b>Window total:</b> ${p.f_total} ${p.f_unit}</p>
-                            </div></div>`;
-                        new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
                     });
                 }
 
+                const bd = document.getElementById('btn-detail');
                 if (matchCount > 0) {
-                    status.innerHTML = `\u2705 Showing ${matchCount} route(s) with approved forecasts.`;
+                    status.innerHTML = `Showing ${matchCount} route(s) with approved forecasts.`;
                     status.style.color = CONFIG.COLORS.green;
+                    if (bd) bd.style.display = 'block';
                 } else {
-                    status.innerHTML = `<span style="color:${CONFIG.COLORS.peak};">No approved forecasts in M${fromM}\u2013M${toM}.</span>`;
+                    status.innerHTML = `<span style="color:${CONFIG.COLORS.peak};">No approved forecasts in this window.</span>`;
+                    if (bd) bd.style.display = 'none';
                 }
             } catch (e) {
                 status.innerHTML = "\u274c Failed: " + e.message;
@@ -652,5 +600,225 @@
             }
         }
     </script>
-    
+
+    <script>
+    // ===== Selection highlight · route analysis · forecast detail · month labels =====
+    let META = { factors: null, ready: false };
+    let ROUTEINFO = {};                 // route_id(lower) -> {origin,dest,distance_km}
+    let selectedRouteId = null;
+    let drawerTab = 'analysis';
+    const FCACHE = {};                  // `${lo}-${hi}-${unit}` -> matrix json
+
+    const FALLBACK_FACTORS = {
+        vehicle_payload_t: { "_default": 20 },
+        vehicle_emissions_kg_co2e_per_km: { "_default": 0.90 },
+        planning: { avg_haul_speed_kmh:45, load_minutes:12, unload_minutes:8, working_days_per_month:22, shift_hours_per_day:10 }
+    };
+    function fac(){ return META.factors || FALLBACK_FACTORS; }
+    function pick(obj,key){ if(!obj) return undefined; return obj[key]!==undefined ? obj[key] : obj._default; }
+
+    function monthLabel(i){
+        const names=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const y = CONFIG.START_YEAR + Math.floor((i-1)/12);
+        return names[(i-1)%12] + ' ' + y;
+    }
+    function populateForecastMonths(){
+        const from=document.getElementById('forecast-from'), to=document.getElementById('forecast-to');
+        if(!from||!to) return;
+        let opts='';
+        for(let i=1;i<=CONFIG.MONTH_COUNT;i++) opts+='<option value="'+i+'">'+monthLabel(i)+'</option>';
+        from.innerHTML=opts; to.innerHTML=opts; from.value='1'; to.value='12';
+    }
+
+    function havKm(a,b){
+        const R=6371, rad=Math.PI/180;
+        const dLat=(b[1]-a[1])*rad, dLon=(b[0]-a[0])*rad;
+        const s=Math.sin(dLat/2)**2 + Math.cos(a[1]*rad)*Math.cos(b[1]*rad)*Math.sin(dLon/2)**2;
+        return 2*R*Math.asin(Math.sqrt(s));
+    }
+    function lineLenKm(geom){
+        let pts = geom.type==='LineString' ? geom.coordinates : [].concat.apply([], geom.coordinates);
+        let d=0; for(let i=0;i<pts.length-1;i++) d+=havKm(pts[i],pts[i+1]); return d;
+    }
+    function buildRouteInfo(){
+        (a1_data.features||[]).forEach(f=>{
+            if(f.geometry && (f.geometry.type==='LineString'||f.geometry.type==='MultiLineString')){
+                const rid=(f.properties.route_id||'').toString().trim().toLowerCase();
+                if(!rid) return;
+                const L=lineLenKm(f.geometry);
+                const cur=ROUTEINFO[rid]||{origin:f.properties.origin,dest:f.properties.dest,distance_km:0};
+                if(L>cur.distance_km){
+                    cur.distance_km=L;
+                    const pts=f.geometry.type==='LineString'?f.geometry.coordinates:[].concat.apply([],f.geometry.coordinates);
+                    if(pts.length){ cur.start=pts[0]; cur.end=pts[pts.length-1]; }
+                }
+                cur.origin=cur.origin||f.properties.origin; cur.dest=cur.dest||f.properties.dest;
+                ROUTEINFO[rid]=cur;
+            }
+        });
+    }
+    async function fetchMeta(){
+        try{ const r=await fetch(CONFIG.API_BASE+'/meta'); META.factors = r.ok ? (await r.json()).factors : FALLBACK_FACTORS; }
+        catch(e){ META.factors=FALLBACK_FACTORS; }
+        META.ready=true;
+    }
+    async function fetchMatrix(unit){
+        const f=parseInt(document.getElementById('forecast-from').value)||1;
+        const t=parseInt(document.getElementById('forecast-to').value)||12;
+        const lo=Math.min(f,t), hi=Math.max(f,t), key=lo+'-'+hi+'-'+unit;
+        if(FCACHE[key]) return FCACHE[key];
+        const r=await fetch(CONFIG.API_BASE+'/public/forecast-matrix?from='+lo+'&to='+hi+'&unit='+unit);
+        if(!r.ok) throw new Error('API '+r.status);
+        const j=await r.json(); FCACHE[key]=j; return j;
+    }
+
+    function ensureSelectionLayers(){
+        if(!map.getSource('selected-route')) map.addSource('selected-route',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+        if(!map.getLayer('sel-glow')) map.addLayer({id:'sel-glow',type:'line',source:'selected-route',paint:{'line-color':CONFIG.COLORS.selection,'line-width':10,'line-opacity':0.28,'line-blur':2}});
+        if(!map.getLayer('sel-core')) map.addLayer({id:'sel-core',type:'line',source:'selected-route',paint:{'line-color':CONFIG.COLORS.selection,'line-width':3.5,'line-opacity':0.95}});
+    }
+    function selectRoute(routeId){
+        selectedRouteId=routeId;
+        const rl=(routeId||'').toString().trim().toLowerCase();
+        const feats=(a1_data.features||[]).filter(f=>f.geometry&&(f.geometry.type==='LineString'||f.geometry.type==='MultiLineString')&&(f.properties.route_id||'').toString().trim().toLowerCase()===rl);
+        ensureSelectionLayers();
+        const src=map.getSource('selected-route'); if(src) src.setData({type:'FeatureCollection',features:feats});
+        if(map.getLayer('sel-glow')) map.moveLayer('sel-glow');
+        if(map.getLayer('sel-core')) map.moveLayer('sel-core');
+    }
+    function clearSelection(){
+        selectedRouteId=null;
+        const src=map.getSource('selected-route'); if(src) src.setData({type:'FeatureCollection',features:[]});
+    }
+
+    function showDrawerTab(tab){
+        drawerTab=tab;
+        document.getElementById('drawer-analysis').style.display = tab==='analysis'?'block':'none';
+        document.getElementById('drawer-detail').style.display   = tab==='detail'?'block':'none';
+        document.getElementById('tab-analysis').classList.toggle('active',tab==='analysis');
+        document.getElementById('tab-detail').classList.toggle('active',tab==='detail');
+        document.getElementById('route-drawer').classList.add('open');
+    }
+    function closeDrawer(){ document.getElementById('route-drawer').classList.remove('open'); }
+    function card(val,lbl,sub){ return '<div class="an-card"><div class="an-val">'+val+'</div><div class="an-lbl">'+lbl+'</div>'+(sub?'<div class="an-sub">'+sub+'</div>':'')+'</div>'; }
+
+    async function openRouteAnalysis(routeId){
+        selectRoute(routeId);
+        showDrawerTab('analysis');
+        const box=document.getElementById('drawer-analysis');
+        const rl=(routeId||'').toString().trim().toLowerCase();
+        const info=ROUTEINFO[rl]||{distance_km:0};
+        const F=fac(); const P=F.planning||FALLBACK_FACTORS.planning;
+        const dist=info.distance_km||0, round=dist*2;
+        const cycleH = P.avg_haul_speed_kmh>0 ? (round/P.avg_haul_speed_kmh + (P.load_minutes+P.unload_minutes)/60) : 0;
+        const tripsPerDay = cycleH>0 ? (P.shift_hours_per_day/cycleH) : 0;
+        const dirLink = (info.start&&info.end)
+            ? ' &nbsp;·&nbsp; <a href="https://www.google.com/maps/dir/?api=1&origin='+info.start[1]+','+info.start[0]+'&destination='+info.end[1]+','+info.end[0]+'&travelmode=driving" target="_blank" rel="noopener" style="color:var(--navy);font-weight:600;text-decoration:none;">Driving directions ↗</a>'
+            : '';
+        box.innerHTML =
+            '<div class="an-title">'+routeId+'</div>'+
+            '<div class="an-route">'+(info.origin||'—')+' → '+(info.dest||'—')+dirLink+'</div>'+
+            '<div class="an-grid">'+
+                card(dist.toFixed(1)+' km','One-way distance','Routed road geometry')+
+                card(round.toFixed(1)+' km','Round trip','Loaded out, empty back')+
+                card(cycleH.toFixed(2)+' h','Est. haul cycle','Drive + '+(P.load_minutes+P.unload_minutes)+' min handling')+
+                card(tripsPerDay.toFixed(1),'Trips / day / truck','@ '+P.shift_hours_per_day+' h shift, '+P.avg_haul_speed_kmh+' km/h')+
+            '</div>'+
+            '<div id="an-fc-slot" class="an-sub" style="margin-top:12px;">Loading forecast…</div>';
+        try{
+            const mtx=await fetchMatrix('t');
+            const row=(mtx.routes||[]).find(r=>(r.route_id||'').toString().trim().toLowerCase()===rl);
+            let extra;
+            if(row){
+                const veh=row.vehicle_type, mat=row.material_type;
+                const payload=pick(F.vehicle_payload_t,veh)||20;
+                const emis=pick(F.vehicle_emissions_kg_co2e_per_km,veh)||0.9;
+                const totalT=row.total||0;
+                const months=Object.values(row.monthly||{});
+                const peakT=months.length?Math.max.apply(null,months):0;
+                const trips=payload>0?Math.ceil(totalT/payload):0;
+                const co2t=trips*round*emis/1000;
+                const intensity=totalT>0?(co2t*1000/totalT):0;
+                const trucksPeak=(tripsPerDay>0&&payload>0)?Math.ceil((peakT/payload)/(tripsPerDay*P.working_days_per_month)):0;
+                extra =
+                    '<div class="an-title" style="margin-top:16px;">Forecast · '+monthLabel(mtx.from)+' – '+monthLabel(mtx.to)+'</div>'+
+                    '<div class="an-route">'+mat+' · '+veh+' · payload '+payload+' t</div>'+
+                    '<div class="an-grid">'+
+                        card(Math.round(totalT).toLocaleString()+' t','Total material','over selected window')+
+                        card(trips.toLocaleString(),'Total trips','one-way loaded runs')+
+                        card(co2t.toFixed(1)+' t','CO₂e (est.)','round-trip diesel')+
+                        card(intensity.toFixed(1)+' kg/t','Carbon intensity','per tonne delivered')+
+                        card(Math.round(peakT).toLocaleString()+' t','Peak month','busiest month in window')+
+                        card(trucksPeak,'Trucks for peak','to clear peak month')+
+                    '</div>'+
+                    '<div class="an-sub" style="margin-top:10px;">Carbon uses DEFRA-2025-based factors — edit backend/factors.json.</div>';
+            } else {
+                extra='<div class="an-sub" style="margin-top:12px;">No approved forecast for this route in the selected window, so tonnage &amp; carbon are hidden. Distance and cycle time above come from the road geometry.</div>';
+            }
+            const slot=document.getElementById('an-fc-slot'); if(slot) slot.outerHTML=extra;
+        }catch(e){
+            const slot=document.getElementById('an-fc-slot'); if(slot) slot.outerHTML='<div class="an-sub" style="margin-top:12px;">Couldn\'t load forecast ('+e.message+').</div>';
+        }
+    }
+
+    const MAT_PALETTE=['#003787','#039E86','#BF2E55','#C6841D','#6D28D9','#0E7490','#9AA7B4'];
+    function materialColorMap(routes){
+        const m={}; let i=0;
+        routes.forEach(r=>{ const k=r.material_type||'—'; if(!(k in m)){ m[k]=MAT_PALETTE[i%MAT_PALETTE.length]; i++; } });
+        return m;
+    }
+    async function openForecastDetail(){
+        showDrawerTab('detail');
+        const box=document.getElementById('drawer-detail');
+        box.innerHTML='<div class="an-sub">Loading forecast detail…</div>';
+        try{
+            const mtx=await fetchMatrix('t');
+            const routes=mtx.routes||[];
+            if(!routes.length){ box.innerHTML='<div class="an-sub">No approved forecasts in the selected window.</div>'; return; }
+            const lo=mtx.from, hi=mtx.to, cmap=materialColorMap(routes);
+            let head='<th>Route</th>'; for(let i=lo;i<=hi;i++) head+='<th>'+monthLabel(i)+'</th>'; head+='<th>Total</th>';
+            let body='';
+            routes.forEach(r=>{
+                let row='<td><span class="mat-chip" style="background:'+cmap[r.material_type||'—']+'"></span>'+r.route_id+'</td>';
+                for(let i=lo;i<=hi;i++){ const v=(r.monthly||{})[i]; row+='<td>'+(v?Math.round(v).toLocaleString():'·')+'</td>'; }
+                row+='<td><b>'+Math.round(r.total||0).toLocaleString()+'</b></td>';
+                body+='<tr>'+row+'</tr>';
+            });
+            const leg=Object.keys(cmap).map(k=>'<span style="margin-right:14px;white-space:nowrap;"><span class="mat-chip" style="background:'+cmap[k]+'"></span>'+k+'</span>').join('');
+            box.innerHTML =
+                '<div class="an-title">Approved forecast — tonnes of material by month</div>'+
+                '<div class="an-route">Window '+monthLabel(lo)+' – '+monthLabel(hi)+' · '+routes.length+' route(s) · sorted by total</div>'+
+                '<div style="font-size:11px;color:var(--muted);margin-bottom:10px;">'+leg+'</div>'+
+                '<div style="overflow:auto;"><table class="fc-matrix"><thead><tr>'+head+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+        }catch(e){ box.innerHTML='<div class="an-sub">Couldn\'t load forecast detail ('+e.message+').</div>'; }
+    }
+
+    (function initAnalysis(){
+        buildRouteInfo();
+        fetchMeta();
+        const routeLayers=['inbound-lines','outbound-lines','temp-lines','forecast-layer'];
+        routeLayers.forEach(lid=>{
+            map.on('click', lid, (e)=>{
+                if(!e.features||!e.features.length) return;
+                const p=e.features[0].properties, rid=p.route_id||'Route';
+                selectRoute(rid);
+                const info=ROUTEINFO[(rid||'').toString().trim().toLowerCase()]||{};
+                const safe=(rid||'').toString().replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+                const html='<div style="min-width:210px;">'+
+                    '<h4 style="margin:0 0 4px;color:'+CONFIG.COLORS.brandDark+';font-size:13px;">'+rid+'</h4>'+
+                    '<div style="font-size:11.5px;color:#6b7280;margin-bottom:8px;">'+(info.origin||'—')+' → '+(info.dest||'—')+(info.distance_km?(' · '+info.distance_km.toFixed(1)+' km'):'')+'</div>'+
+                    '<button class="rb-popup-btn" onclick="openRouteAnalysis(\''+safe+'\')">Full route analysis →</button></div>';
+                new mapboxgl.Popup({offset:10}).setLngLat(e.lngLat).setHTML(html).addTo(map);
+            });
+        });
+        map.on('click',(e)=>{
+            const active=routeLayers.filter(l=>map.getLayer(l));
+            const hits=active.length?map.queryRenderedFeatures(e.point,{layers:active}):[];
+            if(!hits.length) clearSelection();
+        });
+        map.on('style.load', ()=>{ ensureSelectionLayers(); if(selectedRouteId) selectRoute(selectedRouteId); });
+        if(map.isStyleLoaded()) ensureSelectionLayers();
+    })();
+    </script>
+</body>
 </html>
