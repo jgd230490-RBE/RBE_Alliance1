@@ -63,9 +63,12 @@ class Cell(BaseModel):
 
 class MatrixRow(BaseModel):
     route_id: str
-    material_type: str
+    material_type: str                        # category, e.g. "Small aggregate"
+    material_description: Optional[str] = None # free-text detail
     vehicle_type: str
-    unit: str                       # 'm3' | 't' | 'vehicles'
+    vehicle_type_2: Optional[str] = None       # optional second vehicle
+    split_pct: Optional[int] = 100             # % of tonnage on vehicle_type; rest on vehicle_type_2
+    unit: str                                  # 'm3' | 't' | 'vehicles'
     cells: List[Cell]
     status: str = "Pending"
 
@@ -115,6 +118,7 @@ def meta():
         },
         # flat maps kept for the map + dashboard, derived from the taxonomy
         "factors": conversions.flat_factors(factors),
+        "seasonal_restrictions": factors.get("seasonal_restrictions", []),
     }
 
 
@@ -175,21 +179,28 @@ def save_matrix_row(row: MatrixRow):
             continue
         rid = f"{row.route_id}::{c.month_index}"
         if c.quantity and c.quantity > 0:
+            split = row.split_pct if row.split_pct is not None else 100
+            veh2 = row.vehicle_type_2 or None
             db.execute(
                 """
                 INSERT INTO forecasts
-                    (id, route_id, month_index, quantity, unit, material_type, vehicle_type, status, reject_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, route_id, month_index, quantity, unit, material_type, material_description,
+                     vehicle_type, vehicle_type_2, split_pct, status, reject_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (route_id, month_index) DO UPDATE SET
-                    quantity      = EXCLUDED.quantity,
-                    unit          = EXCLUDED.unit,
-                    material_type = EXCLUDED.material_type,
-                    vehicle_type  = EXCLUDED.vehicle_type,
-                    status        = EXCLUDED.status,
-                    reject_reason = NULL
+                    quantity             = EXCLUDED.quantity,
+                    unit                 = EXCLUDED.unit,
+                    material_type        = EXCLUDED.material_type,
+                    material_description = EXCLUDED.material_description,
+                    vehicle_type         = EXCLUDED.vehicle_type,
+                    vehicle_type_2       = EXCLUDED.vehicle_type_2,
+                    split_pct            = EXCLUDED.split_pct,
+                    status               = EXCLUDED.status,
+                    reject_reason        = NULL
                 """,
                 (rid, row.route_id, c.month_index, float(c.quantity), row.unit,
-                 row.material_type, row.vehicle_type, row.status, None),
+                 row.material_type, row.material_description, row.vehicle_type,
+                 veh2, split, row.status, None),
             )
         else:
             db.execute("DELETE FROM forecasts WHERE route_id = ? AND month_index = ?",
@@ -230,8 +241,7 @@ def public_route_forecasts(
     factors = conversions.load_factors()
     agg = {}
     for r in rows:
-        v = conversions.convert(r["quantity"], r["unit"], unit,
-                                r["material_type"], r["vehicle_type"], factors)
+        v = conversions.convert_row(r, unit, factors)
         a = agg.setdefault(r["route_id"], {"total": 0.0, "peak": 0.0, "months": 0})
         a["total"] += v
         a["peak"] = max(a["peak"], v)
@@ -272,10 +282,11 @@ def public_forecast_matrix(
     for r in rows:
         g = by_route.setdefault(r["route_id"], {
             "route_id": r["route_id"], "material_type": r["material_type"],
-            "vehicle_type": r["vehicle_type"], "monthly": {}, "total": 0.0,
+            "material_description": r.get("material_description"),
+            "vehicle_type": r["vehicle_type"], "vehicle_type_2": r.get("vehicle_type_2"),
+            "split_pct": r.get("split_pct", 100), "monthly": {}, "total": 0.0,
         })
-        v = conversions.convert(r["quantity"], r["unit"], unit,
-                                r["material_type"], r["vehicle_type"], factors)
+        v = conversions.convert_row(r, unit, factors)
         g["monthly"][str(r["month_index"])] = conversions.round_for_unit(v, unit)
         g["total"] += v
     out = list(by_route.values())

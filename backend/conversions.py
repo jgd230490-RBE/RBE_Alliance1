@@ -101,6 +101,41 @@ def convert(quantity, from_unit, to_unit, material, vehicle, factors=None):
     return from_tonnes(tonnes, to_unit, material, vehicle, factors)
 
 
+def effective_payload(factors, v1, v2=None, split_pct=100):
+    """
+    Blended payload when a load is split across two vehicle types.
+    split_pct is the % of tonnage carried by v1; v2 carries the rest.
+    trips-per-tonne = s/p1 + (1-s)/p2  ->  effective payload = 1 / that.
+    """
+    p1 = _payload(factors, v1)
+    if not v2 or split_pct is None or split_pct >= 100:
+        return p1
+    p2 = _payload(factors, v2)
+    s = max(0, min(100, int(split_pct))) / 100.0
+    inv = s / p1 + (1 - s) / p2
+    return (1.0 / inv) if inv > 0 else p1
+
+
+def convert_row(row, to_unit, factors=None):
+    """
+    Convert one stored forecast row to the requested unit, honouring a second
+    vehicle + split when present. Rows submitted with two vehicles are always
+    stored in m3 or t (never 'vehicles'), so the input side needs no split.
+    """
+    factors = factors or load_factors()
+    material = row.get("material_type")
+    tonnes = to_tonnes(row["quantity"], row["unit"], material, row.get("vehicle_type"), factors)
+    if to_unit == "t":
+        return tonnes
+    if to_unit == "m3":
+        return tonnes / _density(factors, material)
+    if to_unit == "vehicles":
+        ep = effective_payload(factors, row.get("vehicle_type"),
+                               row.get("vehicle_type_2"), row.get("split_pct", 100))
+        return tonnes / ep
+    raise ValueError(f"Unknown unit: {to_unit}")
+
+
 def round_for_unit(value, unit):
     """Vehicles are whole; volumes/weights get one decimal."""
     if unit == "vehicles":

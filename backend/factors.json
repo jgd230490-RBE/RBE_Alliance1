@@ -30,5 +30,11 @@
     "unload_minutes": 8,
     "working_days_per_month": 22,
     "shift_hours_per_day": 10
-  }
+  },
+
+  "_seasonal_note": "Calendar months (1=Jan..12=Dec) with statutory HGV weight/access restrictions in Estonia. Shown as a warning at submission when a forecast month falls in a window (and, if listed, the chosen vehicle is heavier-restricted). Editable.",
+  "seasonal_restrictions": [
+    { "name": "Spring thaw", "months": [4, 5], "restricted_vehicles": ["Artic Tipper (44t)", "Artic Flatbed (44t)"], "message": "Spring thaw: axle-weight limits likely on secondary roads — heavy artics may be restricted. Consider a lighter vehicle or a different month." },
+    { "name": "Winter", "months": [12, 1, 2, 3], "restricted_vehicles": [], "message": "Winter conditions: check road access and allow longer cycle times on this corridor." }
+  ]
 }

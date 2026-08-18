@@ -65,27 +65,44 @@ def execute(sql, params=()):
 
 
 def init_db():
-    """Create the forecasts table if it doesn't exist. Safe to call every start."""
+    """Create the forecasts table if it doesn't exist, and add any new columns."""
     conn = get_conn()
     try:
         cur = conn.cursor()
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS forecasts (
-                id            TEXT PRIMARY KEY,
-                route_id      TEXT NOT NULL,
-                month_index   INTEGER NOT NULL,
-                quantity      REAL NOT NULL,
-                unit          TEXT NOT NULL,
-                material_type TEXT,
-                vehicle_type  TEXT,
-                status        TEXT NOT NULL DEFAULT 'Pending',
-                reject_reason TEXT,
+                id                   TEXT PRIMARY KEY,
+                route_id             TEXT NOT NULL,
+                month_index          INTEGER NOT NULL,
+                quantity             REAL NOT NULL,
+                unit                 TEXT NOT NULL,
+                material_type        TEXT,
+                material_description TEXT,
+                vehicle_type         TEXT,
+                vehicle_type_2       TEXT,
+                split_pct            INTEGER DEFAULT 100,
+                status               TEXT NOT NULL DEFAULT 'Pending',
+                reject_reason        TEXT,
                 UNIQUE (route_id, month_index)
             )
             """
         )
         conn.commit()
+        # migrate pre-existing tables: add the newer columns if they're missing
+        for col, typ in (
+            ("material_description", "TEXT"),
+            ("vehicle_type_2", "TEXT"),
+            ("split_pct", "INTEGER DEFAULT 100"),
+        ):
+            try:
+                if IS_PG:
+                    cur.execute(f"ALTER TABLE forecasts ADD COLUMN IF NOT EXISTS {col} {typ}")
+                else:
+                    cur.execute(f"ALTER TABLE forecasts ADD COLUMN {col} {typ}")
+                conn.commit()
+            except Exception:
+                conn.rollback()  # column already present — fine
     finally:
         conn.close()
 
