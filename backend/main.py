@@ -68,6 +68,7 @@ class MatrixRow(BaseModel):
     vehicle_type: str
     vehicle_type_2: Optional[str] = None       # optional second vehicle
     split_pct: Optional[int] = 100             # % of tonnage on vehicle_type; rest on vehicle_type_2
+    submitted_by: Optional[str] = None         # lightweight submitter identity
     unit: str                                  # 'm3' | 't' | 'vehicles'
     cells: List[Cell]
     status: str = "Pending"
@@ -134,8 +135,27 @@ def convert(quantity: float, from_unit: str, to_unit: str,
 
 # ------------------------------------------------------------------ forecasts (staff)
 @app.get("/api/forecasts")
-def list_forecasts():
+def list_forecasts(submitted_by: Optional[str] = None):
+    if submitted_by:
+        return db.query(
+            "SELECT * FROM forecasts WHERE submitted_by = ? ORDER BY route_id, month_index",
+            (submitted_by,),
+        )
     return db.query("SELECT * FROM forecasts ORDER BY route_id, month_index")
+
+
+@app.delete("/api/forecasts/{route_id}")
+def withdraw_route(route_id: str, submitted_by: Optional[str] = None,
+                   from_: Optional[int] = Query(None, alias="from"),
+                   to: Optional[int] = None):
+    """Withdraw a route's forecast, optionally scoped to a month range and/or submitter."""
+    clauses, params = ["route_id = ?"], [route_id]
+    if submitted_by:
+        clauses.append("submitted_by = ?"); params.append(submitted_by)
+    if from_ is not None and to is not None:
+        clauses.append("month_index BETWEEN ? AND ?"); params += [min(from_, to), max(from_, to)]
+    db.execute("DELETE FROM forecasts WHERE " + " AND ".join(clauses), tuple(params))
+    return {"status": "success", "route_id": route_id}
 
 
 @app.get("/api/forecasts/summary")
@@ -148,12 +168,12 @@ def forecasts_summary():
         g = by_route.setdefault(r["route_id"], {
             "route_id": r["route_id"], "months": [], "statuses": set(),
             "unit": r["unit"], "material_type": r["material_type"],
-            "vehicle_type": r["vehicle_type"], "total_vehicles": 0.0,
+            "vehicle_type": r["vehicle_type"], "submitted_by": r.get("submitted_by"),
+            "total_vehicles": 0.0,
         })
         g["months"].append(r["month_index"])
         g["statuses"].add(r["status"])
-        g["total_vehicles"] += conversions.convert(
-            r["quantity"], r["unit"], "vehicles", r["material_type"], r["vehicle_type"], factors)
+        g["total_vehicles"] += conversions.convert_row(r, "vehicles", factors)
 
     out = []
     for g in by_route.values():
@@ -185,8 +205,8 @@ def save_matrix_row(row: MatrixRow):
                 """
                 INSERT INTO forecasts
                     (id, route_id, month_index, quantity, unit, material_type, material_description,
-                     vehicle_type, vehicle_type_2, split_pct, status, reject_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     vehicle_type, vehicle_type_2, split_pct, submitted_by, status, reject_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (route_id, month_index) DO UPDATE SET
                     quantity             = EXCLUDED.quantity,
                     unit                 = EXCLUDED.unit,
@@ -195,12 +215,13 @@ def save_matrix_row(row: MatrixRow):
                     vehicle_type         = EXCLUDED.vehicle_type,
                     vehicle_type_2       = EXCLUDED.vehicle_type_2,
                     split_pct            = EXCLUDED.split_pct,
+                    submitted_by         = EXCLUDED.submitted_by,
                     status               = EXCLUDED.status,
                     reject_reason        = NULL
                 """,
                 (rid, row.route_id, c.month_index, float(c.quantity), row.unit,
                  row.material_type, row.material_description, row.vehicle_type,
-                 veh2, split, row.status, None),
+                 veh2, split, row.submitted_by, row.status, None),
             )
         else:
             db.execute("DELETE FROM forecasts WHERE route_id = ? AND month_index = ?",

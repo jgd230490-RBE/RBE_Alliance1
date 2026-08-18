@@ -82,6 +82,7 @@ def init_db():
                 vehicle_type         TEXT,
                 vehicle_type_2       TEXT,
                 split_pct            INTEGER DEFAULT 100,
+                submitted_by         TEXT,
                 status               TEXT NOT NULL DEFAULT 'Pending',
                 reject_reason        TEXT,
                 UNIQUE (route_id, month_index)
@@ -94,6 +95,7 @@ def init_db():
             ("material_description", "TEXT"),
             ("vehicle_type_2", "TEXT"),
             ("split_pct", "INTEGER DEFAULT 100"),
+            ("submitted_by", "TEXT"),
         ):
             try:
                 if IS_PG:
