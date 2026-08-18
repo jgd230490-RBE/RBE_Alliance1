@@ -23,13 +23,51 @@ def load_factors():
 
 
 def _density(factors, material):
-    d = factors["material_density_t_per_m3"]
-    return float(d.get(material, d["_default"]))
+    cats = factors.get("material_categories", {})
+    c = cats.get(material) or cats.get("_default", {})
+    return float(c.get("density_t_per_m3", 1.6))
 
 
 def _payload(factors, vehicle):
-    p = factors["vehicle_payload_t"]
-    return float(p.get(vehicle, p["_default"]))
+    vs = factors.get("vehicles", {})
+    v = vs.get(vehicle) or vs.get("_default", {})
+    return float(v.get("payload_t", 20))
+
+
+def _emissions(factors, vehicle):
+    vs = factors.get("vehicles", {})
+    v = vs.get(vehicle) or vs.get("_default", {})
+    return float(v.get("emissions_kg_co2e_per_km", 0.90))
+
+
+def material_names(factors):
+    return [k for k in factors.get("material_categories", {}) if not k.startswith("_")]
+
+
+def vehicle_names(factors):
+    return [k for k in factors.get("vehicles", {}) if not k.startswith("_")]
+
+
+def flat_factors(factors):
+    """
+    Backward-compatible flat maps for clients that read the old shape
+    (the map and the dashboard read factors.vehicle_payload_t etc.).
+    Derived from the rich taxonomy so there is still one source of truth.
+    """
+    cats = factors.get("material_categories", {})
+    vs = factors.get("vehicles", {})
+    density = {k: v.get("density_t_per_m3", 1.6) for k, v in cats.items()}
+    density.setdefault("_default", 1.6)
+    payload = {k: v.get("payload_t", 20) for k, v in vs.items()}
+    payload.setdefault("_default", 20)
+    emis = {k: v.get("emissions_kg_co2e_per_km", 0.90) for k, v in vs.items()}
+    emis.setdefault("_default", 0.90)
+    return {
+        "material_density_t_per_m3": density,
+        "vehicle_payload_t": payload,
+        "vehicle_emissions_kg_co2e_per_km": emis,
+        "planning": factors.get("planning", {}),
+    }
 
 
 def to_tonnes(quantity, unit, material, vehicle, factors=None):

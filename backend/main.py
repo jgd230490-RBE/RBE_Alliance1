@@ -38,7 +38,10 @@ MONTH_COUNT = 60           # 5-year horizon
 async def lifespan(app: FastAPI):
     db.init_db()
     try:
-        if seed.seed_if_empty():
+        if os.getenv("FORCE_RESEED", "").strip().lower() in ("1", "true", "yes"):
+            seed.reseed()
+            print("FORCE_RESEED: cleared and re-seeded forecasts to current taxonomy.")
+        elif seed.seed_if_empty():
             print("Seeded starter forecasts (table was empty).")
     except Exception as e:                              # never block startup on seed
         print("Seed skipped:", e)
@@ -79,11 +82,11 @@ def _load_routes():
 
 
 def _material_list(factors):
-    return [k for k in factors["material_density_t_per_m3"] if not k.startswith("_")]
+    return conversions.material_names(factors)
 
 
 def _vehicle_list(factors):
-    return [k for k in factors["vehicle_payload_t"] if not k.startswith("_")]
+    return conversions.vehicle_names(factors)
 
 
 # ------------------------------------------------------------------ meta
@@ -96,17 +99,22 @@ def health():
 def meta():
     """Everything the UI needs to build its dropdowns — kept in sync with factors.json."""
     factors = conversions.load_factors()
+    strip = lambda d: {k: v for k, v in d.items() if not k.startswith("_")}
     return {
         "units": conversions.UNITS,
-        "materials": _material_list(factors),
-        "vehicles": _vehicle_list(factors),
+        "materials": conversions.material_names(factors),
+        "vehicles": conversions.vehicle_names(factors),
+        # rich taxonomy for the new submission matrix (Commit 2)
+        "material_categories": strip(factors.get("material_categories", {})),
+        "vehicle_details": strip(factors.get("vehicles", {})),
         "routes": _load_routes(),
         "months": {
             "start_year": START_YEAR,
             "count": MONTH_COUNT,
             "years": [START_YEAR + i for i in range(MONTH_COUNT // 12)],
         },
-        "factors": factors,          # lets the UI preview conversions with no round-trip
+        # flat maps kept for the map + dashboard, derived from the taxonomy
+        "factors": conversions.flat_factors(factors),
     }
 
 

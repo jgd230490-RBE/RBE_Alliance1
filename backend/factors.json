@@ -1,33 +1,29 @@
 {
-  "_README": "EDIT THIS FILE to tune all forecasting + planning numbers. No code changes needed. After editing, commit to GitHub; Render redeploys automatically. Sources noted per section.",
+  "_README": "SINGLE SOURCE OF TRUTH for materials, vehicles and planning numbers. Edit here; no code changes needed. Commit to GitHub and Render redeploys. To refresh the demo data to this taxonomy, set env var FORCE_RESEED=1 for one deploy, then remove it.",
 
-  "material_density_t_per_m3": {
-    "Limestone - rockfill": 1.6,
-    "Sand": 1.5,
-    "Gravel": 1.7,
-    "Limestone (Shale aggregate)": 1.5,
-    "Soil": 1.4,
-    "_default": 1.6
+  "_materials_note": "Broad, enterprise-generic categories any large-construction project recognises. Each carries a planning density (loose, as-hauled t/m3), a default input unit, whether volume<->weight conversion is meaningful, and the vehicles typically used. Densities vary with moisture/compaction; treat as editable defaults.",
+  "material_categories": {
+    "Earthworks / soil":         { "density_t_per_m3": 1.5,  "default_unit": "m3", "volume_convertible": true,  "vehicles": ["Rigid 8-wheeler (32t)", "Artic Tipper (44t)", "Rigid 6-wheeler (26t)"] },
+    "Small aggregate":           { "density_t_per_m3": 1.6,  "default_unit": "m3", "volume_convertible": true,  "vehicles": ["Rigid 8-wheeler (32t)", "Artic Tipper (44t)"] },
+    "Large aggregate / ballast": { "density_t_per_m3": 1.6,  "default_unit": "t",  "volume_convertible": true,  "vehicles": ["Rigid 8-wheeler (32t)", "Artic Tipper (44t)"] },
+    "Precast / concrete":        { "density_t_per_m3": 2.4,  "default_unit": "t",  "volume_convertible": true,  "vehicles": ["Artic Flatbed (44t)", "Rigid 8-wheeler (32t)"] },
+    "Steel / rail":              { "density_t_per_m3": 7.85, "default_unit": "t",  "volume_convertible": false, "vehicles": ["Artic Flatbed (44t)"] },
+    "General / imported":        { "density_t_per_m3": 1.5,  "default_unit": "t",  "volume_convertible": false, "vehicles": ["Artic Flatbed (44t)", "Artic Tipper (44t)"] },
+    "_default":                  { "density_t_per_m3": 1.6,  "default_unit": "t",  "volume_convertible": true,  "vehicles": ["Rigid 8-wheeler (32t)"] }
   },
 
-  "vehicle_payload_t": {
-    "8x4 Tipper": 20,
-    "Artic Tipper": 28,
-    "ADT / Dumper": 30,
-    "Rigid 6-wheeler": 12,
-    "_default": 20
+  "_vehicles_note": "EU N-category road HGVs over 3.5t (no site plant). payload_t = typical carrying limit; emissions from UK DEFRA/BEIS 2025 basis (kg CO2e per vehicle-km, average laden).",
+  "vehicles": {
+    "Rigid 7.5t":             { "eu_category": "N2", "licence": "C1",  "gvw_t": 7.5, "payload_t": 3.5, "emissions_kg_co2e_per_km": 0.55 },
+    "Rigid 4-wheeler (18t)":  { "eu_category": "N3", "licence": "C",   "gvw_t": 18,  "payload_t": 10,  "emissions_kg_co2e_per_km": 0.75 },
+    "Rigid 6-wheeler (26t)":  { "eu_category": "N3", "licence": "C",   "gvw_t": 26,  "payload_t": 16,  "emissions_kg_co2e_per_km": 0.85 },
+    "Rigid 8-wheeler (32t)":  { "eu_category": "N3", "licence": "C",   "gvw_t": 32,  "payload_t": 20,  "emissions_kg_co2e_per_km": 0.95 },
+    "Artic Tipper (44t)":     { "eu_category": "N3", "licence": "C+E", "gvw_t": 44,  "payload_t": 29,  "emissions_kg_co2e_per_km": 0.89 },
+    "Artic Flatbed (44t)":    { "eu_category": "N3", "licence": "C+E", "gvw_t": 44,  "payload_t": 28,  "emissions_kg_co2e_per_km": 0.89 },
+    "_default":               { "payload_t": 20, "emissions_kg_co2e_per_km": 0.90 }
   },
 
-  "_carbon_note": "kg CO2e per vehicle-km, diesel, average-laden basis. Defaults derived from UK DEFRA/BEIS 2025 GHG conversion factors (articulated HGV ~0.89 kg/km; rigid >17t higher per km due to lower payload; ADT is off-highway plant, higher). Carbon is estimated as trips x round-trip distance x factor (loaded out, empty return).",
-  "vehicle_emissions_kg_co2e_per_km": {
-    "8x4 Tipper": 0.95,
-    "Artic Tipper": 0.89,
-    "ADT / Dumper": 1.30,
-    "Rigid 6-wheeler": 0.60,
-    "_default": 0.90
-  },
-
-  "_planning_note": "Used to estimate haul-cycle turnaround, trips/day and fleet size for route planning. All editable.",
+  "_planning_note": "Used to estimate haul-cycle turnaround, trips/day and fleet size.",
   "planning": {
     "avg_haul_speed_kmh": 45,
     "load_minutes": 12,

@@ -21,6 +21,21 @@ from db import execute, count_forecasts
 _HERE = os.path.dirname(__file__)
 _SEED = os.path.join(_HERE, "seed_data")
 
+# routes.json still carries the old free-text material guesses; map them onto the
+# new generic categories so demo data matches the taxonomy in factors.json.
+_CATEGORY_MAP = {
+    "soil": "Earthworks / soil",
+    "sand": "Small aggregate",
+    "gravel": "Small aggregate",
+    "limestone - rockfill": "Large aggregate / ballast",
+    "limestone (shale aggregate)": "Small aggregate",
+    "imported goods": "General / imported",
+}
+
+
+def _category(material_guess):
+    return _CATEGORY_MAP.get((material_guess or "").strip().lower(), "Small aggregate")
+
 
 def _routes():
     with open(os.path.join(_SEED, "routes.json"), encoding="utf-8") as f:
@@ -49,7 +64,7 @@ def _seed_real():
             if row.get("status", "").strip() != "Assigned":
                 continue
             rid = row["route_id"].strip()
-            material = mat_by_route.get(rid, "Soil")
+            material = _category(mat_by_route.get(rid, "Soil"))
             for m in range(1, 61):
                 val = row.get(f"m{m}_veh", "0").strip()
                 try:
@@ -57,7 +72,7 @@ def _seed_real():
                 except ValueError:
                     v = 0
                 if v > 0:
-                    _insert(rid, m, v, "vehicles", material, "8x4 Tipper")
+                    _insert(rid, m, v, "vehicles", material, "Rigid 8-wheeler (32t)")
 
 
 def _seed_demo():
@@ -67,13 +82,13 @@ def _seed_demo():
     real = {"HR-EW-ANELEMALIM-IPT3-WS3", "HR-TM-MUUGA-SOODEVAHE-IPT6-WS7"}
     pool = [r for r in routes if r["route_id"] not in real]
     units = ["m3", "t", "vehicles"]
-    vehicles = ["8x4 Tipper", "Artic Tipper", "ADT / Dumper"]
+    vehicles = ["Rigid 8-wheeler (32t)", "Artic Tipper (44t)", "Rigid 6-wheeler (26t)"]
 
     # deterministic pick: every 6th route, up to 10
     picks = pool[::6][:10]
     for i, r in enumerate(picks):
         rid = r["route_id"]
-        material = r["material_guess"]
+        material = _category(r["material_guess"])
         unit = units[i % len(units)]
         vehicle = vehicles[i % len(vehicles)]
         start = 5 + (i % 8)          # month the route ramps up
@@ -102,6 +117,14 @@ def _seed_demo():
 def seed_if_empty():
     if count_forecasts() > 0:
         return False
+    _seed_real()
+    _seed_demo()
+    return True
+
+
+def reseed():
+    """Clear all forecasts and re-seed with the current taxonomy (FORCE_RESEED=1)."""
+    execute("DELETE FROM forecasts")
     _seed_real()
     _seed_demo()
     return True
