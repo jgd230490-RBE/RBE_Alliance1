@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>RBE Alliance 1 Logistics</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="config.js"></script>
+    <script src="data/a1_data.js"></script>
+    <script src="data/alignment.js"></script>
+    <script src="data/chainage.js"></script>
+    <style>
+        :root{
+            --navy:#003787; --navy-deep:#0A1446; --ink:#1f2937; --muted:#6b7280;
+            --line:#e8eaed; --bg:#fbfbfc; --accent:#BF2E55; --green:#039E86;
+        }
+        *{ box-sizing:border-box; }
+        body { margin:0; padding:0; font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var(--ink); overflow:hidden; -webkit-font-smoothing:antialiased; }
+        #map { position:absolute; top:0; bottom:0; right:0; left:300px; transition:left .25s ease; }
+        body.sidebar-closed #map, .sidebar.closed ~ #map { left:0; }
+
+        #menu-toggle { position:absolute; top:14px; left:14px; z-index:1000; background:#fff; color:var(--navy); border:1px solid var(--line); padding:8px 13px; border-radius:8px; cursor:pointer; font-weight:600; font-size:13px; box-shadow:0 1px 3px rgba(16,24,40,.08); }
+        #menu-toggle:hover{ border-color:#d0d3d8; }
+
+        .sidebar { position:absolute; top:0; bottom:0; left:0; width:300px; background:#fff; border-right:1px solid var(--line); padding:20px 18px 24px; z-index:10; display:flex; flex-direction:column; gap:22px; overflow-y:auto; transition:transform .25s ease; }
+        .sidebar.closed { transform:translateX(-100%); }
+        .sidebar h2 { margin:0; font-size:15px; font-weight:700; letter-spacing:-.01em; color:var(--navy-deep); padding-top:42px; display:flex; align-items:center; gap:9px; }
+        .sidebar h2::before{ content:""; width:8px; height:22px; background:var(--navy); border-radius:2px; }
+        .sidebar h2 small{ display:block; font-size:9.5px; font-weight:500; letter-spacing:.16em; text-transform:uppercase; color:var(--muted); margin-top:3px; }
+        .sidebar h3 { margin:0 0 9px; font-size:10.5px; font-weight:600; letter-spacing:.08em; color:var(--muted); text-transform:uppercase; }
+
+        select, button, input { font-family:inherit; }
+        select { width:100%; background:#fff; border:1px solid var(--line); border-radius:7px; padding:8px 9px; color:var(--ink); font-size:12.5px; outline:none; margin-bottom:6px; transition:border-color .15s; }
+        select:focus { border-color:var(--navy); }
+        .btn { width:100%; border:none; border-radius:7px; padding:8px; font-size:12.5px; font-weight:600; cursor:pointer; background:var(--navy); color:#fff; }
+        .btn-ghost { background:#f3f4f6; color:var(--ink); }
+        .btn-ghost:hover{ background:#eceef1; }
+
+        .control-group { display:flex; flex-direction:column; }
+        .control-item { display:flex; align-items:center; justify-content:space-between; font-size:12.5px; padding:7px 2px; }
+        .control-item + .control-item{ border-top:1px solid var(--line); }
+        .control-item label { display:flex; align-items:center; gap:9px; cursor:pointer; width:100%; font-weight:500; color:var(--ink); }
+        .control-item input[type=checkbox]{ accent-color:var(--navy); width:14px; height:14px; }
+        .color-dot { width:11px; height:11px; border-radius:50%; display:inline-block; margin-left:auto; }
+
+        .fc-box h3{ border:none; }
+        .fc-row{ display:flex; gap:10px; margin-bottom:10px; }
+        .fc-row > div{ flex:1; }
+        .fc-row label{ font-size:10.5px; font-weight:600; color:var(--muted); display:block; margin-bottom:3px; }
+        .fc-toggle{ font-size:12.5px; cursor:pointer; display:flex; align-items:center; gap:9px; font-weight:600; background:#f6f8fb; border:1px solid var(--line); padding:9px 11px; border-radius:8px; }
+        .fc-toggle input{ accent-color:var(--navy); }
+        #forecast-status{ margin-top:9px; font-size:11px; font-weight:500; color:var(--muted); line-height:1.5; }
+        #btn-detail{ margin-top:8px; display:none; }
+
+        .mapboxgl-popup-content { border-radius:10px !important; border:1px solid var(--line) !important; padding:13px 14px !important; box-shadow:0 8px 28px rgba(16,24,40,.14) !important; font-family:'Inter',sans-serif !important; }
+        .mapboxgl-popup-content h3, .mapboxgl-popup-content h4{ font-family:'Inter',sans-serif; }
+        .rb-popup-btn{ margin-top:10px; width:100%; background:var(--navy); color:#fff; border:none; padding:8px; border-radius:6px; font-weight:600; font-size:12px; cursor:pointer; }
+
+        /* Bottom drawer: route analysis + forecast detail */
+        #route-drawer{ position:absolute; left:300px; right:0; bottom:0; z-index:20; background:#fff; border-top:1px solid var(--line); box-shadow:0 -8px 28px rgba(16,24,40,.10); transform:translateY(100%); transition:transform .28s ease; max-height:46vh; display:flex; flex-direction:column; }
+        #route-drawer.open{ transform:translateY(0); }
+        body.sidebar-closed #route-drawer{ left:0; }
+        .drawer-head{ display:flex; align-items:center; gap:4px; padding:10px 16px; border-bottom:1px solid var(--line); }
+        .drawer-tab{ border:none; background:none; font-size:12.5px; font-weight:600; color:var(--muted); padding:6px 10px; cursor:pointer; border-radius:6px; }
+        .drawer-tab.active{ color:var(--navy); background:#eef3fb; }
+        .drawer-close{ margin-left:auto; border:none; background:none; font-size:20px; line-height:1; color:var(--muted); cursor:pointer; padding:2px 8px; }
+        .drawer-body{ overflow:auto; padding:16px; }
+        .an-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; }
+        .an-card{ border:1px solid var(--line); border-radius:9px; padding:11px 13px; }
+        .an-val{ font-size:19px; font-weight:700; color:var(--navy-deep); letter-spacing:-.02em; }
+        .an-lbl{ font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); margin-top:3px; }
+        .an-sub{ font-size:11px; color:var(--muted); margin-top:1px; }
+        .an-title{ font-size:14px; font-weight:700; color:var(--navy-deep); }
+        .an-route{ font-size:12px; color:var(--muted); margin:2px 0 14px; }
+        table.fc-matrix{ border-collapse:collapse; font-size:11.5px; width:100%; }
+        table.fc-matrix th, table.fc-matrix td{ padding:6px 8px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line); }
+        table.fc-matrix th:first-child, table.fc-matrix td:first-child{ text-align:left; position:sticky; left:0; background:#fff; }
+        table.fc-matrix thead th{ position:sticky; top:0; background:#fff; font-weight:600; color:var(--muted); }
+        .mat-chip{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+
+        /* Playable forecast timeline bar */
+        #timeline-bar{ display:none; position:absolute; left:calc(50% + 150px); transform:translateX(-50%); bottom:18px; z-index:25; background:#fff; border:1px solid var(--line); border-radius:11px; box-shadow:0 8px 28px rgba(16,24,40,.16); padding:8px 12px; align-items:center; gap:11px; }
+        body.sidebar-closed #timeline-bar{ left:50%; }
+        #timeline-bar input[type=range]{ width:250px; accent-color:var(--navy); cursor:pointer; }
+        .tl-btn{ border:none; background:var(--navy); color:#fff; width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:12px; }
+        .tl-close{ border:none; background:none; color:var(--muted); cursor:pointer; font-size:15px; }
+        #tl-label{ font-size:12px; font-weight:600; color:var(--navy-deep); min-width:190px; white-space:nowrap; }
+    </style>
+</head>
+<body>
+<div id="menu-toggle" onclick="toggleSidebar()">☰ Control Panel</div>
+<div class="sidebar" id="main-sidebar">
+    <h2 class="rb-title">RBE Alliance 1 Logistics<small>Route map &amp; forecast</small></h2>
+
+    <div class="control-group">
+        <h3>Route filtering</h3>
+        <select id="filter-origin" onchange="applyFilters()"><option value="ALL">All origins</option></select>
+        <select id="filter-dest" onchange="applyFilters()"><option value="ALL">All destinations</option></select>
+        <select id="filter-leg" onchange="applyFilters()"><option value="ALL">All route legs</option></select>
+        <select id="filter-ipt" onchange="applyFilters()"><option value="ALL">All sector IPTs</option></select>
+        <button class="btn btn-ghost" onclick="resetFilters()">Reset filters</button>
+    </div>
+
+    <div class="control-group">
+        <h3>Basemap</h3>
+        <select id="basemap-select" onchange="changeBasemap(this.value)">
+            <option value="mapbox://styles/mapbox/light-v11" selected>Light</option>
+            <option value="mapbox://styles/mapbox/standard">Standard (3D)</option>
+            <option value="mapbox://styles/mapbox/dark-v11">Dark</option>
+            <option value="mapbox://styles/mapbox/satellite-streets-v12">Satellite (Mapbox)</option>
+            <option value="maaamet-ortho">Estonia orthophoto (Maa-amet)</option>
+        </select>
+    </div>
+
+    <div class="control-group">
+        <h3>Overlays</h3>
+        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleLayer('rail-alignment', this.checked)"> Rail alignment</label><span class="color-dot" style="background:#334155; border-radius:0; width:13px; height:2px;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-chainage" onchange="toggleLayer('chainage-global', this.checked); toggleLayer('chainage-labels', this.checked);"> Chainage markers</label><span class="color-dot" style="background:#94a3b8;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-nodes" checked onchange="toggleNodes(this.checked)"> Sites &amp; assets</label><span class="color-dot" style="background:#003787;"></span></div>
+    </div>
+
+    <div class="control-group">
+        <h3>Haul routes</h3>
+        <div class="control-item"><label><input type="checkbox" id="layer-inbound" checked onchange="applyFilters()"> Inbound</label><span class="color-dot" style="background:#3E5C82;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-outbound" checked onchange="applyFilters()"> Outbound</label><span class="color-dot" style="background:#7BA0C4;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-temp" checked onchange="applyFilters()"> Temporary haul</label><span class="color-dot" style="background:#9aa7b4;"></span></div>
+    </div>
+</div>
+
+<div id="timeline-bar">
+  <button class="tl-btn" id="tl-play" onclick="toggleTimeline()" title="Play / pause">▶</button>
+  <input type="range" id="tl-range" min="1" max="60" value="1" oninput="onTimelineScrub(this.value)">
+  <span id="tl-label">Jan 2026</span>
+  <button class="tl-close" onclick="closeTimeline()" title="Close timeline">&times;</button>
+</div>
+
+<div id="route-drawer">
+  <div class="drawer-head">
+    <button class="drawer-tab active" id="tab-analysis" onclick="showDrawerTab('analysis')">Route analysis</button>
+    <button class="drawer-tab" id="tab-detail" onclick="showDrawerTab('detail')">Forecast detail</button>
+    <button class="drawer-close" onclick="closeDrawer()" title="Close">&times;</button>
+  </div>
+  <div class="drawer-body" id="drawer-analysis"></div>
+  <div class="drawer-body" id="drawer-detail" style="display:none;"></div>
+</div>
+
+<div id="map"></div>
+
+<script>
+    const a1_data = window.a1_data;
+    const alignment_data = window.alignment_data;
+    const chainage_global_data = window.chainage_global_data;
+
+    mapboxgl.accessToken = CONFIG.MAPBOX_TOKEN;
+    const map = new mapboxgl.Map({ container: 'map', style: 'mapbox://styles/mapbox/light-v11', center: [24.85, 58.75], zoom: 7.8 });
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+    
+    const nodeMarkersArray = [];
+    let hoveredRouteId = null;
+
+    function toggleSidebar() { document.getElementById('main-sidebar').classList.toggle('closed'); document.body.classList.toggle('sidebar-closed'); setTimeout(() => map.resize(), 300); }
+    if (window.innerWidth <= 768) toggleSidebar();
+
+    function populateFilters() {
+        const origins = new Set(); const dests = new Set();
+        const legs = new Set(); const ipts = new Set();
+        
+        a1_data.features.forEach(f => {
+            if (f.properties.origin) origins.add(f.properties.origin);
+            if (f.properties.dest) dests.add(f.properties.dest);
+            if (f.properties.leg && f.properties.leg !== 'Unknown Leg') legs.add(f.properties.leg);
+            if (f.properties.ipt && f.properties.ipt !== 'Unknown_IPT') ipts.add(f.properties.ipt);
+        });
+        
+        [...origins].filter(Boolean).sort().forEach(o => { document.getElementById('filter-origin').innerHTML += `<option value="${o}">${o}</option>`; });
+        [...dests].filter(Boolean).sort().forEach(d => { document.getElementById('filter-dest').innerHTML += `<option value="${d}">${d}</option>`; });
+        [...legs].filter(Boolean).sort().forEach(l => { document.getElementById('filter-leg').innerHTML += `<option value="${l}">${l}</option>`; });
+        [...ipts].filter(Boolean).sort().forEach(i => { document.getElementById('filter-ipt').innerHTML += `<option value="${i}">${i}</option>`; });
+    }
+
+    function calculateKPIs(oFilter, dFilter, lFilter, iFilter) {
+        let routesCount = 0; let totalLoads = 0;
+        a1_data.features.forEach(f => {
+            if (f.geometry.type === 'LineString' && f.properties.type === 'Inbound Highway') {
+                const props = f.properties;
+                if ((oFilter === 'ALL' || props.origin === oFilter) && 
+                    (dFilter === 'ALL' || props.dest === dFilter) &&
+                    (lFilter === 'ALL' || props.leg === lFilter) &&
+                    (iFilter === 'ALL' || props.ipt === iFilter)) {
+                    routesCount++; totalLoads += parseFloat(props.max_loads) || 0;
+                }
+            }
+        });
+        const er = document.getElementById('kpi-routes'); if (er) er.innerText = routesCount;
+        const ec = document.getElementById('kpi-capacity'); if (ec) ec.innerText = totalLoads.toLocaleString();
+    }
+
+    function applyFilters() {
+        const o = document.getElementById('filter-origin').value; const d = document.getElementById('filter-dest').value;
+        const l = document.getElementById('filter-leg').value; const i = document.getElementById('filter-ipt').value;
+        const inVis = document.getElementById('layer-inbound').checked; const outVis = document.getElementById('layer-outbound').checked; const tempVis = document.getElementById('layer-temp').checked;
+        
+        calculateKPIs(o, d, l, i);
+        let filterArr = ['all'];
+        if (o !== 'ALL') filterArr.push(['==', 'origin', o]);
+        if (d !== 'ALL') filterArr.push(['==', 'dest', d]);
+        if (l !== 'ALL') filterArr.push(['==', 'leg', l]);
+        if (i !== 'ALL') filterArr.push(['==', 'ipt', i]);
+
+        if (map.getLayer('inbound-lines')) map.setFilter('inbound-lines', inVis ? ['all', ['==', 'type', 'Inbound Highway'], ...filterArr.slice(1)] : ['==', 'type', 'NONE']);
+        if (map.getLayer('outbound-lines')) map.setFilter('outbound-lines', outVis ? ['all', ['==', 'type', 'Outbound Highway'], ...filterArr.slice(1)] : ['==', 'type', 'NONE']);
+        if (map.getLayer('temp-lines')) map.setFilter('temp-lines', tempVis ? ['all', ['==', 'type', 'Temp Haul Track'], ...filterArr.slice(1)] : ['==', 'type', 'NONE']);
+    }
+
+    function resetFilters() { 
+        document.getElementById('filter-origin').value = 'ALL'; document.getElementById('filter-dest').value = 'ALL'; 
+        document.getElementById('filter-leg').value = 'ALL'; document.getElementById('filter-ipt').value = 'ALL';
+        applyFilters(); 
+    }
+
+    function filterByNode(nodeName, nodeType) {
+        resetFilters();
+        if (nodeType === 'Quarry' || nodeType === 'Hub') { document.getElementById('filter-origin').value = nodeName; }
+        else if (nodeType === 'Compound') { document.getElementById('filter-dest').value = nodeName; }
+        applyFilters(); if(window.innerWidth <= 768) toggleSidebar(); 
+    }
+
+    map.on('style.load', () => {
+        if (!map.getSource('routes-source')) map.addSource('routes-source', { type: 'geojson', data: a1_data });
+        if (!map.getSource('alignment-source')) map.addSource('alignment-source', { type: 'geojson', data: alignment_data });
+        if (!map.getSource('chainage-source')) map.addSource('chainage-source', { type: 'geojson', data: chainage_global_data });
+
+        // --- PROFESSIONAL MAPBOX STYLING (Corporate Palette + Highway Offsets) ---
+        
+        // 1. INBOUND ROUTES (Deep Sapphire Blue)
+        // Casing (Halo)
+        map.addLayer({
+            'id': 'inbound-lines-casing',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Inbound'], 
+            'paint': { 
+                'line-color': '#24405E', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 7], 
+                'line-opacity': 0.35,
+                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4]
+            }
+        });
+        // Core Line
+        map.addLayer({
+            'id': 'inbound-lines',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Inbound'], 
+            'paint': { 
+                'line-color': '#3E5C82', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.5, 12, 4], 
+                'line-opacity': 0.9,
+                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4]
+            }
+        });
+
+        // 2. OUTBOUND ROUTES (Bright Cyan/Teal)
+        // Casing (Halo)
+        map.addLayer({
+            'id': 'outbound-lines-casing',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Outbound'], 
+            'paint': { 
+                'line-color': '#4E6E90', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 8], 
+                'line-opacity': 0.3,
+                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, 1, 12, 4]
+            }
+        });
+        // Core Line
+        map.addLayer({
+            'id': 'outbound-lines',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Outbound'], 
+            'paint': { 
+                'line-color': '#7BA0C4', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.5, 12, 4], 
+                'line-opacity': 0.9,
+                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, 1, 12, 4]
+            }
+        });
+
+        // 3. TEMP HAUL ROUTES (Slate Purple)
+        map.addLayer({
+            'id': 'temp-lines',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'route_leg'], 'Temporary Haul Route'], 
+            'paint': { 
+                'line-color': '#9AA7B4', 
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2, 12, 5], 
+                'line-opacity': 0.85, 
+                'line-dasharray': [1.5, 1.5] 
+            }
+        });
+
+        // Alignment thinner (1.5)
+        map.addLayer({ 'id': 'rail-alignment', 'type': 'line', 'source': 'alignment-source', 'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' }, 'paint': { 'line-color': '#000000', 'line-width': 1.5 } });
+        map.addLayer({ 'id': 'chainage-global', 'type': 'circle', 'source': 'chainage-source', 'layout': { 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none' }, 'paint': { 'circle-color': '#ffffff', 'circle-radius': 3, 'circle-stroke-width': 1, 'circle-stroke-color': '#333' } });
+        map.addLayer({ 'id': 'chainage-labels', 'type': 'symbol', 'source': 'chainage-source', 'minzoom': 11, 'layout': { 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none', 'text-field': ['get', 'chaintxt'], 'text-size': 10, 'text-offset': [0, 1.2] }, 'paint': { 'text-color': '#333333', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
+
+        applyFilters(); 
+        setupHoverEvents(); 
+    });
+
+    function setupHoverEvents() {
+        ['inbound-lines', 'outbound-lines', 'temp-lines', 'rail-link'].forEach(lId => {
+            map.on('mousemove', lId, (e) => {
+                if (e.features.length > 0) {
+                    map.getCanvas().style.cursor = 'pointer';
+                    hoveredRouteId = e.features[0].properties.route_id;
+                    ['inbound-lines', 'outbound-lines'].forEach(layer => {
+                        if (map.getLayer(layer)) {
+                            map.setPaintProperty(layer, 'line-width', ['case', ['==', ['get', 'route_id'], hoveredRouteId], 6, 3]);
+                            map.setPaintProperty(layer, 'line-opacity', ['case', ['==', ['get', 'route_id'], hoveredRouteId], 1.0, 0.4]);
+                        }
+                    });
+                }
+            });
+            map.on('mouseleave', lId, () => {
+                map.getCanvas().style.cursor = '';
+                hoveredRouteId = null;
+                ['inbound-lines', 'outbound-lines'].forEach(layer => {
+                    if (map.getLayer(layer)) {
+                        map.setPaintProperty(layer, 'line-width', 3);
+                        map.setPaintProperty(layer, 'line-opacity', 0.4);
+                    }
+                });
+            });
+        });
+    }
+
+    map.once('load', () => {
+        populateFilters();
+        a1_data.features.forEach(f => {
+            if (f.geometry.type === 'Point') {
+                const props = f.properties; const el = document.createElement('div');
+                let markerColor = '#00ffff'; let iconSymbol = '🏢';
+
+                if (props.node_type === 'Hub') { markerColor = '#1e90ff'; iconSymbol = props.name.includes('Mine') ? '🚂' : '⚓'; } 
+                else if (props.node_type === 'Quarry') {
+                    if (props.material.toLowerCase().includes('sand')) markerColor = '#ffd700';
+                    else if (props.material.toLowerCase().includes('limestone')) markerColor = '#ffffff';
+                    else markerColor = '#a0522d'; iconSymbol = '⛏️';
+                }
+                el.style.backgroundColor = markerColor; el.style.width = '18px'; el.style.height = '18px';
+                el.style.borderRadius = '50%'; el.style.display = 'flex'; el.style.alignItems = 'center';
+                el.style.justifyContent = 'center'; el.style.fontSize = '9px'; el.style.border = '1.5px solid #475569';
+                el.style.boxShadow = '0 1px 3px rgba(16,24,40,0.25)'; el.style.cursor = 'pointer'; el.innerHTML = iconSymbol;
+
+                let popupMarkup = `<div style='min-width: 180px;'><h3 style='margin:0 0 5px 0; color:#003787; border-bottom: 1px solid #eee; padding-bottom:4px;'>${props.name}</h3><p style='margin:4px 0;'><b>Type:</b> ${props.node_type}</p>`;
+                if (props.node_type === 'Compound') popupMarkup += `<p style='margin:4px 0;'><b>Sector IPT:</b> ${props.ipt}</p>`;
+                else if (props.node_type === 'Quarry') popupMarkup += `<p style='margin:4px 0;'><b>Material:</b> ${props.material}</p>`;
+                if (props.aux_info) popupMarkup += props.aux_info;
+                popupMarkup += `<button onclick="filterByNode('${props.name}', '${props.node_type}')" style="margin-top:10px; width:100%; background:#003787; color:#fff; border:none; padding:8px; border-radius:4px; font-weight:bold; cursor:pointer;">Filter Routes to this Location</button></div>`;
+
+                new mapboxgl.Marker(el).setLngLat(f.geometry.coordinates).setPopup(new mapboxgl.Popup({ offset: 12 }).setHTML(popupMarkup)).addTo(map);
+                nodeMarkersArray.push(el);
+            }
+        });
+    });
+    function changeBasemap(styleUrl) {
+        if (styleUrl === 'maaamet-ortho') { map.setStyle(maaametOrthoStyle()); return; }
+        map.setStyle(styleUrl);
+    }
+    function maaametOrthoStyle() {
+        // Estonian Land Board (Maa-amet) newest orthophoto mosaic, served as a WMS raster.
+        // Layer name 'EESTIFOTO' from the fotokaart service; verify via GetCapabilities if imagery is blank.
+        return {
+            version: 8,
+            glyphs: 'mapbox://fonts/mapbox/{fontstack}/{range}.pbf',
+            sources: {
+                'maaamet-ortho': {
+                    type: 'raster', tileSize: 256,
+                    tiles: ['https://kaart.maaamet.ee/wms/fotokaart?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=EESTIFOTO&STYLES=&FORMAT=image/jpeg&TRANSPARENT=false&SRS=EPSG:3857&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}'],
+                    attribution: 'Orthophoto: Estonian Land Board (Maa-amet)'
+                }
+            },
+            layers: [
+                { id: 'bg', type: 'background', paint: { 'background-color': '#e8eaed' } },
+                { id: 'maaamet-ortho', type: 'raster', source: 'maaamet-ortho' }
+            ]
+        };
+    }
+    function toggleLayer(id, visible) { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'); }
+    function toggleNodes(visible) { nodeMarkersArray.forEach(el => el.style.display = visible ? 'flex' : 'none'); }
+</script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        /* Theme refinements — base minimalist theme lives in the <head> block */
+        body { font-family:'Inter',system-ui,sans-serif !important; }
+        .sidebar { box-shadow:none !important; border-right:1px solid var(--line) !important; padding:20px 18px 24px !important; background:#fff !important; }
+        .rb-title { border:none !important; text-transform:none !important; }
+        .control-group, .fc-box { background:transparent !important; border:none !important; box-shadow:none !important; padding:0 !important; margin:0 !important; }
+        .mapboxgl-popup-content { min-width:210px !important; max-width:360px !important; padding:13px 14px !important; border-radius:10px !important; box-shadow:0 8px 28px rgba(16,24,40,.14) !important; }
+        .mapboxgl-popup-close-button { font-size:18px; color:#94a3b8; padding:4px 9px; }
+        .mapboxgl-popup-close-button:hover { color:var(--accent); background:transparent !important; }
+    </style>
+
+    <script>
+        // --------------------------------------------------------------------
+        // UI INJECTION & MAP STYLE OVERRIDES
+        // --------------------------------------------------------------------
+        window.addEventListener('DOMContentLoaded', (event) => {
+            let sidebar = document.querySelector('.sidebar');
+            if(sidebar) {
+                let pluginUI = `
+                <div class="control-group fc-box">
+                    <h3>Forecast traffic volume</h3>
+                    <div class="fc-row">
+                        <div><label>From</label><select id="forecast-from" onchange="if(document.getElementById('toggle-forecast').checked) toggleForecastPlugin();"></select></div>
+                        <div><label>To</label><select id="forecast-to" onchange="if(document.getElementById('toggle-forecast').checked) toggleForecastPlugin();"></select></div>
+                    </div>
+                    <label class="fc-toggle"><input type="checkbox" id="toggle-forecast" onchange="toggleForecastPlugin()"> Show forecast routes</label>
+                    <button class="btn btn-ghost" id="btn-detail" onclick="openForecastDetail()">Forecast detail table</button>
+                    <button class="btn btn-ghost" onclick="openTimeline()" style="margin-top:6px;">▶ Play forecast timeline</button>
+                    <div id="forecast-status">Approved forecasts only.</div>
+                </div>`;
+                sidebar.insertAdjacentHTML('beforeend', pluginUI);
+                populateForecastMonths();
+            }
+        });
+
+        // --------------------------------------------------------------------
+        // V5 HOVER ENGINE & WIDGET INJECTION
+        // --------------------------------------------------------------------
+        let mapReadyInterval = setInterval(() => {
+            if (typeof map !== 'undefined' && map.loaded()) {
+                clearInterval(mapReadyInterval);
+                
+                // Add Mapbox Basemap Widget
+                class BasemapWidgetControl {
+                    onAdd(map) {
+                        this._map = map;
+                        this._container = document.createElement('div');
+                        this._container.className = 'mapboxgl-ctrl custom-map-widget';
+                        this._container.innerHTML = `
+                            <button class="widget-btn active" title="Light Theme" onclick="changeTheme(this, 'mapbox://styles/mapbox/light-v11')">☀️</button>
+                            <button class="widget-btn" title="Dark Theme" onclick="changeTheme(this, 'mapbox://styles/mapbox/dark-v11')">🌙</button>
+                            <button class="widget-btn" title="Satellite" onclick="changeTheme(this, 'mapbox://styles/mapbox/satellite-streets-v12')">🌍</button>
+                            <button class="widget-btn" title="Streets" onclick="changeTheme(this, 'mapbox://styles/mapbox/streets-v12')">🛣️</button>
+                        `;
+                        return this._container;
+                    }
+                    onRemove() { this._container.parentNode.removeChild(this._container); this._map = undefined; }
+                }
+                map.addControl(new BasemapWidgetControl(), 'bottom-left');
+
+                // Identify Base Data Source
+                let allSources = Object.keys(map.getStyle().sources);
+                let targetSource = allSources.find(s => s.includes('route') || s.includes('a1')) || 'routes';
+
+                const applySolidColors = () => {
+                    // Force Solid Colors on Baseline Routes
+                    if (map.getLayer('inbound-lines')) {
+                        map.setPaintProperty('inbound-lines', 'line-color', '#039E86'); 
+                        map.setPaintProperty('inbound-lines', 'line-opacity', 1.0);
+                    }
+                    if (map.getLayer('outbound-lines')) {
+                        map.setPaintProperty('outbound-lines', 'line-color', '#f59e0b'); 
+                        map.setPaintProperty('outbound-lines', 'line-opacity', 1.0);
+                    }
+                    if (map.getLayer('temp-lines')) {
+                        map.setPaintProperty('temp-lines', 'line-color', '#8b5cf6'); 
+                        map.setPaintProperty('temp-lines', 'line-opacity', 1.0);
+                    }
+
+                    // Setup Universal Hover Glow Layer (Sits behind the routes)
+                    if (!map.getLayer('global-route-hover')) {
+                        map.addLayer({
+                            id: 'global-route-hover',
+                            type: 'line',
+                            source: targetSource,
+                            paint: {
+                                'line-color': '#ffffff',
+                                'line-width': 12,       /* Wide for glow effect */
+                                'line-opacity': 0.6,
+                                'line-blur': 4          /* Softens the edges */
+                            },
+                            filter: ['==', 'name', 'IMPOSSIBLE_VALUE'] // Hidden initially
+                        }, 'inbound-lines'); // Place it UNDER the route layers
+                    }
+                };
+
+                applySolidColors();
+                
+                // Track mouse over any route layer
+                const interactiveLayers = ['inbound-lines', 'outbound-lines', 'temp-lines', 'forecast-layer'];
+                interactiveLayers.forEach(layer => {
+                    // Check dynamically when mouse moves in case layer is added later
+                    map.on('mousemove', (e) => {
+                        let features = map.queryRenderedFeatures(e.point, { layers: interactiveLayers.filter(l => map.getLayer(l)) });
+                        if (features.length > 0) {
+                            map.getCanvas().style.cursor = 'pointer';
+                            let p = features[0].properties;
+                            // Match using whatever ID field exists
+                            let idMatch = p.Route_ID || p.route_id || p.name || p.ID || p.id;
+                            
+                            if (map.getLayer('global-route-hover') && idMatch) {
+                                map.setFilter('global-route-hover', [
+                                    'any',
+                                    ['==', 'Route_ID', idMatch],
+                                    ['==', 'route_id', idMatch],
+                                    ['==', 'name', idMatch],
+                                    ['==', 'ID', idMatch],
+                                    ['==', 'id', idMatch]
+                                ]);
+                            }
+                        } else {
+                            map.getCanvas().style.cursor = '';
+                            if (map.getLayer('global-route-hover')) {
+                                map.setFilter('global-route-hover', ['==', 'name', 'IMPOSSIBLE_VALUE']);
+                            }
+                        }
+                    });
+                });
+                
+                map.on('style.load', () => {
+                    setTimeout(() => {
+                        applySolidColors();
+                        if(document.getElementById('toggle-forecast') && document.getElementById('toggle-forecast').checked) {
+                            toggleForecastPlugin();
+                        }
+                    }, 500);
+                });
+            }
+        }, 500);
+
+        window.changeTheme = function(btn, styleUrl) {
+            document.querySelectorAll('.widget-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            map.setStyle(styleUrl);
+        };
+
+        // --------------------------------------------------------------------
+        // FORECAST ENGINE
+        // --------------------------------------------------------------------
+        async function toggleForecastPlugin() {
+            let isChecked = document.getElementById('toggle-forecast').checked;
+            let status = document.getElementById('forecast-status');
+
+            if (!isChecked) {
+                ['forecast-labels','forecast-layer','forecast-casing','forecast-flow'].forEach(l => { if(map.getLayer(l)) map.removeLayer(l); });
+                status.innerHTML = "Approved forecasts only.";
+                status.style.color = "#6b7280";
+                const bd = document.getElementById('btn-detail'); if(bd) bd.style.display = 'none';
+                if (typeof closeDrawer === 'function' && drawerTab === 'detail') closeDrawer();
+                return;
+            }
+
+            let fromM = parseInt(document.getElementById('forecast-from').value);
+            let toM = parseInt(document.getElementById('forecast-to').value);
+            if (fromM > toM) {
+                status.innerHTML = "\u274c 'From' month must be before 'To' month!";
+                status.style.color = CONFIG.COLORS.peak;
+                return;
+            }
+
+            const unit = CONFIG.FORECAST_UNIT || 'vehicles';
+            status.innerHTML = "Fetching approved forecasts\u2026";
+            status.style.color = CONFIG.COLORS.forecast;
+
+            try {
+                let url = `${CONFIG.API_BASE}/public/route-forecasts?from=${fromM}&to=${toM}&unit=${unit}`;
+                let response = await fetch(url);
+                if (!response.ok) throw new Error("API " + response.status);
+                let raw = await response.json();
+
+                let forecastMap = {};
+                Object.keys(raw).forEach(k => { forecastMap[k.toString().trim().toLowerCase()] = raw[k]; });
+
+                let src = map.getSource('routes-source');
+                let currentData = src._data;
+                let matchCount = 0;
+
+                currentData.features.forEach(f => {
+                    if (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString') {
+                        let rid = (f.properties.route_id || '').toString().trim().toLowerCase();
+                        let m = rid && forecastMap[rid];
+                        if (m) {
+                            f.properties.is_forecast = true;
+                            f.properties.f_avg = m.avg;
+                            f.properties.f_peak = m.peak;
+                            f.properties.f_total = m.total;
+                            f.properties.f_unit = m.unit;
+                            f.properties.f_time = `M${fromM}\u2013M${toM}`;
+                            matchCount++;
+                        } else {
+                            f.properties.is_forecast = false;
+                        }
+                    }
+                });
+                src.setData(currentData);
+
+                if (!map.getLayer('forecast-layer')) {
+                    map.addLayer({
+                        id: 'forecast-casing', type: 'line', source: 'routes-source',
+                        filter: ['==', 'is_forecast', true],
+                        paint: { 'line-color': CONFIG.COLORS.forecastCasing, 'line-width': 6, 'line-opacity': 0.9 }
+                    });
+                    map.addLayer({
+                        id: 'forecast-layer', type: 'line', source: 'routes-source',
+                        filter: ['==', 'is_forecast', true],
+                        paint: { 'line-color': CONFIG.COLORS.forecast, 'line-width': 3.5, 'line-opacity': 0.95 }
+                    });
+                    map.addLayer({
+                        id: 'forecast-labels', type: 'symbol', source: 'routes-source',
+                        filter: ['==', 'is_forecast', true],
+                        layout: { 'symbol-placement': 'line-center', 'text-field': ['concat', ['get', 'f_avg'], ' ', ['get', 'f_unit']], 'text-size': 12, 'text-offset': [0,-1] },
+                        paint: { 'text-color': '#ffffff', 'text-halo-color': CONFIG.COLORS.forecastLabelHalo, 'text-halo-width': 2 }
+                    });
+                }
+                ensureFlowLayer();
+
+                const bd = document.getElementById('btn-detail');
+                if (matchCount > 0) {
+                    status.innerHTML = `Showing ${matchCount} route(s) with approved forecasts.`;
+                    status.style.color = CONFIG.COLORS.green;
+                    if (bd) bd.style.display = 'block';
+                } else {
+                    status.innerHTML = `<span style="color:${CONFIG.COLORS.peak};">No approved forecasts in this window.</span>`;
+                    if (bd) bd.style.display = 'none';
+                }
+            } catch (e) {
+                status.innerHTML = "\u274c Failed: " + e.message;
+                status.style.color = CONFIG.COLORS.peak;
+            }
+        }
+    </script>
+
+    <script>
+    // ===== Selection highlight · route analysis · forecast detail · month labels =====
+    let META = { factors: null, ready: false };
+    let ROUTEINFO = {};                 // route_id(lower) -> {origin,dest,distance_km}
+    let selectedRouteId = null;
+    let drawerTab = 'analysis';
+    const FCACHE = {};                  // `${lo}-${hi}-${unit}` -> matrix json
+
+    const FALLBACK_FACTORS = {
+        vehicle_payload_t: { "_default": 20 },
+        vehicle_emissions_kg_co2e_per_km: { "_default": 0.90 },
+        planning: { avg_haul_speed_kmh:45, load_minutes:12, unload_minutes:8, working_days_per_month:22, shift_hours_per_day:10 }
+    };
+    function fac(){ return META.factors || FALLBACK_FACTORS; }
+    function pick(obj,key){ if(!obj) return undefined; return obj[key]!==undefined ? obj[key] : obj._default; }
+
+    function monthLabel(i){
+        const names=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const y = CONFIG.START_YEAR + Math.floor((i-1)/12);
+        return names[(i-1)%12] + ' ' + y;
+    }
+    function populateForecastMonths(){
+        const from=document.getElementById('forecast-from'), to=document.getElementById('forecast-to');
+        if(!from||!to) return;
+        let opts='';
+        for(let i=1;i<=CONFIG.MONTH_COUNT;i++) opts+='<option value="'+i+'">'+monthLabel(i)+'</option>';
+        from.innerHTML=opts; to.innerHTML=opts; from.value='1'; to.value='12';
+    }
+
+    function havKm(a,b){
+        const R=6371, rad=Math.PI/180;
+        const dLat=(b[1]-a[1])*rad, dLon=(b[0]-a[0])*rad;
+        const s=Math.sin(dLat/2)**2 + Math.cos(a[1]*rad)*Math.cos(b[1]*rad)*Math.sin(dLon/2)**2;
+        return 2*R*Math.asin(Math.sqrt(s));
+    }
+    function lineLenKm(geom){
+        let pts = geom.type==='LineString' ? geom.coordinates : [].concat.apply([], geom.coordinates);
+        let d=0; for(let i=0;i<pts.length-1;i++) d+=havKm(pts[i],pts[i+1]); return d;
+    }
+    function buildRouteInfo(){
+        (a1_data.features||[]).forEach(f=>{
+            if(f.geometry && (f.geometry.type==='LineString'||f.geometry.type==='MultiLineString')){
+                const rid=(f.properties.route_id||'').toString().trim().toLowerCase();
+                if(!rid) return;
+                const L=lineLenKm(f.geometry);
+                const cur=ROUTEINFO[rid]||{origin:f.properties.origin,dest:f.properties.dest,distance_km:0};
+                if(L>cur.distance_km){
+                    cur.distance_km=L;
+                    const pts=f.geometry.type==='LineString'?f.geometry.coordinates:[].concat.apply([],f.geometry.coordinates);
+                    if(pts.length){ cur.start=pts[0]; cur.end=pts[pts.length-1]; }
+                }
+                cur.origin=cur.origin||f.properties.origin; cur.dest=cur.dest||f.properties.dest;
+                ROUTEINFO[rid]=cur;
+            }
+        });
+    }
+    async function fetchMeta(){
+        try{ const r=await fetch(CONFIG.API_BASE+'/meta'); META.factors = r.ok ? (await r.json()).factors : FALLBACK_FACTORS; }
+        catch(e){ META.factors=FALLBACK_FACTORS; }
+        META.ready=true;
+    }
+    async function fetchMatrix(unit){
+        const f=parseInt(document.getElementById('forecast-from').value)||1;
+        const t=parseInt(document.getElementById('forecast-to').value)||12;
+        const lo=Math.min(f,t), hi=Math.max(f,t), key=lo+'-'+hi+'-'+unit;
+        if(FCACHE[key]) return FCACHE[key];
+        const r=await fetch(CONFIG.API_BASE+'/public/forecast-matrix?from='+lo+'&to='+hi+'&unit='+unit);
+        if(!r.ok) throw new Error('API '+r.status);
+        const j=await r.json(); FCACHE[key]=j; return j;
+    }
+
+    function ensureSelectionLayers(){
+        if(!map.getSource('selected-route')) map.addSource('selected-route',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+        if(!map.getLayer('sel-glow')) map.addLayer({id:'sel-glow',type:'line',source:'selected-route',paint:{'line-color':CONFIG.COLORS.selection,'line-width':10,'line-opacity':0.28,'line-blur':2}});
+        if(!map.getLayer('sel-core')) map.addLayer({id:'sel-core',type:'line',source:'selected-route',paint:{'line-color':CONFIG.COLORS.selection,'line-width':3.5,'line-opacity':0.95}});
+    }
+    function selectRoute(routeId){
+        selectedRouteId=routeId;
+        const rl=(routeId||'').toString().trim().toLowerCase();
+        const feats=(a1_data.features||[]).filter(f=>f.geometry&&(f.geometry.type==='LineString'||f.geometry.type==='MultiLineString')&&(f.properties.route_id||'').toString().trim().toLowerCase()===rl);
+        ensureSelectionLayers();
+        const src=map.getSource('selected-route'); if(src) src.setData({type:'FeatureCollection',features:feats});
+        if(map.getLayer('sel-glow')) map.moveLayer('sel-glow');
+        if(map.getLayer('sel-core')) map.moveLayer('sel-core');
+    }
+    function clearSelection(){
+        selectedRouteId=null;
+        const src=map.getSource('selected-route'); if(src) src.setData({type:'FeatureCollection',features:[]});
+    }
+
+    function showDrawerTab(tab){
+        drawerTab=tab;
+        document.getElementById('drawer-analysis').style.display = tab==='analysis'?'block':'none';
+        document.getElementById('drawer-detail').style.display   = tab==='detail'?'block':'none';
+        document.getElementById('tab-analysis').classList.toggle('active',tab==='analysis');
+        document.getElementById('tab-detail').classList.toggle('active',tab==='detail');
+        document.getElementById('route-drawer').classList.add('open');
+    }
+    function closeDrawer(){ document.getElementById('route-drawer').classList.remove('open'); }
+    function card(val,lbl,sub){ return '<div class="an-card"><div class="an-val">'+val+'</div><div class="an-lbl">'+lbl+'</div>'+(sub?'<div class="an-sub">'+sub+'</div>':'')+'</div>'; }
+
+    async function openRouteAnalysis(routeId){
+        selectRoute(routeId);
+        showDrawerTab('analysis');
+        const box=document.getElementById('drawer-analysis');
+        const rl=(routeId||'').toString().trim().toLowerCase();
+        const info=ROUTEINFO[rl]||{distance_km:0};
+        const F=fac(); const P=F.planning||FALLBACK_FACTORS.planning;
+        const dist=info.distance_km||0, round=dist*2;
+        const cycleH = P.avg_haul_speed_kmh>0 ? (round/P.avg_haul_speed_kmh + (P.load_minutes+P.unload_minutes)/60) : 0;
+        const tripsPerDay = cycleH>0 ? (P.shift_hours_per_day/cycleH) : 0;
+        const dirLink = (info.start&&info.end)
+            ? ' &nbsp;·&nbsp; <a href="https://www.google.com/maps/dir/?api=1&origin='+info.start[1]+','+info.start[0]+'&destination='+info.end[1]+','+info.end[0]+'&travelmode=driving" target="_blank" rel="noopener" style="color:var(--navy);font-weight:600;text-decoration:none;">Driving directions ↗</a>'
+            : '';
+        box.innerHTML =
+            '<div class="an-title">'+routeId+'</div>'+
+            '<div class="an-route">'+(info.origin||'—')+' → '+(info.dest||'—')+dirLink+'</div>'+
+            '<div class="an-grid">'+
+                card(dist.toFixed(1)+' km','One-way distance','Routed road geometry')+
+                card(round.toFixed(1)+' km','Round trip','Loaded out, empty back')+
+                card(cycleH.toFixed(2)+' h','Est. haul cycle','Drive + '+(P.load_minutes+P.unload_minutes)+' min handling')+
+                card(tripsPerDay.toFixed(1),'Trips / day / truck','@ '+P.shift_hours_per_day+' h shift, '+P.avg_haul_speed_kmh+' km/h')+
+            '</div>'+
+            '<div id="an-fc-slot" class="an-sub" style="margin-top:12px;">Loading forecast…</div>';
+        try{
+            const mtx=await fetchMatrix('t');
+            const row=(mtx.routes||[]).find(r=>(r.route_id||'').toString().trim().toLowerCase()===rl);
+            let extra;
+            if(row){
+                const veh=row.vehicle_type, mat=row.material_type;
+                const payload=pick(F.vehicle_payload_t,veh)||20;
+                const emis=pick(F.vehicle_emissions_kg_co2e_per_km,veh)||0.9;
+                const totalT=row.total||0;
+                const months=Object.values(row.monthly||{});
+                const peakT=months.length?Math.max.apply(null,months):0;
+                const trips=payload>0?Math.ceil(totalT/payload):0;
+                const co2t=trips*round*emis/1000;
+                const intensity=totalT>0?(co2t*1000/totalT):0;
+                const trucksPeak=(tripsPerDay>0&&payload>0)?Math.ceil((peakT/payload)/(tripsPerDay*P.working_days_per_month)):0;
+                extra =
+                    '<div class="an-title" style="margin-top:16px;">Forecast · '+monthLabel(mtx.from)+' – '+monthLabel(mtx.to)+'</div>'+
+                    '<div class="an-route">'+mat+' · '+veh+' · payload '+payload+' t</div>'+
+                    '<div class="an-grid">'+
+                        card(Math.round(totalT).toLocaleString()+' t','Total material','over selected window')+
+                        card(trips.toLocaleString(),'Total trips','one-way loaded runs')+
+                        card(co2t.toFixed(1)+' t','CO₂e (est.)','round-trip diesel')+
+                        card(intensity.toFixed(1)+' kg/t','Carbon intensity','per tonne delivered')+
+                        card(Math.round(peakT).toLocaleString()+' t','Peak month','busiest month in window')+
+                        card(trucksPeak,'Trucks for peak','to clear peak month')+
+                    '</div>'+
+                    '<div class="an-sub" style="margin-top:10px;">Carbon uses DEFRA-2025-based factors — edit backend/factors.json.</div>';
+            } else {
+                extra='<div class="an-sub" style="margin-top:12px;">No approved forecast for this route in the selected window, so tonnage &amp; carbon are hidden. Distance and cycle time above come from the road geometry.</div>';
+            }
+            const slot=document.getElementById('an-fc-slot'); if(slot) slot.outerHTML=extra;
+        }catch(e){
+            const slot=document.getElementById('an-fc-slot'); if(slot) slot.outerHTML='<div class="an-sub" style="margin-top:12px;">Couldn\'t load forecast ('+e.message+').</div>';
+        }
+    }
+
+    const MAT_PALETTE=['#003787','#039E86','#BF2E55','#C6841D','#6D28D9','#0E7490','#9AA7B4'];
+    function materialColorMap(routes){
+        const m={}; let i=0;
+        routes.forEach(r=>{ const k=r.material_type||'—'; if(!(k in m)){ m[k]=MAT_PALETTE[i%MAT_PALETTE.length]; i++; } });
+        return m;
+    }
+    async function openForecastDetail(){
+        showDrawerTab('detail');
+        const box=document.getElementById('drawer-detail');
+        box.innerHTML='<div class="an-sub">Loading forecast detail…</div>';
+        try{
+            const mtx=await fetchMatrix('t');
+            const routes=mtx.routes||[];
+            if(!routes.length){ box.innerHTML='<div class="an-sub">No approved forecasts in the selected window.</div>'; return; }
+            const lo=mtx.from, hi=mtx.to, cmap=materialColorMap(routes);
+            let head='<th>Route</th>'; for(let i=lo;i<=hi;i++) head+='<th>'+monthLabel(i)+'</th>'; head+='<th>Total</th>';
+            let body='';
+            routes.forEach(r=>{
+                let row='<td><span class="mat-chip" style="background:'+cmap[r.material_type||'—']+'"></span>'+r.route_id+'</td>';
+                for(let i=lo;i<=hi;i++){ const v=(r.monthly||{})[i]; row+='<td>'+(v?Math.round(v).toLocaleString():'·')+'</td>'; }
+                row+='<td><b>'+Math.round(r.total||0).toLocaleString()+'</b></td>';
+                body+='<tr>'+row+'</tr>';
+            });
+            const leg=Object.keys(cmap).map(k=>'<span style="margin-right:14px;white-space:nowrap;"><span class="mat-chip" style="background:'+cmap[k]+'"></span>'+k+'</span>').join('');
+            box.innerHTML =
+                '<div class="an-title">Approved forecast — tonnes of material by month</div>'+
+                '<div class="an-route">Window '+monthLabel(lo)+' – '+monthLabel(hi)+' · '+routes.length+' route(s) · sorted by total</div>'+
+                '<div style="font-size:11px;color:var(--muted);margin-bottom:10px;">'+leg+'</div>'+
+                '<div style="overflow:auto;"><table class="fc-matrix"><thead><tr>'+head+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+        }catch(e){ box.innerHTML='<div class="an-sub">Couldn\'t load forecast detail ('+e.message+').</div>'; }
+    }
+
+    // ===== Directional flow animation + playable forecast timeline =====
+    function ensureForecastLayers(){
+        if(map.getLayer('forecast-layer')) return;
+        map.addLayer({id:'forecast-casing',type:'line',source:'routes-source',filter:['==','is_forecast',true],paint:{'line-color':CONFIG.COLORS.forecastCasing,'line-width':6,'line-opacity':0.9}});
+        map.addLayer({id:'forecast-layer',type:'line',source:'routes-source',filter:['==','is_forecast',true],paint:{'line-color':CONFIG.COLORS.forecast,'line-width':3.5,'line-opacity':0.95}});
+        map.addLayer({id:'forecast-labels',type:'symbol',source:'routes-source',filter:['==','is_forecast',true],layout:{'symbol-placement':'line-center','text-field':['concat',['get','f_avg'],' ',['get','f_unit']],'text-size':12,'text-offset':[0,-1]},paint:{'text-color':'#ffffff','text-halo-color':CONFIG.COLORS.forecastLabelHalo,'text-halo-width':2}});
+    }
+    function ensureFlowLayer(){
+        if(map.getLayer('forecast-flow') || !map.getSource('routes-source')) return;
+        map.addLayer({id:'forecast-flow',type:'line',source:'routes-source',filter:['==','is_forecast',true],paint:{'line-color':'#ffffff','line-width':2,'line-opacity':0.85,'line-dasharray':[0,4,3]}});
+    }
+    // animated "ant-march" dashes convey haul direction (origin -> destination, in geometry order)
+    const DASH_SEQ=[[0,4,3],[1,4,2],[2,4,1],[3,4,0],[0,1,3,3],[0,2,3,2],[0,3,3,1]];
+    let _dashIx=0,_dashT=0;
+    function animateFlow(ts){
+        if(map.getLayer && map.getLayer('forecast-flow') && (ts-_dashT>65)){
+            _dashIx=(_dashIx+1)%DASH_SEQ.length;
+            try{ map.setPaintProperty('forecast-flow','line-dasharray',DASH_SEQ[_dashIx]); }catch(e){}
+            _dashT=ts;
+        }
+        requestAnimationFrame(animateFlow);
+    }
+    requestAnimationFrame(animateFlow);
+
+    const TL = { on:false, playing:false, month:1, timer:null, matrix:null };
+    async function ensureTimelineMatrix(){
+        if(TL.matrix) return TL.matrix;
+        const unit = CONFIG.FORECAST_UNIT || 'vehicles';
+        const r = await fetch(CONFIG.API_BASE+'/public/forecast-matrix?from=1&to='+CONFIG.MONTH_COUNT+'&unit='+unit);
+        if(!r.ok) throw new Error('API '+r.status);
+        const j = await r.json();
+        const byR={}; (j.routes||[]).forEach(rt=>{ byR[(rt.route_id||'').toString().trim().toLowerCase()]=rt; });
+        TL.matrix = { byRoute:byR, unit:j.unit }; return TL.matrix;
+    }
+    function renderMonthFrame(m){
+        const src=map.getSource('routes-source'); if(!src||!TL.matrix) return;
+        const data=src._data, byR=TL.matrix.byRoute, unit=TL.matrix.unit; let count=0, sum=0;
+        data.features.forEach(f=>{
+            if(f.geometry.type==='LineString'||f.geometry.type==='MultiLineString'){
+                const rid=(f.properties.route_id||'').toString().trim().toLowerCase();
+                const rt=rid&&byR[rid]; const vol=rt?((rt.monthly||{})[m]||0):0;
+                if(vol>0){ f.properties.is_forecast=true; f.properties.f_avg=Math.round(vol); f.properties.f_unit=unit; f.properties.f_time=monthLabel(m); count++; sum+=vol; }
+                else f.properties.is_forecast=false;
+            }
+        });
+        src.setData(data); ensureForecastLayers(); ensureFlowLayer();
+        const lbl=document.getElementById('tl-label'); if(lbl) lbl.textContent = monthLabel(m)+' · '+count+' routes · '+Math.round(sum)+' '+unit;
+    }
+    function openTimeline(){
+        TL.on=true;
+        const cb=document.getElementById('toggle-forecast'); if(cb) cb.checked=false;
+        const bar=document.getElementById('timeline-bar'); if(bar) bar.style.display='flex';
+        const rng=document.getElementById('tl-range'); if(rng) rng.max=CONFIG.MONTH_COUNT;
+        const lbl=document.getElementById('tl-label'); if(lbl) lbl.textContent='Loading\u2026';
+        ensureTimelineMatrix().then(()=>{ setTimelineMonth(TL.month); }).catch(()=>{ if(lbl) lbl.textContent='No forecast data'; });
+    }
+    function closeTimeline(){
+        stopTimeline(); TL.on=false;
+        const bar=document.getElementById('timeline-bar'); if(bar) bar.style.display='none';
+        const src=map.getSource('routes-source');
+        if(src){ const d=src._data; d.features.forEach(f=>{ if(f.geometry.type==='LineString'||f.geometry.type==='MultiLineString') f.properties.is_forecast=false; }); src.setData(d); }
+        ['forecast-labels','forecast-layer','forecast-casing','forecast-flow'].forEach(l=>{ if(map.getLayer(l)) map.removeLayer(l); });
+    }
+    function toggleTimeline(){ if(TL.playing) stopTimeline(); else startTimeline(); }
+    function startTimeline(){
+        if(!TL.matrix){ ensureTimelineMatrix().then(()=>startTimeline()).catch(()=>{}); return; }
+        if(!TL.on) openTimeline();
+        TL.playing=true; const b=document.getElementById('tl-play'); if(b) b.textContent='\u23F8';
+        TL.timer=setInterval(()=>{ TL.month = TL.month>=CONFIG.MONTH_COUNT ? 1 : TL.month+1; setTimelineMonth(TL.month); }, 750);
+    }
+    function stopTimeline(){ TL.playing=false; const b=document.getElementById('tl-play'); if(b) b.textContent='\u25B6'; if(TL.timer){ clearInterval(TL.timer); TL.timer=null; } }
+    function setTimelineMonth(m){ TL.month=m; const r=document.getElementById('tl-range'); if(r) r.value=m; renderMonthFrame(m); }
+    function onTimelineScrub(v){ stopTimeline(); setTimelineMonth(parseInt(v)); }
+
+    (function initAnalysis(){
+        buildRouteInfo();
+        fetchMeta();
+        const routeLayers=['inbound-lines','outbound-lines','temp-lines','forecast-layer'];
+        routeLayers.forEach(lid=>{
+            map.on('click', lid, (e)=>{
+                if(!e.features||!e.features.length) return;
+                const p=e.features[0].properties, rid=p.route_id||'Route';
+                selectRoute(rid);
+                const info=ROUTEINFO[(rid||'').toString().trim().toLowerCase()]||{};
+                const safe=(rid||'').toString().replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+                const html='<div style="min-width:210px;">'+
+                    '<h4 style="margin:0 0 4px;color:'+CONFIG.COLORS.brandDark+';font-size:13px;">'+rid+'</h4>'+
+                    '<div style="font-size:11.5px;color:#6b7280;margin-bottom:8px;">'+(info.origin||'—')+' → '+(info.dest||'—')+(info.distance_km?(' · '+info.distance_km.toFixed(1)+' km'):'')+'</div>'+
+                    '<button class="rb-popup-btn" onclick="openRouteAnalysis(\''+safe+'\')">Full route analysis →</button></div>';
+                new mapboxgl.Popup({offset:10}).setLngLat(e.lngLat).setHTML(html).addTo(map);
+            });
+        });
+        map.on('click',(e)=>{
+            const active=routeLayers.filter(l=>map.getLayer(l));
+            const hits=active.length?map.queryRenderedFeatures(e.point,{layers:active}):[];
+            if(!hits.length) clearSelection();
+        });
+        map.on('style.load', ()=>{ ensureSelectionLayers(); if(selectedRouteId) selectRoute(selectedRouteId); });
+        if(map.isStyleLoaded()) ensureSelectionLayers();
+    })();
+    </script>
+</body>
+</html>
