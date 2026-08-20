@@ -1,0 +1,1185 @@
+{
+ "locations": [
+  {
+   "id": "Q01",
+   "name": "Vangu sand",
+   "loc_type": "Quarry",
+   "lat": 58.137833,
+   "lon": 24.767167,
+   "material": "Sand"
+  },
+  {
+   "id": "C01",
+   "name": "Parnu terminal",
+   "loc_type": "Compound",
+   "lat": 58.359556,
+   "lon": 24.571219,
+   "material": ""
+  },
+  {
+   "id": "C02",
+   "name": "Parnu terminal",
+   "loc_type": "Compound",
+   "lat": 58.374992,
+   "lon": 24.553628,
+   "material": ""
+  },
+  {
+   "id": "C03",
+   "name": "IMF/Raama bog / Parnu CB",
+   "loc_type": "Compound",
+   "lat": 58.397194,
+   "lon": 24.562389,
+   "material": ""
+  },
+  {
+   "id": "C04",
+   "name": "Urge station",
+   "loc_type": "Compound",
+   "lat": 58.436547,
+   "lon": 24.615978,
+   "material": ""
+  },
+  {
+   "id": "C05",
+   "name": "Kivisilla viadukt / Stock Pile 6",
+   "loc_type": "Compound",
+   "lat": 58.474131,
+   "lon": 24.668,
+   "material": ""
+  },
+  {
+   "id": "C06",
+   "name": "Timmermanni Viadukt",
+   "loc_type": "Compound",
+   "lat": 58.507722,
+   "lon": 24.740889,
+   "material": ""
+  },
+  {
+   "id": "C07",
+   "name": "Tootsi Station / Stock Pile 5",
+   "loc_type": "Compound",
+   "lat": 58.567778,
+   "lon": 24.810167,
+   "material": ""
+  },
+  {
+   "id": "Q02",
+   "name": "Potsepa II gravel",
+   "loc_type": "Quarry",
+   "lat": 58.348722,
+   "lon": 24.159417,
+   "material": "Gravel"
+  },
+  {
+   "id": "Q03",
+   "name": "Potsepa sand",
+   "loc_type": "Quarry",
+   "lat": 58.3515,
+   "lon": 24.180917,
+   "material": "Sand"
+  },
+  {
+   "id": "Q04",
+   "name": "Kivimae III gravel",
+   "loc_type": "Quarry",
+   "lat": 58.379222,
+   "lon": 24.104361,
+   "material": "Gravel"
+  },
+  {
+   "id": "Q05",
+   "name": "Eassalu III sand",
+   "loc_type": "Quarry",
+   "lat": 58.400639,
+   "lon": 24.200111,
+   "material": "Sand"
+  },
+  {
+   "id": "Q06",
+   "name": "Tammistu gravel",
+   "loc_type": "Quarry",
+   "lat": 58.442889,
+   "lon": 23.886,
+   "material": "Gravel"
+  },
+  {
+   "id": "Q07",
+   "name": "Anelema limestone",
+   "loc_type": "Quarry",
+   "lat": 58.620444,
+   "lon": 24.549028,
+   "material": "Limestone - rockfill"
+  },
+  {
+   "id": "Q08",
+   "name": "Tarva limestone",
+   "loc_type": "Quarry",
+   "lat": 58.620833,
+   "lon": 24.015556,
+   "material": "Limestone - rockfill"
+  },
+  {
+   "id": "Q09",
+   "name": "Tarva III limestone",
+   "loc_type": "Quarry",
+   "lat": 58.626417000000004,
+   "lon": 24.022778,
+   "material": "Limestone - rockfill"
+  },
+  {
+   "id": "Q10",
+   "name": "Viluvere sand",
+   "loc_type": "Quarry",
+   "lat": 58.643167,
+   "lon": 24.85975,
+   "material": "Sand"
+  },
+  {
+   "id": "Q11",
+   "name": "Viluvere II gravel",
+   "loc_type": "Quarry",
+   "lat": 58.674,
+   "lon": 24.872083,
+   "material": "Gravel"
+  },
+  {
+   "id": "Q12",
+   "name": "Kobra Limestone",
+   "loc_type": "Quarry",
+   "lat": 58.697222,
+   "lon": 25.007361,
+   "material": "Limestone - rockfill"
+  },
+  {
+   "id": "Q13",
+   "name": "Estonia mine",
+   "loc_type": "Quarry",
+   "lat": 59.199083,
+   "lon": 27.394833,
+   "material": "Limestone (Shale aggregate)"
+  },
+  {
+   "id": "P01",
+   "name": "Port of Parnu",
+   "loc_type": "Port",
+   "lat": 58.383711,
+   "lon": 24.470722,
+   "material": "Imported Goods"
+  },
+  {
+   "id": "C08",
+   "name": "Stock Pile 4",
+   "loc_type": "Compound",
+   "lat": 58.7755,
+   "lon": 24.793861,
+   "material": ""
+  },
+  {
+   "id": "C09",
+   "name": "Stock Pile 3",
+   "loc_type": "Compound",
+   "lat": 58.998917,
+   "lon": 24.761139,
+   "material": ""
+  },
+  {
+   "id": "C10",
+   "name": "Stock Pile 2",
+   "loc_type": "Compound",
+   "lat": 59.092417,
+   "lon": 24.7965,
+   "material": ""
+  },
+  {
+   "id": "C11",
+   "name": "Stock Pile 1",
+   "loc_type": "Compound",
+   "lat": 59.255667,
+   "lon": 24.699889,
+   "material": ""
+  },
+  {
+   "id": "C12",
+   "name": "Soodevahe CB",
+   "loc_type": "Compound",
+   "lat": 59.39485,
+   "lon": 24.917014,
+   "material": ""
+  },
+  {
+   "id": "P02",
+   "name": "Muuga Harbour",
+   "loc_type": "Port",
+   "lat": 59.4891,
+   "lon": 24.9691,
+   "material": "Imported Goods"
+  }
+ ],
+ "routes": [
+  {
+   "id": "R-Q01-C01",
+   "long_route_id": "HR-EW-VANGUSAND-PARNUTERMINA",
+   "origin_id": "Q01",
+   "dest_id": "C01",
+   "material_category": "Sand",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q01-C02",
+   "long_route_id": "HR-EW-VANGUSAND-PARNUTERMINA",
+   "origin_id": "Q01",
+   "dest_id": "C02",
+   "material_category": "Sand",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q01-C03",
+   "long_route_id": "HR-EW-VANGUSAND-IMFRAAMABOGP",
+   "origin_id": "Q01",
+   "dest_id": "C03",
+   "material_category": "Sand",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q01-C04",
+   "long_route_id": "HR-EW-VANGUSAND-URGESTATION",
+   "origin_id": "Q01",
+   "dest_id": "C04",
+   "material_category": "Sand",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q01-C05",
+   "long_route_id": "HR-EW-VANGUSAND-KIVISILLAVIA",
+   "origin_id": "Q01",
+   "dest_id": "C05",
+   "material_category": "Sand",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q01-C06",
+   "long_route_id": "HR-EW-VANGUSAND-TIMMERMANNIV",
+   "origin_id": "Q01",
+   "dest_id": "C06",
+   "material_category": "Sand",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q01-C07",
+   "long_route_id": "HR-EW-VANGUSAND-TOOTSISTATIO",
+   "origin_id": "Q01",
+   "dest_id": "C07",
+   "material_category": "Sand",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q02-C01",
+   "long_route_id": "HR-EW-POTSEPAIIGRA-PARNUTERMINA",
+   "origin_id": "Q02",
+   "dest_id": "C01",
+   "material_category": "Gravel",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q02-C02",
+   "long_route_id": "HR-EW-POTSEPAIIGRA-PARNUTERMINA",
+   "origin_id": "Q02",
+   "dest_id": "C02",
+   "material_category": "Gravel",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q02-C03",
+   "long_route_id": "HR-EW-POTSEPAIIGRA-IMFRAAMABOGP",
+   "origin_id": "Q02",
+   "dest_id": "C03",
+   "material_category": "Gravel",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q02-C04",
+   "long_route_id": "HR-EW-POTSEPAIIGRA-URGESTATION",
+   "origin_id": "Q02",
+   "dest_id": "C04",
+   "material_category": "Gravel",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q02-C05",
+   "long_route_id": "HR-EW-POTSEPAIIGRA-KIVISILLAVIA",
+   "origin_id": "Q02",
+   "dest_id": "C05",
+   "material_category": "Gravel",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q02-C06",
+   "long_route_id": "HR-EW-POTSEPAIIGRA-TIMMERMANNIV",
+   "origin_id": "Q02",
+   "dest_id": "C06",
+   "material_category": "Gravel",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q02-C07",
+   "long_route_id": "HR-EW-POTSEPAIIGRA-TOOTSISTATIO",
+   "origin_id": "Q02",
+   "dest_id": "C07",
+   "material_category": "Gravel",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q03-C01",
+   "long_route_id": "HR-EW-POTSEPASAND-PARNUTERMINA",
+   "origin_id": "Q03",
+   "dest_id": "C01",
+   "material_category": "Sand",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q03-C02",
+   "long_route_id": "HR-EW-POTSEPASAND-PARNUTERMINA",
+   "origin_id": "Q03",
+   "dest_id": "C02",
+   "material_category": "Sand",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q03-C03",
+   "long_route_id": "HR-EW-POTSEPASAND-IMFRAAMABOGP",
+   "origin_id": "Q03",
+   "dest_id": "C03",
+   "material_category": "Sand",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q03-C04",
+   "long_route_id": "HR-EW-POTSEPASAND-URGESTATION",
+   "origin_id": "Q03",
+   "dest_id": "C04",
+   "material_category": "Sand",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q03-C05",
+   "long_route_id": "HR-EW-POTSEPASAND-KIVISILLAVIA",
+   "origin_id": "Q03",
+   "dest_id": "C05",
+   "material_category": "Sand",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q03-C06",
+   "long_route_id": "HR-EW-POTSEPASAND-TIMMERMANNIV",
+   "origin_id": "Q03",
+   "dest_id": "C06",
+   "material_category": "Sand",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q03-C07",
+   "long_route_id": "HR-EW-POTSEPASAND-TOOTSISTATIO",
+   "origin_id": "Q03",
+   "dest_id": "C07",
+   "material_category": "Sand",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q04-C01",
+   "long_route_id": "HR-EW-KIVIMAEIIIGR-PARNUTERMINA",
+   "origin_id": "Q04",
+   "dest_id": "C01",
+   "material_category": "Gravel",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q04-C02",
+   "long_route_id": "HR-EW-KIVIMAEIIIGR-PARNUTERMINA",
+   "origin_id": "Q04",
+   "dest_id": "C02",
+   "material_category": "Gravel",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q04-C03",
+   "long_route_id": "HR-EW-KIVIMAEIIIGR-IMFRAAMABOGP",
+   "origin_id": "Q04",
+   "dest_id": "C03",
+   "material_category": "Gravel",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q04-C04",
+   "long_route_id": "HR-EW-KIVIMAEIIIGR-URGESTATION",
+   "origin_id": "Q04",
+   "dest_id": "C04",
+   "material_category": "Gravel",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q04-C05",
+   "long_route_id": "HR-EW-KIVIMAEIIIGR-KIVISILLAVIA",
+   "origin_id": "Q04",
+   "dest_id": "C05",
+   "material_category": "Gravel",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q04-C06",
+   "long_route_id": "HR-EW-KIVIMAEIIIGR-TIMMERMANNIV",
+   "origin_id": "Q04",
+   "dest_id": "C06",
+   "material_category": "Gravel",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q04-C07",
+   "long_route_id": "HR-EW-KIVIMAEIIIGR-TOOTSISTATIO",
+   "origin_id": "Q04",
+   "dest_id": "C07",
+   "material_category": "Gravel",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q05-C01",
+   "long_route_id": "HR-EW-EASSALUIIISA-PARNUTERMINA",
+   "origin_id": "Q05",
+   "dest_id": "C01",
+   "material_category": "Sand",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q05-C02",
+   "long_route_id": "HR-EW-EASSALUIIISA-PARNUTERMINA",
+   "origin_id": "Q05",
+   "dest_id": "C02",
+   "material_category": "Sand",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q05-C03",
+   "long_route_id": "HR-EW-EASSALUIIISA-IMFRAAMABOGP",
+   "origin_id": "Q05",
+   "dest_id": "C03",
+   "material_category": "Sand",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q05-C04",
+   "long_route_id": "HR-EW-EASSALUIIISA-URGESTATION",
+   "origin_id": "Q05",
+   "dest_id": "C04",
+   "material_category": "Sand",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q05-C05",
+   "long_route_id": "HR-EW-EASSALUIIISA-KIVISILLAVIA",
+   "origin_id": "Q05",
+   "dest_id": "C05",
+   "material_category": "Sand",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q05-C06",
+   "long_route_id": "HR-EW-EASSALUIIISA-TIMMERMANNIV",
+   "origin_id": "Q05",
+   "dest_id": "C06",
+   "material_category": "Sand",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q05-C07",
+   "long_route_id": "HR-EW-EASSALUIIISA-TOOTSISTATIO",
+   "origin_id": "Q05",
+   "dest_id": "C07",
+   "material_category": "Sand",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q06-C01",
+   "long_route_id": "HR-EW-TAMMISTUGRAV-PARNUTERMINA",
+   "origin_id": "Q06",
+   "dest_id": "C01",
+   "material_category": "Gravel",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q06-C02",
+   "long_route_id": "HR-EW-TAMMISTUGRAV-PARNUTERMINA",
+   "origin_id": "Q06",
+   "dest_id": "C02",
+   "material_category": "Gravel",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q06-C03",
+   "long_route_id": "HR-EW-TAMMISTUGRAV-IMFRAAMABOGP",
+   "origin_id": "Q06",
+   "dest_id": "C03",
+   "material_category": "Gravel",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q06-C04",
+   "long_route_id": "HR-EW-TAMMISTUGRAV-URGESTATION",
+   "origin_id": "Q06",
+   "dest_id": "C04",
+   "material_category": "Gravel",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q06-C05",
+   "long_route_id": "HR-EW-TAMMISTUGRAV-KIVISILLAVIA",
+   "origin_id": "Q06",
+   "dest_id": "C05",
+   "material_category": "Gravel",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q06-C06",
+   "long_route_id": "HR-EW-TAMMISTUGRAV-TIMMERMANNIV",
+   "origin_id": "Q06",
+   "dest_id": "C06",
+   "material_category": "Gravel",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q06-C07",
+   "long_route_id": "HR-EW-TAMMISTUGRAV-TOOTSISTATIO",
+   "origin_id": "Q06",
+   "dest_id": "C07",
+   "material_category": "Gravel",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q07-C01",
+   "long_route_id": "HR-EW-ANELEMALIMES-PARNUTERMINA",
+   "origin_id": "Q07",
+   "dest_id": "C01",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q07-C02",
+   "long_route_id": "HR-EW-ANELEMALIMES-PARNUTERMINA",
+   "origin_id": "Q07",
+   "dest_id": "C02",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q07-C03",
+   "long_route_id": "HR-EW-ANELEMALIMES-IMFRAAMABOGP",
+   "origin_id": "Q07",
+   "dest_id": "C03",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q07-C04",
+   "long_route_id": "HR-EW-ANELEMALIMES-URGESTATION",
+   "origin_id": "Q07",
+   "dest_id": "C04",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q07-C05",
+   "long_route_id": "HR-EW-ANELEMALIMES-KIVISILLAVIA",
+   "origin_id": "Q07",
+   "dest_id": "C05",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q07-C06",
+   "long_route_id": "HR-EW-ANELEMALIMES-TIMMERMANNIV",
+   "origin_id": "Q07",
+   "dest_id": "C06",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q07-C07",
+   "long_route_id": "HR-EW-ANELEMALIMES-TOOTSISTATIO",
+   "origin_id": "Q07",
+   "dest_id": "C07",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q08-C01",
+   "long_route_id": "HR-EW-TARVALIMESTO-PARNUTERMINA",
+   "origin_id": "Q08",
+   "dest_id": "C01",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q08-C02",
+   "long_route_id": "HR-EW-TARVALIMESTO-PARNUTERMINA",
+   "origin_id": "Q08",
+   "dest_id": "C02",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q08-C03",
+   "long_route_id": "HR-EW-TARVALIMESTO-IMFRAAMABOGP",
+   "origin_id": "Q08",
+   "dest_id": "C03",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q08-C04",
+   "long_route_id": "HR-EW-TARVALIMESTO-URGESTATION",
+   "origin_id": "Q08",
+   "dest_id": "C04",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q08-C05",
+   "long_route_id": "HR-EW-TARVALIMESTO-KIVISILLAVIA",
+   "origin_id": "Q08",
+   "dest_id": "C05",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q08-C06",
+   "long_route_id": "HR-EW-TARVALIMESTO-TIMMERMANNIV",
+   "origin_id": "Q08",
+   "dest_id": "C06",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q08-C07",
+   "long_route_id": "HR-EW-TARVALIMESTO-TOOTSISTATIO",
+   "origin_id": "Q08",
+   "dest_id": "C07",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q09-C01",
+   "long_route_id": "HR-EW-TARVAIIILIME-PARNUTERMINA",
+   "origin_id": "Q09",
+   "dest_id": "C01",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q09-C02",
+   "long_route_id": "HR-EW-TARVAIIILIME-PARNUTERMINA",
+   "origin_id": "Q09",
+   "dest_id": "C02",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q09-C03",
+   "long_route_id": "HR-EW-TARVAIIILIME-IMFRAAMABOGP",
+   "origin_id": "Q09",
+   "dest_id": "C03",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q09-C04",
+   "long_route_id": "HR-EW-TARVAIIILIME-URGESTATION",
+   "origin_id": "Q09",
+   "dest_id": "C04",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q09-C05",
+   "long_route_id": "HR-EW-TARVAIIILIME-KIVISILLAVIA",
+   "origin_id": "Q09",
+   "dest_id": "C05",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q09-C06",
+   "long_route_id": "HR-EW-TARVAIIILIME-TIMMERMANNIV",
+   "origin_id": "Q09",
+   "dest_id": "C06",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q09-C07",
+   "long_route_id": "HR-EW-TARVAIIILIME-TOOTSISTATIO",
+   "origin_id": "Q09",
+   "dest_id": "C07",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q10-C01",
+   "long_route_id": "HR-EW-VILUVERESAND-PARNUTERMINA",
+   "origin_id": "Q10",
+   "dest_id": "C01",
+   "material_category": "Sand",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q10-C02",
+   "long_route_id": "HR-EW-VILUVERESAND-PARNUTERMINA",
+   "origin_id": "Q10",
+   "dest_id": "C02",
+   "material_category": "Sand",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q10-C03",
+   "long_route_id": "HR-EW-VILUVERESAND-IMFRAAMABOGP",
+   "origin_id": "Q10",
+   "dest_id": "C03",
+   "material_category": "Sand",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q10-C04",
+   "long_route_id": "HR-EW-VILUVERESAND-URGESTATION",
+   "origin_id": "Q10",
+   "dest_id": "C04",
+   "material_category": "Sand",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q10-C05",
+   "long_route_id": "HR-EW-VILUVERESAND-KIVISILLAVIA",
+   "origin_id": "Q10",
+   "dest_id": "C05",
+   "material_category": "Sand",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q10-C06",
+   "long_route_id": "HR-EW-VILUVERESAND-TIMMERMANNIV",
+   "origin_id": "Q10",
+   "dest_id": "C06",
+   "material_category": "Sand",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q10-C07",
+   "long_route_id": "HR-EW-VILUVERESAND-TOOTSISTATIO",
+   "origin_id": "Q10",
+   "dest_id": "C07",
+   "material_category": "Sand",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q11-C01",
+   "long_route_id": "HR-EW-VILUVEREIIGR-PARNUTERMINA",
+   "origin_id": "Q11",
+   "dest_id": "C01",
+   "material_category": "Gravel",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q11-C02",
+   "long_route_id": "HR-EW-VILUVEREIIGR-PARNUTERMINA",
+   "origin_id": "Q11",
+   "dest_id": "C02",
+   "material_category": "Gravel",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q11-C03",
+   "long_route_id": "HR-EW-VILUVEREIIGR-IMFRAAMABOGP",
+   "origin_id": "Q11",
+   "dest_id": "C03",
+   "material_category": "Gravel",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q11-C04",
+   "long_route_id": "HR-EW-VILUVEREIIGR-URGESTATION",
+   "origin_id": "Q11",
+   "dest_id": "C04",
+   "material_category": "Gravel",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q11-C05",
+   "long_route_id": "HR-EW-VILUVEREIIGR-KIVISILLAVIA",
+   "origin_id": "Q11",
+   "dest_id": "C05",
+   "material_category": "Gravel",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q11-C06",
+   "long_route_id": "HR-EW-VILUVEREIIGR-TIMMERMANNIV",
+   "origin_id": "Q11",
+   "dest_id": "C06",
+   "material_category": "Gravel",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q11-C07",
+   "long_route_id": "HR-EW-VILUVEREIIGR-TOOTSISTATIO",
+   "origin_id": "Q11",
+   "dest_id": "C07",
+   "material_category": "Gravel",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q12-C01",
+   "long_route_id": "HR-EW-KOBRALIMESTO-PARNUTERMINA",
+   "origin_id": "Q12",
+   "dest_id": "C01",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q12-C02",
+   "long_route_id": "HR-EW-KOBRALIMESTO-PARNUTERMINA",
+   "origin_id": "Q12",
+   "dest_id": "C02",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q12-C03",
+   "long_route_id": "HR-EW-KOBRALIMESTO-IMFRAAMABOGP",
+   "origin_id": "Q12",
+   "dest_id": "C03",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q12-C04",
+   "long_route_id": "HR-EW-KOBRALIMESTO-URGESTATION",
+   "origin_id": "Q12",
+   "dest_id": "C04",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q12-C05",
+   "long_route_id": "HR-EW-KOBRALIMESTO-KIVISILLAVIA",
+   "origin_id": "Q12",
+   "dest_id": "C05",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q12-C06",
+   "long_route_id": "HR-EW-KOBRALIMESTO-TIMMERMANNIV",
+   "origin_id": "Q12",
+   "dest_id": "C06",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q12-C07",
+   "long_route_id": "HR-EW-KOBRALIMESTO-TOOTSISTATIO",
+   "origin_id": "Q12",
+   "dest_id": "C07",
+   "material_category": "Limestone - rockfill",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q13-C01",
+   "long_route_id": "HR-EW-ESTONIAMINE-PARNUTERMINA",
+   "origin_id": "Q13",
+   "dest_id": "C01",
+   "material_category": "Limestone (Shale aggregate)",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q13-C02",
+   "long_route_id": "HR-EW-ESTONIAMINE-PARNUTERMINA",
+   "origin_id": "Q13",
+   "dest_id": "C02",
+   "material_category": "Limestone (Shale aggregate)",
+   "ipt": "IPT 5",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q13-C03",
+   "long_route_id": "HR-EW-ESTONIAMINE-IMFRAAMABOGP",
+   "origin_id": "Q13",
+   "dest_id": "C03",
+   "material_category": "Limestone (Shale aggregate)",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q13-C04",
+   "long_route_id": "HR-EW-ESTONIAMINE-URGESTATION",
+   "origin_id": "Q13",
+   "dest_id": "C04",
+   "material_category": "Limestone (Shale aggregate)",
+   "ipt": "IPT 2 / IPT 3",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q13-C05",
+   "long_route_id": "HR-EW-ESTONIAMINE-KIVISILLAVIA",
+   "origin_id": "Q13",
+   "dest_id": "C05",
+   "material_category": "Limestone (Shale aggregate)",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q13-C06",
+   "long_route_id": "HR-EW-ESTONIAMINE-TIMMERMANNIV",
+   "origin_id": "Q13",
+   "dest_id": "C06",
+   "material_category": "Limestone (Shale aggregate)",
+   "ipt": "IPT 1 / IPT 2",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-Q13-C07",
+   "long_route_id": "HR-EW-ESTONIAMINE-TOOTSISTATIO",
+   "origin_id": "Q13",
+   "dest_id": "C07",
+   "material_category": "Limestone (Shale aggregate)",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P01-C03",
+   "long_route_id": "HR-TM-PORTOFPARNU-IMFRAAMABOGP",
+   "origin_id": "P01",
+   "dest_id": "C03",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P01-C05",
+   "long_route_id": "HR-TM-PORTOFPARNU-KIVISILLAVIA",
+   "origin_id": "P01",
+   "dest_id": "C05",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P01-C07",
+   "long_route_id": "HR-TM-PORTOFPARNU-TOOTSISTATIO",
+   "origin_id": "P01",
+   "dest_id": "C07",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P01-C08",
+   "long_route_id": "HR-TM-PORTOFPARNU-STOCKPILE4",
+   "origin_id": "P01",
+   "dest_id": "C08",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P01-C09",
+   "long_route_id": "HR-TM-PORTOFPARNU-STOCKPILE3",
+   "origin_id": "P01",
+   "dest_id": "C09",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P01-C10",
+   "long_route_id": "HR-TM-PORTOFPARNU-STOCKPILE2",
+   "origin_id": "P01",
+   "dest_id": "C10",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P01-C11",
+   "long_route_id": "HR-TM-PORTOFPARNU-STOCKPILE1",
+   "origin_id": "P01",
+   "dest_id": "C11",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P01-C12",
+   "long_route_id": "HR-TM-PORTOFPARNU-SOODEVAHECB",
+   "origin_id": "P01",
+   "dest_id": "C12",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P02-C03",
+   "long_route_id": "HR-TM-MUUGAHARBOUR-IMFRAAMABOGP",
+   "origin_id": "P02",
+   "dest_id": "C03",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 3 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P02-C05",
+   "long_route_id": "HR-TM-MUUGAHARBOUR-KIVISILLAVIA",
+   "origin_id": "P02",
+   "dest_id": "C05",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 2 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P02-C07",
+   "long_route_id": "HR-TM-MUUGAHARBOUR-TOOTSISTATIO",
+   "origin_id": "P02",
+   "dest_id": "C07",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 1 / IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P02-C08",
+   "long_route_id": "HR-TM-MUUGAHARBOUR-STOCKPILE4",
+   "origin_id": "P02",
+   "dest_id": "C08",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P02-C09",
+   "long_route_id": "HR-TM-MUUGAHARBOUR-STOCKPILE3",
+   "origin_id": "P02",
+   "dest_id": "C09",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P02-C10",
+   "long_route_id": "HR-TM-MUUGAHARBOUR-STOCKPILE2",
+   "origin_id": "P02",
+   "dest_id": "C10",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P02-C11",
+   "long_route_id": "HR-TM-MUUGAHARBOUR-STOCKPILE1",
+   "origin_id": "P02",
+   "dest_id": "C11",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  },
+  {
+   "id": "R-P02-C12",
+   "long_route_id": "HR-TM-MUUGAHARBOUR-SOODEVAHECB",
+   "origin_id": "P02",
+   "dest_id": "C12",
+   "material_category": "Imported Goods",
+   "ipt": "IPT 6",
+   "origin_temp_km": 0.5
+  }
+ ]
+}
