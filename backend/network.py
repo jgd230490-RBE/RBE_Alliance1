@@ -56,23 +56,28 @@ def _upsert_geom(route_id, profile, geometry, dist, dur, error):
     )
 
 
-def bake_batch(profile=DEFAULT_PROFILE, limit=25, force=False):
+def clear_geometry(profile=None):
+    """Delete cached geometry so it can be recomputed. All profiles if profile is None."""
+    if profile:
+        db.execute("DELETE FROM route_geometry WHERE vehicle_profile = ?", (profile,))
+    else:
+        db.execute("DELETE FROM route_geometry")
+    return True
+
+
+def bake_batch(profile=DEFAULT_PROFILE, limit=25):
     """
-    Route up to `limit` routes for a profile via HERE and cache the geometry.
-    Idempotent: skips routes already attempted unless force=True. Kept small so
-    each call stays well within the request timeout; call repeatedly until
-    remaining == 0.
+    Route up to `limit` not-yet-attempted routes for a profile via HERE and cache
+    the geometry. Idempotent — call repeatedly until 'remaining' is 0. To recompute
+    existing routes, clear_geometry() first.
     """
     if not here_routing.configured():
         return {"error": "HERE_API_KEY not set on the server", "baked": 0, "remaining": None}
 
     all_routes = db.query("SELECT * FROM routes ORDER BY id")
-    if force:
-        todo = all_routes
-    else:
-        attempted = {g["route_id"] for g in db.query(
-            "SELECT route_id FROM route_geometry WHERE vehicle_profile = ?", (profile,))}
-        todo = [r for r in all_routes if r["id"] not in attempted]
+    attempted = {g["route_id"] for g in db.query(
+        "SELECT route_id FROM route_geometry WHERE vehicle_profile = ?", (profile,))}
+    todo = [r for r in all_routes if r["id"] not in attempted]
 
     locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
     factors = conversions.load_factors()

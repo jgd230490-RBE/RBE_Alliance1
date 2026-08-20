@@ -15,6 +15,8 @@ import urllib.request
 import urllib.parse
 import urllib.error
 
+import flexpolyline as fp   # HERE's official flexible-polyline decoder
+
 import conversions
 
 HERE_ENDPOINT = "https://router.hereapi.com/v8/routes"
@@ -28,49 +30,9 @@ def configured():
     return bool(api_key())
 
 
-# --------------------------------------------------------------------------- #
-#  HERE flexible-polyline decoder (inlined; matches HERE's reference exactly)  #
-# --------------------------------------------------------------------------- #
-_ENC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
-_DEC = {c: i for i, c in enumerate(_ENC)}
-
-
-def _unsigned(chars, i):
-    res = 0
-    shift = 0
-    while i < len(chars):
-        v = _DEC[chars[i]]
-        i += 1
-        res |= (v & 0x1F) << shift
-        if not (v & 0x20):
-            return res, i
-        shift += 5
-    raise ValueError("truncated polyline")
-
-
-def _signed(v):
-    return (v >> 1) ^ -(v & 1)
-
-
 def decode_polyline(enc):
-    """Return list of [lon, lat] pairs from a HERE flexible polyline."""
-    i = 0
-    _ver, i = _unsigned(enc, i)
-    hdr, i = _unsigned(enc, i)
-    precision = hdr & 15
-    third = (hdr >> 4) & 7
-    factor = 10 ** precision
-    lat = lng = 0
-    out = []
-    while i < len(enc):
-        dlat, i = _unsigned(enc, i)
-        lat += _signed(dlat)
-        dlng, i = _unsigned(enc, i)
-        lng += _signed(dlng)
-        if third:
-            _z, i = _unsigned(enc, i)
-        out.append([round(lng / factor, 6), round(lat / factor, 6)])
-    return out
+    """Decode a HERE flexible polyline to a list of [lon, lat] pairs."""
+    return [[round(lng, 6), round(lat, 6)] for (lat, lng, *_) in fp.decode(enc)]
 
 
 # --------------------------------------------------------------------------- #

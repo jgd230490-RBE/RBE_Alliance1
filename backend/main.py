@@ -351,7 +351,6 @@ def locations_geojson():
 @app.post("/api/admin/bake-routes")
 def bake_routes(profile: str = network.DEFAULT_PROFILE,
                 limit: int = Query(25, ge=1, le=60),
-                force: bool = False,
                 token: Optional[str] = None):
     """
     Compute + cache HERE truck geometry for a batch of routes. Call repeatedly
@@ -360,7 +359,17 @@ def bake_routes(profile: str = network.DEFAULT_PROFILE,
     admin_token = os.getenv("ADMIN_TOKEN", "").strip()
     if admin_token and token != admin_token:
         raise HTTPException(403, "bad or missing admin token")
-    return network.bake_batch(profile=profile, limit=limit, force=force)
+    return network.bake_batch(profile=profile, limit=limit)
+
+
+@app.post("/api/admin/clear-geometry")
+def clear_geometry(profile: Optional[str] = None, token: Optional[str] = None):
+    """Clear cached geometry (a profile, or all) so it can be re-baked."""
+    admin_token = os.getenv("ADMIN_TOKEN", "").strip()
+    if admin_token and token != admin_token:
+        raise HTTPException(403, "bad or missing admin token")
+    network.clear_geometry(profile)
+    return {"status": "cleared", "profile": profile or "all"}
 
 
 # ------------------------------------------------------------------ static
