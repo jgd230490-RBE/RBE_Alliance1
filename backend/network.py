@@ -137,6 +137,26 @@ def locations_geojson():
     return {"type": "FeatureCollection", "features": feats}
 
 
+def routes_status():
+    """Per-route metadata + which profiles are baked (for the admin table)."""
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    geoms = {}
+    for g in db.query("SELECT * FROM route_geometry"):
+        geoms.setdefault(g["route_id"], {})[g["vehicle_profile"]] = {
+            "baked": bool(g["geometry"]), "distance_km": g["distance_km"],
+            "duration_hr": g["duration_hr"], "error": g["error"],
+        }
+    out = []
+    for r in db.query("SELECT * FROM routes ORDER BY id"):
+        o = locs.get(r["origin_id"], {}); d = locs.get(r["dest_id"], {})
+        out.append({
+            "id": r["id"], "origin": o.get("name"), "dest": d.get("name"),
+            "material_category": r["material_category"], "ipt": r["ipt"],
+            "origin_temp_km": r["origin_temp_km"], "profiles": geoms.get(r["id"], {}),
+        })
+    return out
+
+
 def summary():
     total = len(db.query("SELECT id FROM routes"))
     profiles = {}

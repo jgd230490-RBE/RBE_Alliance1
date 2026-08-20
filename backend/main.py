@@ -128,6 +128,8 @@ def meta():
         # flat maps kept for the map + dashboard, derived from the taxonomy
         "factors": conversions.flat_factors(factors),
         "seasonal_restrictions": factors.get("seasonal_restrictions", []),
+        "mapbox_token": os.getenv("MAPBOX_TOKEN",
+            "pk.eyJ1IjoiamdkMjMwNDE5OTAiLCJhIjoiY21xbnJzaTRrMDYyOTJxcXowczRxNTlxdyJ9.xujuSc3O8RcgKIitWNGIWg"),
     }
 
 
@@ -326,6 +328,11 @@ def public_forecast_matrix(
 
 
 # ------------------------------------------------------------------ routing network (Phase 0)
+@app.get("/api/routes/status")
+def routes_status():
+    return network.routes_status()
+
+
 @app.get("/api/routes/summary")
 def routes_summary():
     return network.summary()
