@@ -111,3 +111,56 @@ def init_db():
 
 def count_forecasts():
     return query("SELECT COUNT(*) AS n FROM forecasts")[0]["n"]
+
+
+def init_network_db():
+    """Tables for the dynamic routing platform: locations, routes, cached geometry."""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS locations (
+                id        TEXT PRIMARY KEY,
+                name      TEXT NOT NULL,
+                loc_type  TEXT,
+                lat       REAL NOT NULL,
+                lon       REAL NOT NULL,
+                material  TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS routes (
+                id                TEXT PRIMARY KEY,
+                origin_id         TEXT,
+                dest_id           TEXT,
+                long_route_id     TEXT,
+                material_category TEXT,
+                ipt               TEXT,
+                origin_temp_km    REAL DEFAULT 0
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS route_geometry (
+                route_id        TEXT NOT NULL,
+                vehicle_profile TEXT NOT NULL,
+                geometry        TEXT,
+                distance_km     REAL,
+                duration_hr     REAL,
+                computed_at     TEXT,
+                error           TEXT,
+                PRIMARY KEY (route_id, vehicle_profile)
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_locations():
+    return query("SELECT COUNT(*) AS n FROM locations")[0]["n"]

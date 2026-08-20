@@ -24,6 +24,8 @@ from pydantic import BaseModel
 import conversions
 import db
 import seed
+import network
+import here_routing
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -45,6 +47,12 @@ async def lifespan(app: FastAPI):
             print("Seeded starter forecasts (table was empty).")
     except Exception as e:                              # never block startup on seed
         print("Seed skipped:", e)
+    try:
+        db.init_network_db()
+        if network.seed_network():
+            print("Seeded routing network from V2 (locations + routes).")
+    except Exception as e:
+        print("Network seed skipped:", e)
     yield
 
 
@@ -315,6 +323,37 @@ def public_forecast_matrix(
         g["total"] = conversions.round_for_unit(g["total"], unit)
     out.sort(key=lambda x: x["total"], reverse=True)
     return {"unit": unit, "from": lo, "to": hi, "routes": out}
+
+
+# ------------------------------------------------------------------ routing network (Phase 0)
+@app.get("/api/routes/summary")
+def routes_summary():
+    return network.summary()
+
+
+@app.get("/api/routes/geojson")
+def routes_geojson(profile: str = network.DEFAULT_PROFILE):
+    return network.routes_geojson(profile)
+
+
+@app.get("/api/locations/geojson")
+def locations_geojson():
+    return network.locations_geojson()
+
+
+@app.post("/api/admin/bake-routes")
+def bake_routes(profile: str = network.DEFAULT_PROFILE,
+                limit: int = Query(25, ge=1, le=60),
+                force: bool = False,
+                token: Optional[str] = None):
+    """
+    Compute + cache HERE truck geometry for a batch of routes. Call repeatedly
+    until 'remaining' is 0. Protected by ADMIN_TOKEN if that env var is set.
+    """
+    admin_token = os.getenv("ADMIN_TOKEN", "").strip()
+    if admin_token and token != admin_token:
+        raise HTTPException(403, "bad or missing admin token")
+    return network.bake_batch(profile=profile, limit=limit, force=force)
 
 
 # ------------------------------------------------------------------ static

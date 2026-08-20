@@ -1,28 +1,161 @@
 {
   "_README": "SINGLE SOURCE OF TRUTH for materials, vehicles and planning numbers. Edit here; no code changes needed. Commit to GitHub and Render redeploys. To refresh the demo data to this taxonomy, set env var FORCE_RESEED=1 for one deploy, then remove it.",
-
   "_materials_note": "Broad, enterprise-generic categories any large-construction project recognises. Each carries a planning density (loose, as-hauled t/m3), a default input unit, whether volume<->weight conversion is meaningful, and the vehicles typically used. Densities vary with moisture/compaction; treat as editable defaults.",
   "material_categories": {
-    "Earthworks / soil":         { "density_t_per_m3": 1.5,  "default_unit": "m3", "volume_convertible": true,  "vehicles": ["Rigid 8-wheeler (32t)", "Artic Tipper (44t)", "Rigid 6-wheeler (26t)"] },
-    "Small aggregate":           { "density_t_per_m3": 1.6,  "default_unit": "m3", "volume_convertible": true,  "vehicles": ["Rigid 8-wheeler (32t)", "Artic Tipper (44t)"] },
-    "Large aggregate / ballast": { "density_t_per_m3": 1.6,  "default_unit": "t",  "volume_convertible": true,  "vehicles": ["Rigid 8-wheeler (32t)", "Artic Tipper (44t)"] },
-    "Precast / concrete":        { "density_t_per_m3": 2.4,  "default_unit": "t",  "volume_convertible": true,  "vehicles": ["Artic Flatbed (44t)", "Rigid 8-wheeler (32t)"] },
-    "Steel / rail":              { "density_t_per_m3": 7.85, "default_unit": "t",  "volume_convertible": false, "vehicles": ["Artic Flatbed (44t)"] },
-    "General / imported":        { "density_t_per_m3": 1.5,  "default_unit": "t",  "volume_convertible": false, "vehicles": ["Artic Flatbed (44t)", "Artic Tipper (44t)"] },
-    "_default":                  { "density_t_per_m3": 1.6,  "default_unit": "t",  "volume_convertible": true,  "vehicles": ["Rigid 8-wheeler (32t)"] }
+    "Earthworks / soil": {
+      "density_t_per_m3": 1.5,
+      "default_unit": "m3",
+      "volume_convertible": true,
+      "vehicles": [
+        "Rigid 8-wheeler (32t)",
+        "Artic Tipper (44t)",
+        "Rigid 6-wheeler (26t)"
+      ]
+    },
+    "Small aggregate": {
+      "density_t_per_m3": 1.6,
+      "default_unit": "m3",
+      "volume_convertible": true,
+      "vehicles": [
+        "Rigid 8-wheeler (32t)",
+        "Artic Tipper (44t)"
+      ]
+    },
+    "Large aggregate / ballast": {
+      "density_t_per_m3": 1.6,
+      "default_unit": "t",
+      "volume_convertible": true,
+      "vehicles": [
+        "Rigid 8-wheeler (32t)",
+        "Artic Tipper (44t)"
+      ]
+    },
+    "Precast / concrete": {
+      "density_t_per_m3": 2.4,
+      "default_unit": "t",
+      "volume_convertible": true,
+      "vehicles": [
+        "Artic Flatbed (44t)",
+        "Rigid 8-wheeler (32t)"
+      ]
+    },
+    "Steel / rail": {
+      "density_t_per_m3": 7.85,
+      "default_unit": "t",
+      "volume_convertible": false,
+      "vehicles": [
+        "Artic Flatbed (44t)"
+      ]
+    },
+    "General / imported": {
+      "density_t_per_m3": 1.5,
+      "default_unit": "t",
+      "volume_convertible": false,
+      "vehicles": [
+        "Artic Flatbed (44t)",
+        "Artic Tipper (44t)"
+      ]
+    },
+    "_default": {
+      "density_t_per_m3": 1.6,
+      "default_unit": "t",
+      "volume_convertible": true,
+      "vehicles": [
+        "Rigid 8-wheeler (32t)"
+      ]
+    }
   },
-
   "_vehicles_note": "EU N-category road HGVs over 3.5t (no site plant). payload_t = typical carrying limit; emissions from UK DEFRA/BEIS 2025 basis (kg CO2e per vehicle-km, average laden).",
   "vehicles": {
-    "Rigid 7.5t":             { "eu_category": "N2", "licence": "C1",  "gvw_t": 7.5, "payload_t": 3.5, "emissions_kg_co2e_per_km": 0.55 },
-    "Rigid 4-wheeler (18t)":  { "eu_category": "N3", "licence": "C",   "gvw_t": 18,  "payload_t": 10,  "emissions_kg_co2e_per_km": 0.75 },
-    "Rigid 6-wheeler (26t)":  { "eu_category": "N3", "licence": "C",   "gvw_t": 26,  "payload_t": 16,  "emissions_kg_co2e_per_km": 0.85 },
-    "Rigid 8-wheeler (32t)":  { "eu_category": "N3", "licence": "C",   "gvw_t": 32,  "payload_t": 20,  "emissions_kg_co2e_per_km": 0.95 },
-    "Artic Tipper (44t)":     { "eu_category": "N3", "licence": "C+E", "gvw_t": 44,  "payload_t": 29,  "emissions_kg_co2e_per_km": 0.89 },
-    "Artic Flatbed (44t)":    { "eu_category": "N3", "licence": "C+E", "gvw_t": 44,  "payload_t": 28,  "emissions_kg_co2e_per_km": 0.89 },
-    "_default":               { "payload_t": 20, "emissions_kg_co2e_per_km": 0.90 }
+    "Rigid 7.5t": {
+      "eu_category": "N2",
+      "licence": "C1",
+      "gvw_t": 7.5,
+      "payload_t": 3.5,
+      "emissions_kg_co2e_per_km": 0.55,
+      "routing": {
+        "gross_weight_kg": 7500,
+        "height_cm": 320,
+        "width_cm": 240,
+        "length_cm": 700,
+        "axle_count": 2
+      }
+    },
+    "Rigid 4-wheeler (18t)": {
+      "eu_category": "N3",
+      "licence": "C",
+      "gvw_t": 18,
+      "payload_t": 10,
+      "emissions_kg_co2e_per_km": 0.75,
+      "routing": {
+        "gross_weight_kg": 18000,
+        "height_cm": 380,
+        "width_cm": 250,
+        "length_cm": 800,
+        "axle_count": 2
+      }
+    },
+    "Rigid 6-wheeler (26t)": {
+      "eu_category": "N3",
+      "licence": "C",
+      "gvw_t": 26,
+      "payload_t": 16,
+      "emissions_kg_co2e_per_km": 0.85,
+      "routing": {
+        "gross_weight_kg": 26000,
+        "height_cm": 380,
+        "width_cm": 255,
+        "length_cm": 900,
+        "axle_count": 3
+      }
+    },
+    "Rigid 8-wheeler (32t)": {
+      "eu_category": "N3",
+      "licence": "C",
+      "gvw_t": 32,
+      "payload_t": 20,
+      "emissions_kg_co2e_per_km": 0.95,
+      "routing": {
+        "gross_weight_kg": 32000,
+        "height_cm": 380,
+        "width_cm": 255,
+        "length_cm": 900,
+        "axle_count": 4
+      }
+    },
+    "Artic Tipper (44t)": {
+      "eu_category": "N3",
+      "licence": "C+E",
+      "gvw_t": 44,
+      "payload_t": 29,
+      "emissions_kg_co2e_per_km": 0.89,
+      "routing": {
+        "gross_weight_kg": 44000,
+        "height_cm": 400,
+        "width_cm": 255,
+        "length_cm": 1600,
+        "axle_count": 5
+      }
+    },
+    "Artic Flatbed (44t)": {
+      "eu_category": "N3",
+      "licence": "C+E",
+      "gvw_t": 44,
+      "payload_t": 28,
+      "emissions_kg_co2e_per_km": 0.89,
+      "routing": {
+        "gross_weight_kg": 44000,
+        "height_cm": 400,
+        "width_cm": 255,
+        "length_cm": 1650,
+        "axle_count": 5
+      }
+    },
+    "_default": {
+      "payload_t": 20,
+      "emissions_kg_co2e_per_km": 0.9
+    }
   },
-
   "_planning_note": "Used to estimate haul-cycle turnaround, trips/day and fleet size.",
   "planning": {
     "avg_haul_speed_kmh": 45,
@@ -31,10 +164,31 @@
     "working_days_per_month": 22,
     "shift_hours_per_day": 10
   },
-
   "_seasonal_note": "Calendar months (1=Jan..12=Dec) with statutory HGV weight/access restrictions in Estonia. Shown as a warning at submission when a forecast month falls in a window (and, if listed, the chosen vehicle is heavier-restricted). Editable.",
   "seasonal_restrictions": [
-    { "name": "Spring thaw", "months": [4, 5], "restricted_vehicles": ["Artic Tipper (44t)", "Artic Flatbed (44t)"], "message": "Spring thaw: axle-weight limits likely on secondary roads — heavy artics may be restricted. Consider a lighter vehicle or a different month." },
-    { "name": "Winter", "months": [12, 1, 2, 3], "restricted_vehicles": [], "message": "Winter conditions: check road access and allow longer cycle times on this corridor." }
-  ]
+    {
+      "name": "Spring thaw",
+      "months": [
+        4,
+        5
+      ],
+      "restricted_vehicles": [
+        "Artic Tipper (44t)",
+        "Artic Flatbed (44t)"
+      ],
+      "message": "Spring thaw: axle-weight limits likely on secondary roads — heavy artics may be restricted. Consider a lighter vehicle or a different month."
+    },
+    {
+      "name": "Winter",
+      "months": [
+        12,
+        1,
+        2,
+        3
+      ],
+      "restricted_vehicles": [],
+      "message": "Winter conditions: check road access and allow longer cycle times on this corridor."
+    }
+  ],
+  "_routing_note": "vehicles[].routing holds HGV dimensions for HERE truck routing (weight kg, sizes cm, axle count)."
 }
