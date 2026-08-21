@@ -16,6 +16,27 @@ import here_routing
 DEFAULT_PROFILE = "Artic Tipper (44t)"
 _SEED = os.path.join(os.path.dirname(__file__), "seed_data", "v2_network.json")
 
+# map V2 raw materials -> our categories (locations carry raw V2 strings on first seed)
+_V2_TO_CAT = {
+    "sand": "Small aggregate", "gravel": "Small aggregate",
+    "limestone - rockfill": "Large aggregate / ballast",
+    "limestone (shale aggregate)": "Small aggregate",
+    "imported goods": "General / imported",
+}
+
+
+def _cat(raw):
+    return _V2_TO_CAT.get((raw or "").strip().lower())
+
+
+def _role_for(loc_type):
+    t = (loc_type or "").strip().lower()
+    if t in ("quarry", "port"):
+        return "origin"
+    if t in ("compound", "site"):
+        return "destination"
+    return "both"
+
 
 def seed_network():
     """Load the V2 network into locations + routes if not already present."""
@@ -23,10 +44,13 @@ def seed_network():
         return False
     net = json.load(open(_SEED, encoding="utf-8"))
     for l in net["locations"]:
+        role = _role_for(l.get("loc_type"))
+        mats = [_cat(l.get("material"))] if (role in ("origin", "both") and _cat(l.get("material"))) else []
         db.execute(
-            "INSERT INTO locations (id, name, loc_type, lat, lon, material) "
-            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
-            (l["id"], l["name"], l.get("loc_type"), l["lat"], l["lon"], l.get("material")),
+            "INSERT INTO locations (id, name, loc_type, role, materials, lat, lon, material) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+            (l["id"], l["name"], l.get("loc_type"), role, json.dumps(mats),
+             l["lat"], l["lon"], l.get("material")),
         )
     for r in net["routes"]:
         db.execute(
@@ -36,6 +60,17 @@ def seed_network():
              r.get("material_category"), r.get("ipt"), r.get("origin_temp_km", 0)),
         )
     return True
+
+
+def backfill_location_roles():
+    """Give any location still missing a role one derived from its type/material."""
+    for l in db.query("SELECT * FROM locations"):
+        if l.get("role"):
+            continue
+        role = _role_for(l.get("loc_type"))
+        mats = [_cat(l.get("material"))] if (role in ("origin", "both") and _cat(l.get("material"))) else []
+        db.execute("UPDATE locations SET role = ?, materials = ? WHERE id = ?",
+                   (role, json.dumps(mats), l["id"]))
 
 
 def _upsert_geom(route_id, profile, geometry, dist, dur, error):
@@ -131,15 +166,97 @@ def routes_geojson(profile=DEFAULT_PROFILE):
 
 
 def locations_geojson():
+    def _parse(s):
+        try:
+            return json.loads(s or "[]")
+        except Exception:
+            return []
+
     feats = []
     for l in db.query("SELECT * FROM locations ORDER BY id"):
+        mats = _parse(l.get("materials"))
+        supplies = _parse(l.get("supplies")) or mats     # older rows only have materials
+        receives = _parse(l.get("receives"))
         feats.append({
             "type": "Feature",
             "properties": {"id": l["id"], "name": l["name"], "loc_type": l["loc_type"],
-                           "material": l["material"]},
+                           "role": l.get("role") or "both", "materials": mats,
+                           "supplies": supplies, "receives": receives,
+                           "lat": l["lat"], "lon": l["lon"]},
             "geometry": {"type": "Point", "coordinates": [l["lon"], l["lat"]]},
         })
     return {"type": "FeatureCollection", "features": feats}
+
+
+def routes_touching(location_id):
+    return [r["id"] for r in db.query(
+        "SELECT id FROM routes WHERE origin_id = ? OR dest_id = ?", (location_id, location_id))]
+
+
+def _next_location_id():
+    existing = {l["id"] for l in db.query("SELECT id FROM locations")}
+    i = 1
+    while f"L{i:03d}" in existing:
+        i += 1
+    return f"L{i:03d}"
+
+
+def create_location(name, role, materials=None, lat=None, lon=None, loc_type=None,
+                    supplies=None, receives=None):
+    lid = _next_location_id()
+    supplies = supplies if supplies is not None else (materials or [])
+    receives = receives or []
+    # 'materials' mirrors 'supplies' so the existing map popup keeps working.
+    db.execute(
+        "INSERT INTO locations (id, name, loc_type, role, materials, supplies, receives, lat, lon, material) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (lid, name, loc_type or role, role, json.dumps(supplies), json.dumps(supplies),
+         json.dumps(receives), float(lat), float(lon), None),
+    )
+    return {"id": lid}
+
+
+def update_location(location_id, name=None, role=None, materials=None, lat=None, lon=None,
+                    loc_type=None, supplies=None, receives=None):
+    cur = db.query("SELECT * FROM locations WHERE id = ?", (location_id,))
+    if not cur:
+        return {"error": "not found"}
+    cur = cur[0]
+    moved = (lat is not None and float(lat) != cur["lat"]) or (lon is not None and float(lon) != cur["lon"])
+    # when supplies is given, mirror it into materials so the map popup stays in sync
+    if supplies is not None:
+        supplies_json = json.dumps(supplies)
+        materials_json = json.dumps(supplies)
+    else:
+        supplies_json = cur.get("supplies")
+        materials_json = json.dumps(materials) if materials is not None else cur.get("materials")
+    receives_json = json.dumps(receives) if receives is not None else cur.get("receives")
+    db.execute(
+        "UPDATE locations SET name = ?, loc_type = ?, role = ?, materials = ?, supplies = ?, "
+        "receives = ?, lat = ?, lon = ? WHERE id = ?",
+        (name if name is not None else cur["name"],
+         loc_type if loc_type is not None else cur["loc_type"],
+         role if role is not None else cur["role"],
+         materials_json, supplies_json, receives_json,
+         float(lat) if lat is not None else cur["lat"],
+         float(lon) if lon is not None else cur["lon"],
+         location_id),
+    )
+    affected = []
+    if moved:
+        affected = routes_touching(location_id)
+        for rid in affected:
+            db.execute("DELETE FROM route_geometry WHERE route_id = ?", (rid,))
+    return {"id": location_id, "moved": moved, "affected_routes": affected}
+
+
+def delete_location(location_id):
+    routes = routes_touching(location_id)
+    for rid in routes:
+        db.execute("DELETE FROM route_geometry WHERE route_id = ?", (rid,))
+        db.execute("DELETE FROM routes WHERE id = ?", (rid,))
+    db.execute("DELETE FROM locations WHERE id = ?", (location_id,))
+    return {"id": location_id, "deleted_routes": routes}
 
 
 def routes_status():

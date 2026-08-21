@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
         db.init_network_db()
         if network.seed_network():
             print("Seeded routing network from V2 (locations + routes).")
+        network.backfill_location_roles()
     except Exception as e:
         print("Network seed skipped:", e)
     yield
@@ -370,6 +371,44 @@ def clear_geometry(profile: Optional[str] = None, token: Optional[str] = None):
         raise HTTPException(403, "bad or missing admin token")
     network.clear_geometry(profile)
     return {"status": "cleared", "profile": profile or "all"}
+
+
+class LocationIn(BaseModel):
+    name: str
+    role: str = "both"                     # 'origin' | 'destination' | 'both'
+    materials: List[str] = []              # legacy: kept in sync with supplies
+    supplies: List[str] = []               # categories an origin/both can provide
+    receives: List[str] = []               # categories a destination/both can accept
+    lat: float
+    lon: float
+    loc_type: Optional[str] = None
+
+
+def _check_admin(token):
+    admin_token = os.getenv("ADMIN_TOKEN", "").strip()
+    if admin_token and token != admin_token:
+        raise HTTPException(403, "bad or missing admin token")
+
+
+@app.post("/api/admin/locations")
+def create_location(body: LocationIn, token: Optional[str] = None):
+    _check_admin(token)
+    return network.create_location(body.name, body.role, body.materials, body.lat, body.lon,
+                                   body.loc_type, supplies=body.supplies, receives=body.receives)
+
+
+@app.put("/api/admin/locations/{location_id}")
+def update_location(location_id: str, body: LocationIn, token: Optional[str] = None):
+    _check_admin(token)
+    return network.update_location(location_id, body.name, body.role, body.materials,
+                                   body.lat, body.lon, body.loc_type,
+                                   supplies=body.supplies, receives=body.receives)
+
+
+@app.delete("/api/admin/locations/{location_id}")
+def delete_location(location_id: str, token: Optional[str] = None):
+    _check_admin(token)
+    return network.delete_location(location_id)
 
 
 # ------------------------------------------------------------------ static
