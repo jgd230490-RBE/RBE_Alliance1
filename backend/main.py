@@ -411,6 +411,40 @@ def delete_location(location_id: str, token: Optional[str] = None):
     return network.delete_location(location_id)
 
 
+class RouteIn(BaseModel):
+    origin_id: str
+    dest_id: str
+    material_category: Optional[str] = None
+    route_id: Optional[str] = None          # optional manual id; auto R00n if blank
+    ipt: Optional[str] = None
+
+
+@app.post("/api/admin/routes")
+def create_route(body: RouteIn, token: Optional[str] = None):
+    _check_admin(token)
+    return network.create_route(body.origin_id, body.dest_id, body.material_category,
+                                route_id=body.route_id, ipt=body.ipt)
+
+
+@app.delete("/api/admin/routes/{route_id}")
+def delete_route(route_id: str, token: Optional[str] = None):
+    _check_admin(token)
+    return network.delete_route(route_id)
+
+
+@app.post("/api/admin/clear-routes")
+def clear_routes(token: Optional[str] = None):
+    _check_admin(token)
+    return network.clear_routes()
+
+
+@app.post("/api/admin/bake-route")
+def bake_route(route_id: str, profile: str = network.DEFAULT_PROFILE,
+               token: Optional[str] = None):
+    _check_admin(token)
+    return network.bake_route(route_id, profile)
+
+
 # ------------------------------------------------------------------ static
 # Map (Mapbox app) at /map/ ; must be mounted before the catch-all "/".
 app.mount("/map", StaticFiles(directory=str(ROOT / "map"), html=True), name="map")

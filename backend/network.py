@@ -285,6 +285,100 @@ def delete_location(location_id):
     return {"id": location_id, "deleted_routes": routes}
 
 
+# --------------------------------------------------------------------------- #
+#  Route authoring (Phase 1)                                                    #
+# --------------------------------------------------------------------------- #
+def _loc_list(loc, key):
+    try:
+        return json.loads(loc.get(key) or "[]")
+    except Exception:
+        return []
+
+
+def _next_route_id():
+    existing = {r["id"] for r in db.query("SELECT id FROM routes")}
+    i = 1
+    while f"R{i:03d}" in existing:
+        i += 1
+    return f"R{i:03d}"
+
+
+def create_route(origin_id, dest_id, material_category=None, route_id=None, ipt=None):
+    """
+    Manually pair an origin -> destination for a material category. Validates that
+    the origin supplies the category and the destination receives it (server-side
+    guard mirroring the UI). Geometry is baked separately (bake_route).
+    """
+    if not origin_id or not dest_id:
+        return {"error": "origin and destination are required"}
+    if origin_id == dest_id:
+        return {"error": "origin and destination must be different"}
+    o = db.query("SELECT * FROM locations WHERE id = ?", (origin_id,))
+    d = db.query("SELECT * FROM locations WHERE id = ?", (dest_id,))
+    if not o or not d:
+        return {"error": "origin or destination not found"}
+    o, d = o[0], d[0]
+
+    if material_category:
+        supplies = _loc_list(o, "supplies") or _loc_list(o, "materials")
+        receives = _loc_list(d, "receives")
+        if supplies and material_category not in supplies:
+            return {"error": f"{o['name']} does not supply {material_category}"}
+        if receives and material_category not in receives:
+            return {"error": f"{d['name']} does not receive {material_category}"}
+
+    rid = (route_id or "").strip() or _next_route_id()
+    if db.query("SELECT id FROM routes WHERE id = ?", (rid,)):
+        return {"error": f"route id '{rid}' already exists"}
+
+    db.execute(
+        "INSERT INTO routes (id, origin_id, dest_id, long_route_id, material_category, ipt, origin_temp_km) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (rid, origin_id, dest_id, None, material_category, (ipt or None), 0),
+    )
+    return {"id": rid, "origin_id": origin_id, "dest_id": dest_id,
+            "material_category": material_category}
+
+
+def delete_route(route_id):
+    db.execute("DELETE FROM route_geometry WHERE route_id = ?", (route_id,))
+    db.execute("DELETE FROM routes WHERE id = ?", (route_id,))
+    return {"id": route_id}
+
+
+def clear_routes():
+    """Drop every route + its geometry, keeping locations. For retiring the V2 seed."""
+    n = len(db.query("SELECT id FROM routes"))
+    db.execute("DELETE FROM route_geometry")
+    db.execute("DELETE FROM routes")
+    return {"cleared": n}
+
+
+def bake_route(route_id, profile=DEFAULT_PROFILE):
+    """Route + cache geometry for a single route (used to bake a freshly authored route)."""
+    if not here_routing.configured():
+        return {"error": "HERE_API_KEY not set on the server", "route_id": route_id}
+    r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+    if not r:
+        return {"error": "route not found", "route_id": route_id}
+    r = r[0]
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    o = locs.get(r["origin_id"]); d = locs.get(r["dest_id"])
+    if not o or not d:
+        _upsert_geom(route_id, profile, None, None, None, "missing origin/destination coordinates")
+        return {"error": "missing origin/destination", "route_id": route_id}
+    factors = conversions.load_factors()
+    try:
+        res = here_routing.route(o["lat"], o["lon"], d["lat"], d["lon"], profile, factors)
+        _upsert_geom(route_id, profile, json.dumps(res["geometry"]),
+                     res["distance_km"], res["duration_hr"], None)
+        return {"route_id": route_id, "profile": profile,
+                "distance_km": res["distance_km"], "baked": True}
+    except Exception as e:
+        _upsert_geom(route_id, profile, None, None, None, str(e)[:300])
+        return {"route_id": route_id, "profile": profile, "error": str(e)[:200]}
+
+
 def routes_status():
     """Per-route metadata + which profiles are baked (for the admin table)."""
     locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
