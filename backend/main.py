@@ -52,6 +52,9 @@ async def lifespan(app: FastAPI):
         if network.seed_network():
             print("Seeded routing network from V2 (locations + routes).")
         network.backfill_location_roles()
+        filled = network.backfill_supplies_receives().get("filled", 0)
+        if filled:
+            print(f"Backfilled supplies/receives on {filled} location(s) from the route network.")
     except Exception as e:
         print("Network seed skipped:", e)
     yield

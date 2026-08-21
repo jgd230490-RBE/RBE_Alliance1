@@ -124,12 +124,34 @@ def init_network_db():
                 id        TEXT PRIMARY KEY,
                 name      TEXT NOT NULL,
                 loc_type  TEXT,
+                role      TEXT,
+                materials TEXT,
+                supplies  TEXT,
+                receives  TEXT,
                 lat       REAL NOT NULL,
                 lon       REAL NOT NULL,
                 material  TEXT
             )
             """
         )
+        conn.commit()
+        # migrate pre-existing tables: add the newer columns if they're missing.
+        # network.seed_network() writes role/materials on the very first boot, so
+        # these have to exist before the seed runs, not lazily on first edit.
+        for col, typ in (
+            ("role", "TEXT"),
+            ("materials", "TEXT"),
+            ("supplies", "TEXT"),
+            ("receives", "TEXT"),
+        ):
+            try:
+                if IS_PG:
+                    cur.execute(f"ALTER TABLE locations ADD COLUMN IF NOT EXISTS {col} {typ}")
+                else:
+                    cur.execute(f"ALTER TABLE locations ADD COLUMN {col} {typ}")
+                conn.commit()
+            except Exception:
+                conn.rollback()  # column already present — fine
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS routes (
