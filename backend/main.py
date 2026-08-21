@@ -352,6 +352,31 @@ def routes_geojson(profile: str = network.DEFAULT_PROFILE,
     return network.routes_geojson(profile, leg=leg, alt_index=alt_index)
 
 
+@app.get("/api/routes/{route_id}/geometries")
+def route_geometries(route_id: str, profile: Optional[str] = None,
+                     leg: Optional[str] = None):
+    """
+    Every cached geometry for one route, one feature per (profile, leg, alternative).
+    Used to draw a selected route's alternatives alongside the chosen line.
+    """
+    return network.route_geometries(route_id, profile=profile, leg=leg)
+
+
+@app.post("/api/admin/routes/{route_id}/promote-alt")
+def promote_alt(route_id: str, profile: str = network.DEFAULT_PROFILE,
+                alt_index: int = Query(..., ge=1, le=10),
+                leg: str = "loaded", token: Optional[str] = None):
+    """
+    Make one of HERE's alternatives the primary route for this vehicle and direction —
+    a planner overruling the router's ranking. Swaps with the current primary, which
+    stays available. Re-baking the route restores HERE's own ordering.
+    """
+    _check_admin(token)
+    if leg not in network.LEGS:
+        raise HTTPException(400, f"leg must be one of {list(network.LEGS)}")
+    return network.promote_alternative(route_id, profile, alt_index, leg=leg)
+
+
 @app.get("/api/routes/{route_id}/analysis")
 def route_analysis(route_id: str, profile: Optional[str] = None):
     """

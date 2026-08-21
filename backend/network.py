@@ -395,6 +395,12 @@ def routes_touching(location_id):
         "SELECT id FROM routes WHERE origin_id = ? OR dest_id = ?", (location_id, location_id))]
 
 
+def profiles_for_route(route_id):
+    """Vehicle profiles this route currently has cached geometry for."""
+    return sorted({g["vehicle_profile"] for g in db.query(
+        "SELECT DISTINCT vehicle_profile FROM route_geometry WHERE route_id = ?", (route_id,))})
+
+
 def _next_location_id():
     existing = {l["id"] for l in db.query("SELECT id FROM locations")}
     i = 1
@@ -475,8 +481,12 @@ def update_location(location_id, name=None, role=None, materials=None, lat=None,
     # a gate move changes the routed coordinate just as surely as moving the node does
     if moved or gate_moved:
         affected = routes_touching(location_id)
-        for rid in affected:
-            db.execute("DELETE FROM route_geometry WHERE route_id = ?", (rid,))
+        # Capture which profiles each route was baked for BEFORE clearing it, so the
+        # caller can restore exactly what was there. Without this the profiles are gone
+        # with the geometry and a re-bake has to guess.
+        affected = [{"id": rid, "profiles": profiles_for_route(rid)} for rid in affected]
+        for a in affected:
+            db.execute("DELETE FROM route_geometry WHERE route_id = ?", (a["id"],))
     return {"id": location_id, "moved": moved, "gate_moved": gate_moved,
             "affected_routes": affected}
 
@@ -683,6 +693,84 @@ def summary():
     return {"locations": db.count_locations(), "routes": total,
             "here_configured": here_routing.configured(), "profiles": profiles,
             "legs": list(LEGS), "alternatives": ALTERNATIVES}
+
+
+def route_geometries(route_id, profile=None, leg=None):
+    """
+    Every cached geometry for one route as a GeoJSON FeatureCollection — each
+    (profile, leg, alt_index) its own feature.
+
+    The map's main source carries one geometry per route so the network reads clearly.
+    When a single route is selected we want the opposite: all of its options at once,
+    so the alternatives can be drawn alongside the chosen line. Scoped to one route,
+    so the payload stays small.
+    """
+    clauses, params = ["route_id = ?", "geometry IS NOT NULL"], [route_id]
+    if profile:
+        clauses.append("vehicle_profile = ?"); params.append(profile)
+    if leg:
+        clauses.append("leg = ?"); params.append(leg)
+    feats = []
+    for g in db.query(
+        "SELECT * FROM route_geometry WHERE " + " AND ".join(clauses) +
+        " ORDER BY vehicle_profile, leg, alt_index", tuple(params)
+    ):
+        try:
+            coords = json.loads(g["geometry"])
+        except Exception:
+            continue
+        feats.append({
+            "type": "Feature",
+            "properties": {
+                "route_id": g["route_id"], "vehicle_profile": g["vehicle_profile"],
+                "leg": g["leg"], "alt_index": g["alt_index"],
+                "distance_km": g["distance_km"], "duration_hr": g["duration_hr"],
+                "is_primary": g["alt_index"] == 0,
+            },
+            "geometry": {"type": "LineString", "coordinates": coords},
+        })
+    return {"type": "FeatureCollection", "features": feats}
+
+
+def promote_alternative(route_id, profile, alt_index, leg="loaded"):
+    """
+    Make one of HERE's alternatives the primary route for a (route, profile, leg).
+
+    HERE ranks the options; this records a human overruling that ranking — the planner
+    knows something the router doesn't (a haulier's preference, a residential street to
+    avoid, local knowledge of a junction). Implemented as a swap of alt_index with 0,
+    so the displaced route stays available rather than being discarded.
+
+    The swap goes via a temporary index because (route_id, vehicle_profile, leg,
+    alt_index) is the primary key — two rows cannot briefly share index 0.
+
+    Note this is not durable against a re-bake: routing the pair again re-imports
+    HERE's own ordering. Callers should say so.
+    """
+    alt_index = int(alt_index)
+    if alt_index == 0:
+        return {"route_id": route_id, "profile": profile, "leg": leg,
+                "promoted": 0, "note": "already the primary route"}
+    rows = db.query(
+        "SELECT alt_index FROM route_geometry WHERE route_id = ? AND vehicle_profile = ? "
+        "AND leg = ?", (route_id, profile, leg))
+    have = {r["alt_index"] for r in rows}
+    if alt_index not in have:
+        return {"error": f"no alternative {alt_index} cached for {profile} / {leg}"}
+
+    TMP = -1
+    db.execute(
+        "UPDATE route_geometry SET alt_index = ? WHERE route_id = ? AND vehicle_profile = ? "
+        "AND leg = ? AND alt_index = 0", (TMP, route_id, profile, leg))
+    db.execute(
+        "UPDATE route_geometry SET alt_index = 0 WHERE route_id = ? AND vehicle_profile = ? "
+        "AND leg = ? AND alt_index = ?", (route_id, profile, leg, alt_index))
+    db.execute(
+        "UPDATE route_geometry SET alt_index = ? WHERE route_id = ? AND vehicle_profile = ? "
+        "AND leg = ? AND alt_index = ?", (alt_index, route_id, profile, leg, TMP))
+    return {"route_id": route_id, "profile": profile, "leg": leg,
+            "promoted": alt_index, "swapped_with": 0,
+            "note": "Re-baking this route will restore HERE's own ranking."}
 
 
 # --------------------------------------------------------------------------- #
