@@ -862,6 +862,8 @@ const ROUTE_COLOR = "#003787";
 // pairs HERE could not route — drawn dashed straight so 'impossible' reads differently
 // from 'not baked yet', which used to look identical (both simply absent)
 const FAILED_COLOR = "#BF2E55";
+// the selected route's other options, drawn behind the chosen line
+const ALT_COLOR = "#94A3B8";
 const MAP_H = "62vh";     // map height — the right-hand column matches it and scrolls inside
 const NODE_COLORS = { "Quarry": "#C6841D", "Port": "#003787", "Compound": "#039E86", "Site": "#6D28D9" };
 
@@ -943,7 +945,7 @@ function VehChips({ profiles }){
 // Step C — haul-cycle figures for one route, fetched on demand when its row is opened.
 // Everything here is derived from cached geometry plus factors.json, so opening a row
 // costs one cheap request and never touches HERE.
-function RouteAnalysis({ routeId, colSpan }){
+function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting, leg }){
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
 
@@ -967,8 +969,8 @@ function RouteAnalysis({ routeId, colSpan }){
         {!data && !err && <p className="text-xs text-slate-400">Loading analysis…</p>}
         {data && !data.rows.length && (
           <p className="text-xs text-slate-500">
-            Nothing to analyse yet — this route has no cached geometry. Tick a vehicle in
-            “Vehicle profiles to bake” and run a bake.
+            Nothing to analyse yet — this route has no cached geometry. Use the
+            <span className="font-semibold"> Bake</span> action on this row to route it.
           </p>
         )}
         {data && !!data.rows.length && (
@@ -986,18 +988,28 @@ function RouteAnalysis({ routeId, colSpan }){
                   <th className={head}>t/day</th>
                   <th className={head}>t/month</th>
                   <th className={head}>CO₂ kg/trip</th>
+                  <th className="px-2 py-1"></th>
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((r, i) => (
+                {data.rows.map((r, i) => {
+                  const isActive = active && active.profile === r.profile
+                    && active.alt_index === r.alt_index && active.leg === leg;
+                  return (
                   <tr key={`${r.profile}-${r.alt_index}`}
-                    className={"border-t border-slate-200/70 " + (r.alt_index === 0 ? "" : "text-slate-500")}>
+                    onClick={() => onFocus && onFocus(r.profile, r.alt_index)}
+                    title="Show this option on the map"
+                    className={"border-t border-slate-200/70 cursor-pointer "
+                      + (isActive ? "bg-white ring-1 ring-inset ring-[color:var(--red)]/40 "
+                                  : "hover:bg-white ")
+                      + (r.alt_index === 0 ? "" : "text-slate-500")}>
                     <td className="px-2 py-1 whitespace-nowrap">
                       {r.alt_index === 0 ? vehShort(r.profile) : ""}
                     </td>
                     <td className="px-2 py-1 whitespace-nowrap">
+                      {isActive && <span style={{ color: "var(--red)" }} title="Shown on the map">● </span>}
                       {r.alt_index === 0
-                        ? <span className="font-semibold" style={{ color: "var(--navy)" }}>Best</span>
+                        ? <span className="font-semibold" style={{ color: "var(--navy)" }}>Primary</span>
                         : `Alt ${r.alt_index}`}
                     </td>
                     <td className={cell}>{r.loaded_km}</td>
@@ -1012,8 +1024,20 @@ function RouteAnalysis({ routeId, colSpan }){
                     <td className={cell}>{r.tonnes_per_day}</td>
                     <td className={cell}>{r.tonnes_per_month}</td>
                     <td className={cell}>{r.co2_kg_per_trip}</td>
+                    <td className="px-2 py-1 text-right whitespace-nowrap">
+                      {r.alt_index !== 0 && onPromote && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onPromote(r.profile, r.alt_index); }}
+                          disabled={promoting === `${r.profile}|${r.alt_index}`}
+                          title="Use this option as the primary route for this vehicle"
+                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-slate-300 hover:bg-white disabled:opacity-40">
+                          {promoting === `${r.profile}|${r.alt_index}` ? "…" : "Make primary"}
+                        </button>
+                      )}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             <p className="text-[11px] text-slate-400 mt-2">
@@ -1021,6 +1045,11 @@ function RouteAnalysis({ routeId, colSpan }){
               unload time from factors.json. Trips/day assumes a {data.planning.shift_hours_per_day} h
               shift; t/month assumes {data.planning.working_days_per_month} working days.
               {data.rows.some(r => r.return_estimated) && " * return leg not baked — assumed to mirror the outbound."}
+            </p>
+            <p className="text-[11px] text-slate-400 mt-1">
+              Click a row to draw that option on the map — it turns red, the vehicle's other
+              options stay grey. “Make primary” swaps an alternative into first place so it
+              becomes the route the network is planned around; re-baking restores HERE's ranking.
             </p>
           </div>
         )}
@@ -1194,6 +1223,7 @@ function DataManagement({ meta, who }){
   const routesFC = useRef({ type: "FeatureCollection", features: [] });
   const nodesFC = useRef({ type: "FeatureCollection", features: [] });
   const selFC = useRef({ type: "FeatureCollection", features: [] });
+  const altFC = useRef({ type: "FeatureCollection", features: [] });
   const newFC = useRef({ type: "FeatureCollection", features: [] });   // provisional add marker
   const geoCache = useRef({});
   const [mapReady, setMapReady] = useState(false);
@@ -1207,11 +1237,13 @@ function DataManagement({ meta, who }){
   const [showAlt, setShowAlt] = useState(0);
   // which Routes row has its analysis panel open (Step C)
   const [openRow, setOpenRow] = useState(null);
-  const [bakeProfiles, setBakeProfiles] = useState(["Artic Tipper (44t)"]);
+  // every cached option for the selected route, and which one is currently in focus.
+  // Selecting a route draws all of its options; the focused one is red, the rest grey.
+  const [selGeoms, setSelGeoms] = useState(null);
+  const [activeGeom, setActiveGeom] = useState(null);   // {profile, leg, alt_index}
+  const [promoting, setPromoting] = useState("");
   const [token, setToken] = useState(() => { try { return localStorage.getItem("rbe_admin_token") || ""; } catch(e){ return ""; } });
-  const [baking, setBaking] = useState(false);
-  const [bakeMsg, setBakeMsg] = useState("");
-  const [overwrite, setOverwrite] = useState(false);
+  const [bakeBusy, setBakeBusy] = useState("");   // route id currently being (re-)baked
   const [selected, setSelected] = useState(null);
 
   // ---- sub-tabs (Locations | Routes). One map, shared: only the right-hand panel
@@ -1257,13 +1289,16 @@ function DataManagement({ meta, who }){
   const [locMsg, setLocMsg] = useState("");
   // refs so once-bound map handlers always read current values
   const modeRef = useRef("view");
-  const bakeProfilesRef = useRef(bakeProfiles);
   const tokenRef = useRef(token);
   const justDragged = useRef(false);
   const cbRef = useRef({});
   useEffect(() => { modeRef.current = mode; }, [mode]);
-  useEffect(() => { bakeProfilesRef.current = bakeProfiles; }, [bakeProfiles]);
-  useEffect(() => { tokenRef.current = token; }, [token]);
+  // the token lives in one field in the header now, so persist it as it is typed
+  // rather than on whichever action happened to save it before
+  useEffect(() => {
+    tokenRef.current = token;
+    try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
+  }, [token]);
 
   const fetchStatus = () =>
     Promise.all([
@@ -1290,6 +1325,7 @@ function DataManagement({ meta, who }){
     if(!m.getSource("routes")) m.addSource("routes", { type: "geojson", data: routesFC.current });
     if(!m.getSource("nodes")) m.addSource("nodes", { type: "geojson", data: nodesFC.current });
     if(!m.getSource("sel")) m.addSource("sel", { type: "geojson", data: selFC.current });
+    if(!m.getSource("alts")) m.addSource("alts", { type: "geojson", data: altFC.current });
     if(!m.getSource("selnode")) m.addSource("selnode", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     if(!m.getSource("newnode")) m.addSource("newnode", { type: "geojson", data: newFC.current });
     // failed routes share the source but are filtered apart, so an unroutable pair is
@@ -1304,6 +1340,9 @@ function DataManagement({ meta, who }){
       filter: ["==", ["get", "failed"], true],
       paint: { "line-color": FAILED_COLOR, "line-width": 2, "line-opacity": 0.9,
                "line-dasharray": [2, 2] } });
+    // alternatives sit *under* the chosen line, so the primary always reads on top
+    if(!m.getLayer("alt-line")) m.addLayer({ id: "alt-line", type: "line", source: "alts",
+      paint: { "line-color": ALT_COLOR, "line-width": 4, "line-opacity": 0.8 } });
     if(!m.getLayer("sel-line")) m.addLayer({ id: "sel-line", type: "line", source: "sel",
       paint: { "line-color": "#BF2E55", "line-width": 5 } });
     if(!m.getLayer("selnode-ring")) m.addLayer({ id: "selnode-ring", type: "circle", source: "selnode",
@@ -1407,12 +1446,8 @@ function DataManagement({ meta, who }){
       geoCache.current = {};
       (gj.features || []).forEach(f => { geoCache.current[f.properties.route_id] = f.geometry.coordinates; });
       if(m.getSource("routes")) m.getSource("routes").setData(gj);
-      // the selected route's highlight belongs to whichever geometry is now shown
-      if(selected && geoCache.current[selected]){
-        selFC.current = { type: "Feature", properties: {},
-          geometry: { type: "LineString", coordinates: geoCache.current[selected] } };
-        if(m.getSource("sel")) m.getSource("sel").setData(selFC.current);
-      }
+      // the selection highlight is owned by the selected-options effect below, which
+      // reacts to showProfile/showLeg itself — nothing to re-sync here
     }).catch(() => {});
     fetch(`${API}/locations/geojson`).then(r => r.json()).then(gj => {
       nodesFC.current = gj;
@@ -1426,15 +1461,90 @@ function DataManagement({ meta, who }){
     coords.forEach(c => b.extend(c));
     return b;
   };
+  // Selecting a route pulls every option it has cached, not just the one the map is
+  // showing, so the alternatives can be drawn alongside the chosen line.
   const selectRoute = (id) => {
     setSelected(id);
-    const coords = geoCache.current[id];
+    setActiveGeom({ profile: showProfile, leg: showLeg, alt_index: 0 });
+    setSelGeoms(null);
     const m = mapObj.current;
-    if(coords && m){
-      selFC.current = { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } };
-      m.getSource("sel").setData(selFC.current);
-      m.fitBounds(boundsOf(coords), { padding: 60, maxZoom: 13, duration: 700 });
+    const coords = geoCache.current[id];
+    if(coords && m) m.fitBounds(boundsOf(coords), { padding: 60, maxZoom: 13, duration: 700 });
+    fetch(`${API}/routes/${encodeURIComponent(id)}/geometries`)
+      .then(r => r.json())
+      .then(gj => setSelGeoms(gj))
+      .catch(() => setSelGeoms({ type: "FeatureCollection", features: [] }));
+  };
+
+  // Focus a specific option — used by the analysis rows, so clicking a vehicle line
+  // shows that vehicle's actual road rather than whatever the map selector is on.
+  const focusGeom = (profile, alt_index, leg) =>
+    setActiveGeom({ profile, alt_index, leg: leg || showLeg });
+
+  const sameGeom = (f, a) => a && f.properties.vehicle_profile === a.profile
+    && f.properties.leg === a.leg && f.properties.alt_index === a.alt_index;
+
+  // paint the selected route's options: focused one red, its siblings grey
+  useEffect(() => {
+    const m = mapObj.current; if(!m || !mapReady) return;
+    const selSrc = m.getSource("sel"), altSrc = m.getSource("alts");
+    if(!selSrc || !altSrc) return;
+
+    if(!selected || !selGeoms){
+      // nothing selected — fall back to the plain highlight from the shown geometry
+      const coords = selected ? geoCache.current[selected] : null;
+      selFC.current = coords
+        ? { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } }
+        : { type: "FeatureCollection", features: [] };
+      altFC.current = { type: "FeatureCollection", features: [] };
+      selSrc.setData(selFC.current); altSrc.setData(altFC.current);
+      return;
     }
+
+    const feats = selGeoms.features || [];
+    // only the focused vehicle's options for the shown direction — drawing every
+    // vehicle's alternatives at once would be a thicket, not information
+    const prof = (activeGeom && activeGeom.profile) || showProfile;
+    const leg = (activeGeom && activeGeom.leg) || showLeg;
+    const mine = feats.filter(f => f.properties.vehicle_profile === prof && f.properties.leg === leg);
+    const focused = mine.find(f => sameGeom(f, activeGeom))
+                 || mine.find(f => f.properties.alt_index === 0);
+
+    selFC.current = focused
+      ? { type: "FeatureCollection", features: [focused] }
+      : { type: "FeatureCollection", features: [] };
+    altFC.current = { type: "FeatureCollection",
+                      features: mine.filter(f => f !== focused) };
+    selSrc.setData(selFC.current); altSrc.setData(altFC.current);
+  }, [selected, selGeoms, activeGeom, showProfile, showLeg, mapReady]);
+
+  // clearing the selection clears its options too
+  useEffect(() => {
+    if(!selected){ setSelGeoms(null); setActiveGeom(null); }
+  }, [selected]);
+
+  const promoteAlt = async (profile, alt_index, leg) => {
+    if(!selected) return;
+    const key = `${profile}|${alt_index}`;
+    setPromoting(key);
+    try {
+      const p = new URLSearchParams({ profile, alt_index: String(alt_index), leg: leg || showLeg });
+      if(tokenRef.current) p.set("token", tokenRef.current);
+      const res = await fetch(`${API}/admin/routes/${encodeURIComponent(selected)}/promote-alt?${p}`,
+        { method: "POST" });
+      if(!res.ok){
+        const t = await res.text();
+        throw new Error(res.status === 403 ? "admin token rejected" : `${res.status} ${t.slice(0,120)}`);
+      }
+      const j = await res.json();
+      if(j.error) throw new Error(j.error);
+      const gj = await fetch(`${API}/routes/${encodeURIComponent(selected)}/geometries`).then(r => r.json());
+      setSelGeoms(gj);
+      setActiveGeom({ profile, leg: leg || showLeg, alt_index: 0 });
+      await reloadNetwork();
+      setRouteMsg(`${selected}: alternative ${alt_index} is now the primary route for ${vehShort(profile)}. Re-baking restores HERE's ranking.`);
+    } catch(e){ setRouteMsg("Couldn't promote: " + e.message); }
+    setPromoting("");
   };
 
   const refresh = async () => { await fetchStatus(); };
@@ -1455,45 +1565,53 @@ function DataManagement({ meta, who }){
     } catch(e){ /* leave existing data in place */ }
   };
 
-  // shared HERE bake loop. clear=true wipes geometry first (full re-bake).
-  const bakeLoop = async (profiles, clear) => {
-    for(const prof of profiles){
-      if(clear){
-        const cqs = new URLSearchParams({ profile: prof });
-        if(tokenRef.current) cqs.set("token", tokenRef.current);
-        await fetch(`${API}/admin/clear-geometry?${cqs.toString()}`, { method: "POST" });
-        setBakeMsg(`${prof}: cleared old geometry, re-routing…`);
-      }
-      let remaining = 1, pass = 0;
-      while(remaining > 0 && pass < 25){
-        pass++;
-        const qs = new URLSearchParams({ profile: prof, limit: "30" });
-        if(tokenRef.current) qs.set("token", tokenRef.current);
-        const r = await fetch(`${API}/admin/bake-routes?${qs.toString()}`, { method: "POST" });
+  // Bake one route for a set of vehicle profiles. Routes are baked individually now —
+  // there is no global profile selection, so every caller states which vehicles it means.
+  // Returns the profiles that failed.
+  const bakeOneRoute = async (routeId, profiles) => {
+    const failed = [];
+    for(const prof of (profiles || [])){
+      const q = new URLSearchParams({ route_id: routeId, profile: prof });
+      if(tokenRef.current) q.set("token", tokenRef.current);
+      try {
+        const r = await fetch(`${API}/admin/bake-route?${q.toString()}`, { method: "POST" });
         const j = await r.json();
-        if(j.error){ setBakeMsg(`${prof}: ${j.error}`); remaining = 0; break; }
-        remaining = j.remaining ?? 0;
-        // 'remaining' counts legs now, not routes — each route is routed out and back
-        setBakeMsg(`${prof}: baked ${j.baked} leg(s), ${remaining} remaining…`);
-      }
+        if(j.error) failed.push(`${vehShort(prof)}: ${j.error}`);
+      } catch(e){ failed.push(`${vehShort(prof)}: ${e.message}`); }
     }
+    return failed;
   };
 
-  const bake = async () => {
-    if(!bakeProfiles.length){ setBakeMsg("Pick at least one vehicle to bake."); return; }
-    try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
-    setBaking(true); setBakeMsg("Starting…");
-    try {
-      await bakeLoop(bakeProfiles, overwrite);
-      setBakeMsg("Bake complete — refreshing map.");
-      await reloadNetwork();
-      setBakeMsg("Done.");
-    } catch(e){ setBakeMsg("Bake failed: " + e.message); }
-    setBaking(false);
+  // Re-bake routes whose geometry was just invalidated, each for the profiles it already
+  // had. Moving a node used to re-bake against a globally-ticked profile list; reusing
+  // what each route itself carried restores exactly what was there instead, and needs no
+  // global setting to be correct.
+  const rebakeAffected = async (affected) => {
+    const list = (affected || []).filter(a => a && a.profiles && a.profiles.length);
+    let done = 0;
+    for(const a of list){
+      setLocMsg(`Re-baking ${a.id} (${++done}/${list.length})…`);
+      await bakeOneRoute(a.id, a.profiles);
+    }
+    return { rebaked: list.length, skipped: (affected || []).length - list.length };
   };
 
-  const toggleBakeProfile = (v) =>
-    setBakeProfiles(ps => ps.includes(v) ? ps.filter(x => x !== v) : [...ps, v]);
+  // Routes-table action: re-bake this route for the vehicles it already has.
+  const rebakeRoute = async (routeId, profiles) => {
+    const profs = (profiles && profiles.length) ? profiles : [showProfile];
+    setBakeBusy(routeId);
+    setRouteMsg(`Re-baking ${routeId} for ${profs.map(vehShort).join(", ")}…`);
+    const failed = await bakeOneRoute(routeId, profs);
+    await reloadNetwork();
+    if(selected === routeId){
+      try {
+        setSelGeoms(await fetch(`${API}/routes/${encodeURIComponent(routeId)}/geometries`).then(r => r.json()));
+      } catch(e){}
+    }
+    setRouteMsg(failed.length ? `${routeId}: ${failed.join(" · ")}`
+                              : `${routeId} re-baked for ${profs.length} vehicle(s).`);
+    setBakeBusy("");
+  };
 
   // ---- location add / edit / move / delete ----
   const startAdd = () => {
@@ -1564,13 +1682,15 @@ function DataManagement({ meta, who }){
       if(j.error) throw new Error(j.error);
       const affected = j.affected_routes || [];
       await reloadNetwork();
-      if(form.id && affected.length && bakeProfilesRef.current.length){
-        setLocMsg(`Saved — re-baking ${affected.length} affected route(s)…`);
-        await bakeLoop(bakeProfilesRef.current, false);
+      if(form.id && affected.length){
+        const { rebaked, skipped } = await rebakeAffected(affected);
         await reloadNetwork();
-        setLocMsg("Saved and re-baked.");
-      } else if(form.id && affected.length){
-        setLocMsg(`Saved. ${affected.length} route(s) need re-baking — pick profile(s) and Bake.`);
+        setLocMsg(
+          rebaked
+            ? `Saved — re-baked ${rebaked} affected route(s)` +
+              (skipped ? `. ${skipped} had no geometry to restore.` : ".")
+            : `Saved. ${affected.length} route(s) touched, none had cached geometry to restore.`
+        );
       } else {
         setLocMsg(form.id ? "Saved." : "Location created.");
       }
@@ -1619,14 +1739,12 @@ function DataManagement({ meta, who }){
       const j = await res.json();
       if(!res.ok || j.error) throw new Error(j.error || res.status);
       const affected = j.affected_routes || [];
-      if(affected.length && bakeProfilesRef.current.length){
-        setLocMsg(`Moved — re-baking ${affected.length} route(s)…`);
-        await bakeLoop(bakeProfilesRef.current, false);
+      if(affected.length){
+        const { rebaked, skipped } = await rebakeAffected(affected);
         await reloadNetwork();
-        setLocMsg("Moved and re-baked.");
-      } else if(affected.length){
-        await reloadNetwork();
-        setLocMsg(`Moved. ${affected.length} route(s) cleared — pick profile(s) and Bake to re-route.`);
+        setLocMsg(rebaked
+          ? `Moved — re-baked ${rebaked} route(s)` + (skipped ? `, ${skipped} had none cached.` : ".")
+          : `Moved. ${affected.length} route(s) touched, none had cached geometry to restore.`);
       } else {
         await reloadNetwork();
         setLocMsg("Moved.");
@@ -1826,10 +1944,15 @@ function DataManagement({ meta, who }){
             <option value="return">Empty back</option>
           </select>
           <select value={showAlt} onChange={e => setShowAlt(+e.target.value)} className={sel} title="Which HERE option to draw">
-            <option value={0}>Best route</option>
+            <option value={0}>Primary route</option>
             <option value={1}>Alt 1</option>
             <option value={2}>Alt 2</option>
           </select>
+          {/* every admin action reads this one field — routes are baked per route now,
+              so there is no bulk-bake panel to hold it */}
+          <input value={token} onChange={e => setToken(e.target.value)} placeholder="Admin token"
+            title="Only needed if ADMIN_TOKEN is set on the server. Remembered in this browser."
+            className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm w-36" />
         </div>
       </div>
 
@@ -2053,32 +2176,6 @@ function DataManagement({ meta, who }){
           </div>
           )}
 
-          <div className="card p-4">
-            <div className="text-sm font-semibold text-slate-700 mb-2">Vehicle profiles to bake</div>
-            <div className="space-y-1.5">
-              {vehicles.map(v => (
-                <label key={v} className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={bakeProfiles.includes(v)} onChange={() => toggleBakeProfile(v)} style={{ accentColor: "#003787" }} />
-                  {v}
-                  {summary && summary.profiles && summary.profiles[v] ? (
-                    <span className="ml-auto text-xs text-slate-400">{summary.profiles[v].baked} baked{summary.profiles[v].errors ? `, ${summary.profiles[v].errors} err` : ""}</span>
-                  ) : <span className="ml-auto text-xs text-slate-300">not baked</span>}
-                </label>
-              ))}
-            </div>
-            <input value={token} onChange={e => setToken(e.target.value)} placeholder="Admin token (only if set on server)"
-              className="w-full mt-3 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm" />
-            <label className="flex items-center gap-2 text-xs text-slate-600 mt-2">
-              <input type="checkbox" checked={overwrite} onChange={e => setOverwrite(e.target.checked)} style={{ accentColor: "#BF2E55" }} />
-              Overwrite existing geometry (re-bake all)
-            </label>
-            <button onClick={bake} disabled={baking}
-              className="w-full mt-2 py-2 rounded-lg text-white font-semibold text-sm disabled:opacity-50" style={{ background: "var(--navy)" }}>
-              {baking ? "Baking…" : (overwrite ? "Re-bake selected profiles" : "Bake selected profiles")}
-            </button>
-            {bakeMsg && <p className="text-xs text-slate-500 mt-2">{bakeMsg}</p>}
-          </div>
-
           <Diagnostics token={token} routeId={selected} />
 
           <div className="card p-4">
@@ -2094,6 +2191,9 @@ function DataManagement({ meta, who }){
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span style={{ background: "var(--red)", width: 14, height: 3, borderRadius: 2, display: "inline-block" }} />Selected
+              </span>
+              <span className="inline-flex items-center gap-1.5" title="Other options HERE returned for the selected route and vehicle">
+                <span style={{ background: ALT_COLOR, width: 14, height: 3, borderRadius: 2, display: "inline-block" }} />Alternative
               </span>
               <span className="inline-flex items-center gap-1.5" title="HERE could not route this pair — shown as a straight line between the two points">
                 <span style={{ width: 14, height: 3, display: "inline-block",
@@ -2216,11 +2316,24 @@ function DataManagement({ meta, who }){
                     <td className="px-3 py-2 text-right tabular-nums">{pinfo && pinfo.distance_km != null ? pinfo.distance_km : "—"}</td>
                     <td className="px-3 py-2"><VehChips profiles={r.profiles} /></td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <button onClick={(e) => { e.stopPropagation(); rebakeRoute(r.id, Object.keys(r.profiles || {})); }}
+                        disabled={bakeBusy === r.id}
+                        title={Object.keys(r.profiles || {}).length
+                          ? `Re-route via HERE for ${Object.keys(r.profiles).map(vehShort).join(", ")}`
+                          : `Not baked yet — will route for ${vehShort(showProfile)}`}
+                        className="text-[color:var(--navy)] hover:underline text-xs font-semibold disabled:opacity-40 mr-3">
+                        {bakeBusy === r.id ? "Baking…" : "Bake"}
+                      </button>
                       <button onClick={(e) => { e.stopPropagation(); deleteRoute(r.id); }}
                         className="text-[color:var(--red)] hover:underline text-xs font-semibold">Delete</button>
                     </td>
                   </tr>
-                  {open && <RouteAnalysis routeId={r.id} colSpan={7} />}
+                  {open && <RouteAnalysis routeId={r.id} colSpan={7}
+                    active={selected === r.id ? activeGeom : null}
+                    leg={showLeg}
+                    onFocus={selected === r.id ? focusGeom : (p, a) => { selectRoute(r.id); focusGeom(p, a); }}
+                    onPromote={selected === r.id ? promoteAlt : null}
+                    promoting={promoting} />}
                   </React.Fragment>
                 );
               })}
