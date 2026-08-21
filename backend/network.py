@@ -29,6 +29,30 @@ def _cat(raw):
     return _V2_TO_CAT.get((raw or "").strip().lower())
 
 
+_cols_ensured = False
+
+
+def _ensure_location_columns():
+    """
+    Belt-and-braces: make sure the newer location columns exist before we write
+    them. The canonical migration is in db.init_network_db() (runs on startup),
+    but this guards against a live DB whose 'locations' table predates it, so the
+    admin endpoints can't hard-500 on a missing column. Idempotent, runs once.
+    """
+    global _cols_ensured
+    if _cols_ensured:
+        return
+    for col in ("role", "materials", "supplies", "receives"):
+        try:
+            if db.IS_PG:
+                db.execute(f"ALTER TABLE locations ADD COLUMN IF NOT EXISTS {col} TEXT")
+            else:
+                db.execute(f"ALTER TABLE locations ADD COLUMN {col} TEXT")
+        except Exception:
+            pass  # already present (or table not created yet — init_network_db handles that)
+    _cols_ensured = True
+
+
 def _role_for(loc_type):
     t = (loc_type or "").strip().lower()
     if t in ("quarry", "port"):
@@ -203,6 +227,7 @@ def _next_location_id():
 
 def create_location(name, role, materials=None, lat=None, lon=None, loc_type=None,
                     supplies=None, receives=None):
+    _ensure_location_columns()
     lid = _next_location_id()
     supplies = supplies if supplies is not None else (materials or [])
     receives = receives or []
@@ -218,6 +243,7 @@ def create_location(name, role, materials=None, lat=None, lon=None, loc_type=Non
 
 def update_location(location_id, name=None, role=None, materials=None, lat=None, lon=None,
                     loc_type=None, supplies=None, receives=None):
+    _ensure_location_columns()
     cur = db.query("SELECT * FROM locations WHERE id = ?", (location_id,))
     if not cur:
         return {"error": "not found"}
