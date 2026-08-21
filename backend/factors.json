@@ -65,7 +65,7 @@
       ]
     }
   },
-  "_vehicles_note": "EU N-category road HGVs over 3.5t (no site plant). payload_t = typical carrying limit; emissions from UK DEFRA/BEIS 2025 basis (kg CO2e per vehicle-km, average laden).",
+  "_vehicles_note": "EU N-category road HGVs over 3.5t (no site plant). payload_t = typical carrying limit; emissions from UK DEFRA/BEIS 2025 basis (kg CO2e per vehicle-km, average laden). load_minutes/unload_minutes are per-vehicle turnaround estimates and override planning.load_minutes/unload_minutes, which remain the fallback. They are starting estimates, not measured — edit to match your operation.",
   "vehicles": {
     "Rigid 7.5t": {
       "eu_category": "N2",
@@ -79,7 +79,9 @@
         "width_cm": 240,
         "length_cm": 700,
         "axle_count": 2
-      }
+      },
+      "load_minutes": 8,
+      "unload_minutes": 5
     },
     "Rigid 4-wheeler (18t)": {
       "eu_category": "N3",
@@ -93,7 +95,9 @@
         "width_cm": 250,
         "length_cm": 800,
         "axle_count": 2
-      }
+      },
+      "load_minutes": 10,
+      "unload_minutes": 6
     },
     "Rigid 6-wheeler (26t)": {
       "eu_category": "N3",
@@ -107,7 +111,9 @@
         "width_cm": 255,
         "length_cm": 900,
         "axle_count": 3
-      }
+      },
+      "load_minutes": 11,
+      "unload_minutes": 7
     },
     "Rigid 8-wheeler (32t)": {
       "eu_category": "N3",
@@ -121,7 +127,9 @@
         "width_cm": 255,
         "length_cm": 900,
         "axle_count": 4
-      }
+      },
+      "load_minutes": 12,
+      "unload_minutes": 8
     },
     "Artic Tipper (44t)": {
       "eu_category": "N3",
@@ -135,7 +143,9 @@
         "width_cm": 255,
         "length_cm": 1600,
         "axle_count": 5
-      }
+      },
+      "load_minutes": 15,
+      "unload_minutes": 9
     },
     "Artic Flatbed (44t)": {
       "eu_category": "N3",
@@ -149,14 +159,18 @@
         "width_cm": 255,
         "length_cm": 1650,
         "axle_count": 5
-      }
+      },
+      "load_minutes": 25,
+      "unload_minutes": 20
     },
     "_default": {
       "payload_t": 20,
-      "emissions_kg_co2e_per_km": 0.9
+      "emissions_kg_co2e_per_km": 0.9,
+      "load_minutes": 12,
+      "unload_minutes": 8
     }
   },
-  "_planning_note": "Used to estimate haul-cycle turnaround, trips/day and fleet size.",
+  "_planning_note": "Used to estimate haul-cycle turnaround, trips/day and fleet size. load_minutes and unload_minutes here are the fallback only; a vehicle's own values take precedence.",
   "planning": {
     "avg_haul_speed_kmh": 45,
     "load_minutes": 12,

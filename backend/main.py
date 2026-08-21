@@ -477,6 +477,44 @@ def clear_routes(token: Optional[str] = None):
     return network.clear_routes()
 
 
+# ------------------------------------------------------------------ diagnostics
+@app.get("/api/admin/diagnostics/factors")
+def diagnostics_factors(token: Optional[str] = None):
+    """
+    How each vehicle profile resolves against factors.json. Read this first when the
+    analysis table reports the same payload or CO2 for different vehicles — a profile
+    with in_factors=false has fallen through to _default and every such profile will
+    report identical figures.
+    """
+    _check_admin(token)
+    return network.factors_diagnostics()
+
+
+@app.get("/api/admin/diagnostics/route/{route_id}")
+def diagnostics_route(route_id: str, profile: str = network.DEFAULT_PROFILE,
+                      probe: bool = False, token: Optional[str] = None):
+    """
+    What is cached for a route, which coordinates it routes to (gate or marker), and
+    optionally a live HERE call showing exactly what was sent and returned.
+
+    probe=true spends two HERE requests. It is the only way to see whether HERE
+    declined an alternatives request or whether truck dimensions reached it at all.
+    """
+    _check_admin(token)
+    return network.route_diagnostics(route_id, profile, probe=probe)
+
+
+@app.get("/api/admin/diagnostics/compare/{route_id}")
+def diagnostics_compare(route_id: str, probe: bool = False, token: Optional[str] = None):
+    """
+    Route one pair for every vehicle profile and report whether anything differs.
+    Distinguishes 'the network offers no alternative' from 'the vehicle never reached
+    HERE'. probe=true spends one HERE request per profile.
+    """
+    _check_admin(token)
+    return network.compare_profiles(route_id, probe=probe)
+
+
 @app.post("/api/admin/bake-route")
 def bake_route(route_id: str, profile: str = network.DEFAULT_PROFILE,
                legs: Optional[str] = None, token: Optional[str] = None):

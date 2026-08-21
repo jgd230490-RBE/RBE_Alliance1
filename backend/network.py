@@ -331,25 +331,36 @@ def routes_geojson(profile=DEFAULT_PROFILE, leg="loaded", alt_index=0):
     locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
     geoms = {g["route_id"]: g for g in db.query(
         "SELECT * FROM route_geometry WHERE vehicle_profile = ? AND leg = ? "
-        "AND alt_index = ? AND geometry IS NOT NULL", (profile, leg, alt_index))}
+        "AND alt_index = ?", (profile, leg, alt_index))}
     feats = []
     for r in db.query("SELECT * FROM routes ORDER BY id"):
         g = geoms.get(r["id"])
-        if not g:
-            continue
         o = locs.get(r["origin_id"], {}); d = locs.get(r["dest_id"], {})
-        feats.append({
-            "type": "Feature",
-            "properties": {
-                "route_id": r["id"], "long_route_id": r["long_route_id"],
-                "origin": o.get("name"), "dest": d.get("name"),
-                "origin_id": r["origin_id"], "dest_id": r["dest_id"],
-                "material_category": r["material_category"], "ipt": r["ipt"],
-                "vehicle_profile": profile, "leg": leg, "alt_index": alt_index,
-                "distance_km": g["distance_km"], "duration_hr": g["duration_hr"],
-            },
-            "geometry": {"type": "LineString", "coordinates": json.loads(g["geometry"])},
-        })
+        props = {
+            "route_id": r["id"], "long_route_id": r["long_route_id"],
+            "origin": o.get("name"), "dest": d.get("name"),
+            "origin_id": r["origin_id"], "dest_id": r["dest_id"],
+            "material_category": r["material_category"], "ipt": r["ipt"],
+            "vehicle_profile": profile, "leg": leg, "alt_index": alt_index,
+        }
+        if g and g["geometry"]:
+            props.update({"distance_km": g["distance_km"], "duration_hr": g["duration_hr"],
+                          "failed": False})
+            feats.append({"type": "Feature", "properties": props,
+                          "geometry": {"type": "LineString",
+                                       "coordinates": json.loads(g["geometry"])}})
+        elif g and g["error"] and o and d:
+            # HERE couldn't route this pair. Previously the route simply vanished from
+            # the map, which looks exactly like 'not baked yet' — so a genuinely
+            # impossible haul was invisible. Emit a straight origin-to-destination line
+            # flagged failed, for the frontend to draw dashed.
+            props.update({"distance_km": None, "duration_hr": None,
+                          "failed": True, "error": g["error"]})
+            a_lat, a_lon = _waypoint(o)
+            b_lat, b_lon = _waypoint(d)
+            feats.append({"type": "Feature", "properties": props,
+                          "geometry": {"type": "LineString",
+                                       "coordinates": [[a_lon, a_lat], [b_lon, b_lat]]}})
     return {"type": "FeatureCollection", "features": feats}
 
 
@@ -675,8 +686,203 @@ def summary():
 
 
 # --------------------------------------------------------------------------- #
+#  Diagnostics                                                                 #
+# --------------------------------------------------------------------------- #
+def factors_diagnostics():
+    """
+    Show how each vehicle profile actually resolves against factors.json.
+
+    Several distinct faults present identically in the UI — a profile string in the
+    database that no longer matches a key in factors.json, a deployed factors.json
+    older than the repo's, or vehicles that genuinely share an emissions figure — and
+    all three make the analysis table look like it is ignoring the vehicle. This
+    prints the resolved numbers next to the raw keys so they can be told apart.
+
+    'matched' false is the alarm: it means the lookup fell through to _default and
+    every such profile will report identical payload and CO2 no matter what.
+    """
+    factors = conversions.load_factors()
+    veh = factors.get("vehicles", {}) or {}
+    known = {k for k in veh if not k.startswith("_")}
+    default = veh.get("_default", {}) or {}
+    plan = factors.get("planning", {}) or {}
+
+    # every profile string that actually appears in cached geometry
+    used = sorted({g["vehicle_profile"] for g in
+                   db.query("SELECT DISTINCT vehicle_profile FROM route_geometry")})
+
+    rows = []
+    for prof in sorted(known | set(used)):
+        v = veh.get(prof)
+        matched = v is not None
+        v = v or default
+        load_m, unload_m = _turnaround_minutes(prof, factors)
+        rows.append({
+            "profile": prof,
+            "in_factors": matched,
+            "in_database": prof in used,
+            "payload_t": v.get("payload_t", default.get("payload_t")),
+            "emissions_kg_co2e_per_km": v.get("emissions_kg_co2e_per_km",
+                                              default.get("emissions_kg_co2e_per_km")),
+            "gross_weight_kg": (v.get("routing", {}) or {}).get("gross_weight_kg"),
+            "tare_weight_kg": here_routing.tare_weight_kg(prof, factors) if matched else None,
+            "load_minutes": load_m, "unload_minutes": unload_m,
+            "turnaround_hr": round((load_m + unload_m) / 60.0, 3),
+            "truck_params_laden": here_routing._truck_params(prof, factors, laden=True),
+            "truck_params_unladen": here_routing._truck_params(prof, factors, laden=False),
+        })
+
+    unmatched = [r["profile"] for r in rows if r["in_database"] and not r["in_factors"]]
+    emis = [r["emissions_kg_co2e_per_km"] for r in rows if r["in_factors"]]
+    pay = [r["payload_t"] for r in rows if r["in_factors"]]
+    return {
+        "factors_path": conversions._FACTORS_PATH,
+        "planning": plan,
+        "vehicles": rows,
+        "warnings": (
+            ([f"{p!r} is stored in route_geometry but is not a key in factors.json — "
+              f"it falls back to _default, so its payload and CO2 will match every other "
+              f"unmatched profile. Re-bake after fixing the name." for p in unmatched])
+            + ([] if len(set(emis)) > 1 else
+               ["Every vehicle in factors.json carries the same emissions figure, so CO2 "
+                "will be identical across vehicles by definition. Check factors.json is "
+                "the version you think it is."])
+            + ([] if len(set(pay)) > 1 else
+               ["Every vehicle in factors.json carries the same payload."])
+        ),
+    }
+
+
+def route_diagnostics(route_id, profile=DEFAULT_PROFILE, probe=False):
+    """
+    Everything known about one route for one profile: the coordinates actually routed
+    to (gate or marker), what is cached, and — with probe=True — a live HERE call
+    showing exactly what was sent and what came back.
+
+    probe=True costs two HERE requests (one per leg). It is the only way to see
+    whether HERE declined an alternatives request or whether truck parameters reached
+    it at all.
+    """
+    r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+    if not r:
+        return {"error": "route not found", "route_id": route_id}
+    r = r[0]
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    o, d = locs.get(r["origin_id"]), locs.get(r["dest_id"])
+    if not o or not d:
+        return {"error": "missing origin/destination", "route_id": route_id}
+
+    o_lat, o_lon = _waypoint(o)
+    d_lat, d_lon = _waypoint(d)
+    out = {
+        "route_id": route_id, "profile": profile,
+        "origin": {"id": o["id"], "name": o["name"],
+                   "marker": [o["lat"], o["lon"]],
+                   "gate": [o.get("gate_lat"), o.get("gate_lon")],
+                   "routed_to": [o_lat, o_lon],
+                   "using_gate": (o.get("gate_lat") is not None and o.get("gate_lon") is not None)},
+        "destination": {"id": d["id"], "name": d["name"],
+                        "marker": [d["lat"], d["lon"]],
+                        "gate": [d.get("gate_lat"), d.get("gate_lon")],
+                        "routed_to": [d_lat, d_lon],
+                        "using_gate": (d.get("gate_lat") is not None and d.get("gate_lon") is not None)},
+        "cached": [
+            {"leg": g["leg"], "alt_index": g["alt_index"], "distance_km": g["distance_km"],
+             "duration_hr": g["duration_hr"], "has_geometry": bool(g["geometry"]),
+             "error": g["error"], "computed_at": g["computed_at"]}
+            for g in db.query(
+                "SELECT * FROM route_geometry WHERE route_id = ? AND vehicle_profile = ? "
+                "ORDER BY leg, alt_index", (route_id, profile))
+        ],
+        "here_configured": here_routing.configured(),
+    }
+    if probe:
+        factors = conversions.load_factors()
+        out["probe"] = {
+            "loaded": here_routing.probe(o_lat, o_lon, d_lat, d_lon, profile, factors, laden=True),
+            "return": here_routing.probe(d_lat, d_lon, o_lat, o_lon, profile, factors, laden=False),
+        }
+        L, R = out["probe"]["loaded"], out["probe"]["return"]
+        ld = (L.get("summaries") or [{}])[0].get("distance_km")
+        rd = (R.get("summaries") or [{}])[0].get("distance_km")
+        out["probe"]["legs_differ"] = (ld is not None and rd is not None and ld != rd)
+    return out
+
+
+def compare_profiles(route_id, profiles=None, probe=False):
+    """
+    Route the same pair for several vehicles and show whether anything differs.
+
+    Answers the question the UI can't: when every vehicle draws the same line, is that
+    because the road network offers no alternative, or because the vehicle's
+    dimensions never reached HERE?
+    """
+    factors = conversions.load_factors()
+    profiles = profiles or [p for p in conversions.vehicle_names(factors)]
+    r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+    if not r:
+        return {"error": "route not found", "route_id": route_id}
+    r = r[0]
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    o, d = locs.get(r["origin_id"]), locs.get(r["dest_id"])
+    if not o or not d:
+        return {"error": "missing origin/destination", "route_id": route_id}
+    o_lat, o_lon = _waypoint(o)
+    d_lat, d_lon = _waypoint(d)
+
+    rows = []
+    for p in profiles:
+        cached = db.query(
+            "SELECT distance_km, duration_hr FROM route_geometry WHERE route_id = ? "
+            "AND vehicle_profile = ? AND leg = 'loaded' AND alt_index = 0", (route_id, p))
+        entry = {"profile": p,
+                 "cached_km": cached[0]["distance_km"] if cached else None,
+                 "gross_weight_kg": here_routing._truck_params(p, factors, laden=True)
+                                        .get("vehicle[grossWeight]")}
+        if probe:
+            pr = here_routing.probe(o_lat, o_lon, d_lat, d_lon, p, factors, laden=True)
+            entry["live_km"] = (pr.get("summaries") or [{}])[0].get("distance_km")
+            entry["routes_returned"] = pr.get("routes_returned")
+            entry["truck_params_present"] = pr.get("truck_params_present")
+            entry["error"] = pr.get("error")
+        rows.append(entry)
+
+    key = "live_km" if probe else "cached_km"
+    vals = [r0[key] for r0 in rows if r0.get(key) is not None]
+    return {
+        "route_id": route_id, "rows": rows,
+        "all_identical": len(set(vals)) <= 1 and len(vals) > 1,
+        "note": ("Every vehicle produced the same distance. That is plausible on a sparse "
+                 "network with no weight-restricted roads on this pair — check "
+                 "truck_params_present is true and gross weights differ before treating "
+                 "it as a fault." if len(set(vals)) <= 1 and len(vals) > 1
+                 else "Vehicles produced differing distances, so truck parameters are "
+                      "reaching HERE."),
+    }
+
+
+# --------------------------------------------------------------------------- #
 #  Route analysis (Phase 1-tail Step C)                                        #
 # --------------------------------------------------------------------------- #
+def _turnaround_minutes(profile, factors):
+    """
+    Load and unload minutes for a vehicle.
+
+    These were a single pair of global constants, which made every vehicle's haul cycle
+    identical whenever HERE returned the same drive time — a 3.5t rigid and a 29t artic
+    do not turn round in the same twenty minutes. Per-vehicle values in factors.json
+    take precedence; the global planning figures remain the fallback so an incomplete
+    factors.json still works.
+    """
+    plan = factors.get("planning", {}) or {}
+    v = (factors.get("vehicles", {}) or {}).get(profile) or {}
+    default = (factors.get("vehicles", {}) or {}).get("_default", {}) or {}
+    load = v.get("load_minutes", default.get("load_minutes", plan.get("load_minutes", 0)))
+    unload = v.get("unload_minutes", default.get("unload_minutes", plan.get("unload_minutes", 0)))
+    return float(load or 0), float(unload or 0)
+
+
+
 def route_analysis(route_id, profiles=None):
     """
     Haul-cycle figures for one route, per vehicle profile x alternative.
@@ -696,8 +902,6 @@ def route_analysis(route_id, profiles=None):
     factors = conversions.load_factors()
     plan = factors.get("planning", {}) or {}
     shift_hr = float(plan.get("shift_hours_per_day") or 10)
-    turnaround_hr = (float(plan.get("load_minutes") or 0)
-                     + float(plan.get("unload_minutes") or 0)) / 60.0
     work_days = float(plan.get("working_days_per_month") or 22)
     veh = factors.get("vehicles", {}) or {}
     default_veh = veh.get("_default", {}) or {}
@@ -716,6 +920,9 @@ def route_analysis(route_id, profiles=None):
         payload_t = float(v.get("payload_t") or default_veh.get("payload_t") or 0)
         co2_per_km = float(v.get("emissions_kg_co2e_per_km")
                            or default_veh.get("emissions_kg_co2e_per_km") or 0)
+        # turnaround varies by vehicle — a flatbed strapping a load is not a tipper
+        load_m, unload_m = _turnaround_minutes(prof, factors)
+        turnaround_hr = (load_m + unload_m) / 60.0
         for alt in sorted(loaded):
             lg = loaded[alt]
             if not lg["geometry"]:
@@ -743,11 +950,14 @@ def route_analysis(route_id, profiles=None):
                 "co2_kg_per_trip": round(total_km * co2_per_km, 1),
                 "co2_kg_per_day": round(total_km * co2_per_km * trips, 1),
                 "payload_t": payload_t,
+                "co2_kg_per_km": co2_per_km,
+                "load_minutes": load_m, "unload_minutes": unload_m,
+                "turnaround_hr": round(turnaround_hr, 3),
                 "return_estimated": rg is None,
             })
     return {
         "route_id": route_id,
-        "planning": {"shift_hours_per_day": shift_hr, "turnaround_hr": round(turnaround_hr, 3),
+        "planning": {"shift_hours_per_day": shift_hr,
                      "working_days_per_month": work_days},
         "rows": out,
     }

@@ -21,6 +21,10 @@ import conversions
 
 HERE_ENDPOINT = "https://router.hereapi.com/v8/routes"
 
+# How many route options to ask HERE for. Note HERE counts alternatives *in addition
+# to* the optimal route, so the wire value is this minus one.
+ALTERNATIVES_DEFAULT = 3
+
 
 def api_key():
     return os.environ.get("HERE_API_KEY", "").strip()
@@ -152,3 +156,81 @@ def route(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None):
     """Single best route — thin wrapper over routes() for callers that want just one."""
     return routes(o_lat, o_lon, d_lat, d_lon, profile, factors,
                   avoid_areas=avoid_areas, alternatives=1)[0]
+
+
+# --------------------------------------------------------------------------- #
+#  Diagnostics                                                                 #
+# --------------------------------------------------------------------------- #
+def probe(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None,
+          alternatives=ALTERNATIVES_DEFAULT, laden=True):
+    """
+    Make one real HERE call and report what went out and what came back.
+
+    This exists because several failure modes look identical from the outside: a
+    profile whose truck parameters never reached HERE, and a road network that
+    genuinely routes every vehicle the same way, both produce identical geometry for
+    every profile. So does an 'alternatives' request that HERE quietly declined. The
+    only way to tell them apart is to see the actual request and response.
+
+    Never raises — a failure is part of the answer. The API key is redacted.
+    """
+    key = api_key()
+    params = {
+        "origin": f"{o_lat},{o_lon}",
+        "destination": f"{d_lat},{d_lon}",
+        "return": "polyline,summary",
+        "apiKey": key,
+    }
+    want = max(1, int(alternatives or 1))
+    if want > 1:
+        params["alternatives"] = want - 1
+    params.update(_truck_params(profile, factors, laden=laden))
+    if avoid_areas:
+        params["avoid[areas]"] = "|".join(avoid_areas)
+
+    sent = {k: v for k, v in params.items() if k != "apiKey"}
+    out = {
+        "profile": profile, "laden": laden,
+        "params_sent": sent,
+        "truck_params_present": any(k.startswith("vehicle[") for k in sent),
+        "alternatives_requested_param": sent.get("alternatives"),
+        "api_key_set": bool(key),
+    }
+    if not key:
+        out["error"] = "HERE_API_KEY is not set on the server"
+        return out
+
+    url = HERE_ENDPOINT + "?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        out["error"] = f"HTTP {e.code}: {body[:400]}"
+        return out
+    except Exception as e:
+        out["error"] = str(e)[:400]
+        return out
+
+    rts = data.get("routes") or []
+    out["routes_returned"] = len(rts)
+    out["alternatives_honoured"] = len(rts) > 1
+    summaries, notices = [], []
+    for i, rt in enumerate(rts):
+        secs = rt.get("sections") or []
+        dist = sum((s.get("summary") or {}).get("length", 0) for s in secs)
+        dur = sum((s.get("summary") or {}).get("duration", 0) for s in secs)
+        summaries.append({"alt_index": i, "sections": len(secs),
+                          "distance_km": round(dist / 1000.0, 2),
+                          "duration_hr": round(dur / 3600.0, 3)})
+        for s in secs:
+            for n in (s.get("notices") or []):
+                notices.append({"alt_index": i, "title": n.get("title"),
+                                "code": n.get("code"), "severity": n.get("severity")})
+    out["summaries"] = summaries
+    out["notices"] = notices          # e.g. violated truck restrictions
+    out["multi_section"] = any(s["sections"] > 1 for s in summaries)
+    if len(summaries) > 1:
+        d = [s["distance_km"] for s in summaries]
+        out["alternatives_distinct"] = len(set(d)) > 1
+    return out
