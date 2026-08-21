@@ -343,8 +343,23 @@ def routes_summary():
 
 
 @app.get("/api/routes/geojson")
-def routes_geojson(profile: str = network.DEFAULT_PROFILE):
-    return network.routes_geojson(profile)
+def routes_geojson(profile: str = network.DEFAULT_PROFILE,
+                   leg: str = "loaded", alt_index: int = 0):
+    """
+    Map source. A route holds several geometries per profile after Step B (laden and
+    unladen legs, each with HERE alternatives), so the caller picks which one to draw.
+    """
+    return network.routes_geojson(profile, leg=leg, alt_index=alt_index)
+
+
+@app.get("/api/routes/{route_id}/analysis")
+def route_analysis(route_id: str, profile: Optional[str] = None):
+    """
+    Haul-cycle analysis for one route: cycle time, trips/day, tonnes and CO2 per vehicle
+    profile x alternative. Derived from cached geometry plus factors.json planning
+    constants — no HERE calls, so it is cheap to open per row.
+    """
+    return network.route_analysis(route_id, profiles=[profile] if profile else None)
 
 
 @app.get("/api/locations/geojson")
@@ -355,25 +370,31 @@ def locations_geojson():
 @app.post("/api/admin/bake-routes")
 def bake_routes(profile: str = network.DEFAULT_PROFILE,
                 limit: int = Query(25, ge=1, le=60),
+                legs: Optional[str] = None,
                 token: Optional[str] = None):
     """
     Compute + cache HERE truck geometry for a batch of routes. Call repeatedly
     until 'remaining' is 0. Protected by ADMIN_TOKEN if that env var is set.
+
+    'limit' counts legs rather than routes — each leg is one HERE call. Pass
+    legs='loaded' to skip the unladen return and halve the call count.
     """
     admin_token = os.getenv("ADMIN_TOKEN", "").strip()
     if admin_token and token != admin_token:
         raise HTTPException(403, "bad or missing admin token")
-    return network.bake_batch(profile=profile, limit=limit)
+    want = tuple(l.strip() for l in legs.split(",") if l.strip() in network.LEGS) if legs else network.LEGS
+    return network.bake_batch(profile=profile, limit=limit, legs=want or network.LEGS)
 
 
 @app.post("/api/admin/clear-geometry")
-def clear_geometry(profile: Optional[str] = None, token: Optional[str] = None):
-    """Clear cached geometry (a profile, or all) so it can be re-baked."""
+def clear_geometry(profile: Optional[str] = None, leg: Optional[str] = None,
+                   token: Optional[str] = None):
+    """Clear cached geometry (a profile and/or leg, or all) so it can be re-baked."""
     admin_token = os.getenv("ADMIN_TOKEN", "").strip()
     if admin_token and token != admin_token:
         raise HTTPException(403, "bad or missing admin token")
-    network.clear_geometry(profile)
-    return {"status": "cleared", "profile": profile or "all"}
+    network.clear_geometry(profile, leg=leg)
+    return {"status": "cleared", "profile": profile or "all", "leg": leg or "all"}
 
 
 class LocationIn(BaseModel):
@@ -385,6 +406,15 @@ class LocationIn(BaseModel):
     lat: float
     lon: float
     loc_type: Optional[str] = None
+    # access/egress gate — the point HERE actually routes to when it differs from the
+    # marker. Null (or omitted) means no gate surveyed yet; routing uses lat/lon.
+    gate_lat: Optional[float] = None
+    gate_lon: Optional[float] = None
+
+
+def _fields_set(model):
+    """Which fields the client actually sent (pydantic v1 and v2 spell this differently)."""
+    return getattr(model, "model_fields_set", None) or getattr(model, "__fields_set__", set())
 
 
 def _check_admin(token):
@@ -397,15 +427,21 @@ def _check_admin(token):
 def create_location(body: LocationIn, token: Optional[str] = None):
     _check_admin(token)
     return network.create_location(body.name, body.role, body.materials, body.lat, body.lon,
-                                   body.loc_type, supplies=body.supplies, receives=body.receives)
+                                   body.loc_type, supplies=body.supplies, receives=body.receives,
+                                   gate_lat=body.gate_lat, gate_lon=body.gate_lon)
 
 
 @app.put("/api/admin/locations/{location_id}")
 def update_location(location_id: str, body: LocationIn, token: Optional[str] = None):
     _check_admin(token)
+    # only touch the gate if the client mentioned it — otherwise a caller that doesn't
+    # know about gates (or an older client) would silently wipe one that was set
+    gate_given = bool({"gate_lat", "gate_lon"} & set(_fields_set(body)))
     return network.update_location(location_id, body.name, body.role, body.materials,
                                    body.lat, body.lon, body.loc_type,
-                                   supplies=body.supplies, receives=body.receives)
+                                   supplies=body.supplies, receives=body.receives,
+                                   gate_lat=body.gate_lat, gate_lon=body.gate_lon,
+                                   gate_given=gate_given)
 
 
 @app.delete("/api/admin/locations/{location_id}")
@@ -443,9 +479,11 @@ def clear_routes(token: Optional[str] = None):
 
 @app.post("/api/admin/bake-route")
 def bake_route(route_id: str, profile: str = network.DEFAULT_PROFILE,
-               token: Optional[str] = None):
+               legs: Optional[str] = None, token: Optional[str] = None):
+    """Bake one route. Both legs by default; pass legs='loaded' for the outbound only."""
     _check_admin(token)
-    return network.bake_route(route_id, profile)
+    want = tuple(l.strip() for l in legs.split(",") if l.strip() in network.LEGS) if legs else None
+    return network.bake_route(route_id, profile, legs=want)
 
 
 # ------------------------------------------------------------------ static
