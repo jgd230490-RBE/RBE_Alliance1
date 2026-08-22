@@ -190,6 +190,45 @@ def backfill_supplies_receives():
     return {"filled": filled}
 
 
+_NODE_META = os.path.join(os.path.dirname(__file__), "seed_data", "node_meta.json")
+
+
+def apply_node_meta():
+    """
+    Write the vendor and material detail salvaged from a1_data.js onto locations.
+
+    That static file was the public map's old route geometry and is being retired; 14 of
+    its nodes carried a quarry operator that exists nowhere else in the system, and 13 of
+    those resolve to a network location. See seed_data/_build_node_meta.py for how the
+    match was made and why the work-section tags in the same file were NOT salvaged.
+
+    Additive only: a row whose vendor is already set is left alone, so an edit made in
+    the database survives a redeploy.
+    """
+    try:
+        with open(_NODE_META, encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return {"applied": 0, "skipped": 0, "note": "node_meta.json not present"}
+
+    current = {r["id"]: r for r in db.query("SELECT id, vendor, detail FROM locations")}
+    applied = skipped = 0
+    for row in payload.get("matched", []):
+        lid = row.get("location_id")
+        cur = current.get(lid)
+        if not cur:
+            skipped += 1
+            continue
+        if cur.get("vendor") or cur.get("detail"):
+            skipped += 1
+            continue
+        db.execute("UPDATE locations SET vendor = ?, detail = ? WHERE id = ?",
+                   (row.get("vendor"), row.get("detail"), lid))
+        applied += 1
+    return {"applied": applied, "skipped": skipped,
+            "unmatched": len(payload.get("unmatched", []))}
+
+
 # --------------------------------------------------------------------------- #
 #  Baking (Phase 1-tail Step B: directed legs x HERE alternatives)              #
 # --------------------------------------------------------------------------- #
@@ -664,6 +703,74 @@ def routes_status():
             "origin_id": r["origin_id"], "dest_id": r["dest_id"],
             "material_category": r["material_category"], "ipt": r["ipt"],
             "origin_temp_km": r["origin_temp_km"], "profiles": profs,
+        })
+    return out
+
+
+def meta_routes(profile=None):
+    """
+    The route list /api/meta hands the submission matrix and the dashboard.
+
+    This used to be `json.load(seed_data/routes.json)` -- 69 legacy routes that carry no
+    distance_km key at all, so every km, truck-km, CO2 and intensity figure on the
+    dashboard read zero and every cycle time was a flat 0.33 h. That is fixed here by
+    reading the live network instead.
+
+    Three things the raw `routes` table cannot give the UI, all handled here:
+
+      names       the table stores origin_id / dest_id, not names -- joined from locations
+      distance    the table has no distance -- taken from cached geometry, leg 'loaded',
+                  alt_index 0, per the decision that a forecast's distance follows the
+                  primary route. Which vehicle's geometry is reported is named in
+                  distance_profile, because different vehicles legitimately route
+                  differently and an unlabelled number would hide that.
+      duplicates  two locations are both called 'Parnu terminal' (C01 and C02). The
+                  matrix builds its dropdowns from NAMES, so without this those two
+                  collapse into one unselectable entry. A name shared by more than one
+                  location gets its id appended.
+
+    A route with no baked geometry returns distance_km None -- not 0. Zero is a real
+    distance and would quietly pass through every downstream sum; None shows up.
+    """
+    want = profile or DEFAULT_PROFILE
+
+    locs = db.query("SELECT id, name FROM locations")
+    name_counts = {}
+    for l in locs:
+        name_counts[l["name"]] = name_counts.get(l["name"], 0) + 1
+    label = {l["id"]: (f"{l['name']} ({l['id']})" if name_counts.get(l["name"], 0) > 1
+                       else l["name"]) for l in locs}
+
+    # loaded leg, primary option only -- one row per (route, vehicle)
+    dist = {}
+    for g in db.query(
+        "SELECT route_id, vehicle_profile, distance_km FROM route_geometry "
+        "WHERE leg = 'loaded' AND alt_index = 0 AND distance_km IS NOT NULL"
+    ):
+        dist.setdefault(g["route_id"], {})[g["vehicle_profile"]] = g["distance_km"]
+
+    out = []
+    for r in db.query("SELECT * FROM routes ORDER BY id"):
+        per_profile = dist.get(r["id"], {})
+        if want in per_profile:
+            km, used = per_profile[want], want
+        elif per_profile:
+            used = sorted(per_profile)[0]
+            km = per_profile[used]
+        else:
+            km, used = None, None
+        out.append({
+            "route_id": r["id"],
+            "origin_id": r["origin_id"], "dest_id": r["dest_id"],
+            "origin": label.get(r["origin_id"], r["origin_id"]),
+            "dest": label.get(r["dest_id"], r["dest_id"]),
+            "ipt": r["ipt"],
+            # normalised to a factors.json category, so the UI no longer needs its own
+            # free-text guess map
+            "material_guess": _to_cat(r["material_category"]) or r["material_category"],
+            "distance_km": round(km, 2) if km is not None else None,
+            "distance_profile": used,
+            "baked_profiles": sorted(per_profile),
         })
     return out
 

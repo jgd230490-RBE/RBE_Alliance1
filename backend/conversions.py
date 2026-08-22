@@ -103,9 +103,14 @@ def convert(quantity, from_unit, to_unit, material, vehicle, factors=None):
 
 def effective_payload(factors, v1, v2=None, split_pct=100):
     """
-    Blended payload when a load is split across two vehicle types.
-    split_pct is the % of tonnage carried by v1; v2 carries the rest.
-    trips-per-tonne = s/p1 + (1-s)/p2  ->  effective payload = 1 / that.
+    DEPRECATED in Phase 2 — kept only so an older caller does not crash.
+
+    A load split across two vehicle types is now TWO forecast lines, one vehicle each,
+    which the widened forecasts key makes storable. Blending two payloads into one number
+    also blended their haul cycles, and those are not close: an Artic Flatbed turns round
+    in 45 minutes against an Artic Tipper's 24. Two lines keep each cycle honest.
+
+    With v2 omitted this is just v1's payload, which is all any current caller passes.
     """
     p1 = _payload(factors, v1)
     if not v2 or split_pct is None or split_pct >= 100:
@@ -118,9 +123,11 @@ def effective_payload(factors, v1, v2=None, split_pct=100):
 
 def convert_row(row, to_unit, factors=None):
     """
-    Convert one stored forecast row to the requested unit, honouring a second
-    vehicle + split when present. Rows submitted with two vehicles are always
-    stored in m3 or t (never 'vehicles'), so the input side needs no split.
+    Convert one stored forecast row to the requested unit.
+
+    One vehicle per row since Phase 2 — a split is two rows, so there is no blend here
+    any more. Falls back through effective_payload() only if a legacy row still carries
+    vehicle_type_2, which the rebuilt table cannot produce.
     """
     factors = factors or load_factors()
     material = row.get("material_type")

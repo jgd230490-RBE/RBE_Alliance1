@@ -23,9 +23,10 @@ from pydantic import BaseModel
 
 import conversions
 import db
-import seed
+import seed          # retained so an old import doesn't break; forecast seeding is gone
 import network
 import here_routing
+import taxonomy
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -39,22 +40,25 @@ MONTH_COUNT = 60           # 5-year horizon
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    try:
-        if os.getenv("FORCE_RESEED", "").strip().lower() in ("1", "true", "yes"):
-            seed.reseed()
-            print("FORCE_RESEED: cleared and re-seeded forecasts to current taxonomy.")
-        elif seed.seed_if_empty():
-            print("Seeded starter forecasts (table was empty).")
-    except Exception as e:                              # never block startup on seed
-        print("Seed skipped:", e)
+    # NOTE: forecast seeding is gone. seed.seed_if_empty() used to fire whenever the
+    # forecasts table was empty and re-insert the 69 legacy rows from the WP3 CSV. Phase 2
+    # empties that table on purpose, so leaving the call in would have resurrected the
+    # legacy data on the very next restart. See seed.py.
     try:
         db.init_network_db()
+        db.init_taxonomy_db()
         if network.seed_network():
             print("Seeded routing network from V2 (locations + routes).")
         network.backfill_location_roles()
         filled = network.backfill_supplies_receives().get("filled", 0)
         if filled:
             print(f"Backfilled supplies/receives on {filled} location(s) from the route network.")
+        counts = taxonomy.seed_taxonomy()
+        if any(counts.values()):
+            print("Seeded taxonomy:", counts)
+        meta = network.apply_node_meta()
+        if meta.get("applied"):
+            print(f"Applied salvaged vendor/detail to {meta['applied']} location(s).")
     except Exception as e:
         print("Network seed skipped:", e)
     yield
@@ -74,12 +78,24 @@ class Cell(BaseModel):
 
 
 class MatrixRow(BaseModel):
+    """
+    One forecast LINE: a route, a discipline, a section, one material, ONE vehicle.
+
+    vehicle_type_2 and split_pct are gone. A load split across two vehicles is now two
+    lines, which the widened key makes storable and which keeps each line's cycle time
+    honest -- an Artic Flatbed turns round in 45 minutes against a Tipper's 24, and
+    blending them into one payload figure hid that.
+
+    discipline and section_id join the UNIQUE key, so they are never None on the way in:
+    '' is the unassigned sentinel. A NULL here would leave the row unconstrained and
+    ON CONFLICT would silently stop firing.
+    """
     route_id: str
-    material_type: str                        # category, e.g. "Small aggregate"
+    discipline: str = ""                       # '' = unassigned
+    section_id: str = ""                       # '' = unassigned
+    material_type: str                         # category, e.g. "Small aggregate"
     material_description: Optional[str] = None # free-text detail
     vehicle_type: str
-    vehicle_type_2: Optional[str] = None       # optional second vehicle
-    split_pct: Optional[int] = 100             # % of tonnage on vehicle_type; rest on vehicle_type_2
     submitted_by: Optional[str] = None         # lightweight submitter identity
     unit: str                                  # 'm3' | 't' | 'vehicles'
     cells: List[Cell]
@@ -92,9 +108,11 @@ class StatusUpdate(BaseModel):
 
 
 # ------------------------------------------------------------------ helpers
-def _load_routes():
-    with open(SEED_DIR / "routes.json", encoding="utf-8") as f:
-        return json.load(f)
+# --- _load_routes() removed in Phase 2 ---
+# It read seed_data/routes.json: 69 legacy routes with no distance_km key on any row, so
+# /api/meta handed the UI routes with no distance and the dashboard's km, truck-km, CO2
+# and intensity all read zero. Routes now come from the live network via
+# network.meta_routes(). Nothing else in the codebase reads that file.
 
 
 def _material_list(factors):
@@ -123,7 +141,14 @@ def meta():
         # rich taxonomy for the new submission matrix (Commit 2)
         "material_categories": strip(factors.get("material_categories", {})),
         "vehicle_details": strip(factors.get("vehicles", {})),
-        "routes": _load_routes(),
+        # live network, not the retired legacy file — carries real distances
+        "routes": network.meta_routes(),
+        # Phase 2 taxonomy for the discipline / section pickers.
+        # work_sections is empty until its key space is settled against Appendix E;
+        # the UI must cope with an empty list rather than assume rows exist.
+        "disciplines": taxonomy.list_disciplines(),
+        "work_sections": taxonomy.list_work_sections(in_scope_only=True),
+        "ipts": taxonomy.list_ipts(),
         "months": {
             "start_year": START_YEAR,
             "count": MONTH_COUNT,
@@ -161,15 +186,31 @@ def list_forecasts(submitted_by: Optional[str] = None):
 @app.delete("/api/forecasts/{route_id}")
 def withdraw_route(route_id: str, submitted_by: Optional[str] = None,
                    from_: Optional[int] = Query(None, alias="from"),
-                   to: Optional[int] = None):
-    """Withdraw a route's forecast, optionally scoped to a month range and/or submitter."""
+                   to: Optional[int] = None,
+                   discipline: Optional[str] = None,
+                   section_id: Optional[str] = None):
+    """
+    Withdraw a forecast, optionally scoped to a month range, a submitter, and a line.
+
+    Pass discipline and section_id to withdraw ONE line. Without them this deletes every
+    line on the route in range -- which, now that a route can carry several disciplines,
+    means withdrawing a substructure forecast would take a superstructure one with it.
+    The My-submissions view sends the line keys.
+    """
     clauses, params = ["route_id = ?"], [route_id]
     if submitted_by:
         clauses.append("submitted_by = ?"); params.append(submitted_by)
     if from_ is not None and to is not None:
         clauses.append("month_index BETWEEN ? AND ?"); params += [min(from_, to), max(from_, to)]
-    db.execute("DELETE FROM forecasts WHERE " + " AND ".join(clauses), tuple(params))
-    return {"status": "success", "route_id": route_id}
+    if discipline is not None:
+        clauses.append("discipline = ?"); params.append(discipline or "")
+    if section_id is not None:
+        clauses.append("section_id = ?"); params.append(section_id or "")
+    where = " AND ".join(clauses)
+    n = db.query(f"SELECT COUNT(*) AS n FROM forecasts WHERE {where}", tuple(params))[0]["n"]
+    db.execute(f"DELETE FROM forecasts WHERE {where}", tuple(params))
+    return {"status": "success", "route_id": route_id, "deleted": n,
+            "scoped_to_line": discipline is not None or section_id is not None}
 
 
 @app.get("/api/forecasts/summary")
@@ -177,10 +218,17 @@ def forecasts_summary():
     """One row per route: status, span, and window total in vehicles — for the ledger/approvals view."""
     rows = db.query("SELECT * FROM forecasts")
     factors = conversions.load_factors()
-    by_route = {}
+    by_line = {}
     for r in rows:
-        g = by_route.setdefault(r["route_id"], {
-            "route_id": r["route_id"], "months": [], "statuses": set(),
+        # grouped per LINE, not per route. Grouping on route_id alone would merge a
+        # substructure line and a superstructure line on the same route into one ledger
+        # row, silently summing two disciplines' traffic under one material and vehicle.
+        key = (r["route_id"], r.get("discipline") or "", r.get("section_id") or "")
+        g = by_line.setdefault(key, {
+            "route_id": r["route_id"],
+            "discipline": r.get("discipline") or "",
+            "section_id": r.get("section_id") or "",
+            "months": [], "statuses": set(),
             "unit": r["unit"], "material_type": r["material_type"],
             "vehicle_type": r["vehicle_type"], "submitted_by": r.get("submitted_by"),
             "total_vehicles": 0.0,
@@ -190,7 +238,7 @@ def forecasts_summary():
         g["total_vehicles"] += conversions.convert_row(r, "vehicles", factors)
 
     out = []
-    for g in by_route.values():
+    for g in by_line.values():
         statuses = g.pop("statuses")
         g["status"] = next(iter(statuses)) if len(statuses) == 1 else "Mixed"
         months = sorted(g["months"])
@@ -199,59 +247,131 @@ def forecasts_summary():
         g.pop("months")
         g["total_vehicles"] = int(round(g["total_vehicles"]))
         out.append(g)
-    out.sort(key=lambda x: x["route_id"])
+    out.sort(key=lambda x: (x["route_id"], x["discipline"], x["section_id"]))
     return out
+
+
+def _line_id(route_id, month_index, discipline, section_id):
+    """
+    Primary key for one forecast line.
+
+    Every part is non-empty-or-'' rather than None. The old form was
+    f"{route_id}::{month_index}"; adding nullable parts would have produced
+    'route::3::None::None' for two different rows and collided them.
+    """
+    return f"{route_id}::{month_index}::{discipline or ''}::{section_id or ''}"
 
 
 @app.post("/api/forecasts/bulk")
 def save_matrix_row(row: MatrixRow):
-    """Upsert a whole route's monthly forecast. Cells at 0 are cleared."""
+    """
+    Upsert one forecast line across a year. Cells at 0 are cleared.
+
+    Both the conflict target and the delete clause carry the full widened key. The delete
+    matters as much as the insert: scoped to (route_id, month_index) alone, a submitter
+    typing 0 into the superstructure line would have deleted the substructure line for
+    that month too.
+    """
     if row.unit not in conversions.UNITS:
         raise HTTPException(400, f"unit must be one of {conversions.UNITS}")
+
+    disc = row.discipline or ""
+    sect = row.section_id or ""
+    touched = 0
+
     for c in row.cells:
         if not (1 <= c.month_index <= MONTH_COUNT):
             continue
-        rid = f"{row.route_id}::{c.month_index}"
+        rid = _line_id(row.route_id, c.month_index, disc, sect)
         if c.quantity and c.quantity > 0:
-            split = row.split_pct if row.split_pct is not None else 100
-            veh2 = row.vehicle_type_2 or None
             db.execute(
                 """
                 INSERT INTO forecasts
-                    (id, route_id, month_index, quantity, unit, material_type, material_description,
-                     vehicle_type, vehicle_type_2, split_pct, submitted_by, status, reject_reason)
+                    (id, route_id, month_index, discipline, section_id, quantity, unit,
+                     material_type, material_description, vehicle_type, submitted_by,
+                     status, reject_reason)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (route_id, month_index) DO UPDATE SET
+                ON CONFLICT (route_id, month_index, discipline, section_id) DO UPDATE SET
                     quantity             = EXCLUDED.quantity,
                     unit                 = EXCLUDED.unit,
                     material_type        = EXCLUDED.material_type,
                     material_description = EXCLUDED.material_description,
                     vehicle_type         = EXCLUDED.vehicle_type,
-                    vehicle_type_2       = EXCLUDED.vehicle_type_2,
-                    split_pct            = EXCLUDED.split_pct,
                     submitted_by         = EXCLUDED.submitted_by,
                     status               = EXCLUDED.status,
                     reject_reason        = NULL
                 """,
-                (rid, row.route_id, c.month_index, float(c.quantity), row.unit,
+                (rid, row.route_id, c.month_index, disc, sect, float(c.quantity), row.unit,
                  row.material_type, row.material_description, row.vehicle_type,
-                 veh2, split, row.submitted_by, row.status, None),
+                 row.submitted_by, row.status, None),
             )
+            touched += 1
         else:
-            db.execute("DELETE FROM forecasts WHERE route_id = ? AND month_index = ?",
-                       (row.route_id, c.month_index))
-    return {"status": "success", "route_id": row.route_id}
+            db.execute(
+                "DELETE FROM forecasts WHERE route_id = ? AND month_index = ? "
+                "AND discipline = ? AND section_id = ?",
+                (row.route_id, c.month_index, disc, sect),
+            )
+
+    return {"status": "success", "route_id": row.route_id,
+            "discipline": disc, "section_id": sect, "months_saved": touched,
+            "caution": _coexisting_lines(row.route_id, disc, sect)}
+
+
+def _coexisting_lines(route_id, discipline, section_id):
+    """
+    Other disciplines already forecasting on this route in the same months.
+
+    Not an error -- ballast and fill to one destination in one month under different
+    disciplines is the case the whole taxonomy exists for. But two people filling in the
+    matrix independently can double-count the same lorry movements without ever seeing
+    each other's line, so the save says so.
+    """
+    rows = db.query(
+        "SELECT DISTINCT discipline, section_id, submitted_by, COUNT(*) AS months "
+        "FROM forecasts WHERE route_id = ? AND NOT (discipline = ? AND section_id = ?) "
+        "GROUP BY discipline, section_id, submitted_by",
+        (route_id, discipline or "", section_id or ""),
+    )
+    if not rows:
+        return None
+    others = [{"discipline": r["discipline"] or "(unassigned)",
+               "section_id": r["section_id"] or "(unassigned)",
+               "submitted_by": r.get("submitted_by"),
+               "months": r["months"]} for r in rows]
+    return {
+        "message": (f"{len(others)} other forecast line(s) already exist on {route_id}. "
+                    "Check you are not double-counting the same vehicle movements."),
+        "lines": others,
+    }
 
 
 @app.put("/api/routes/{route_id}/status")
-def set_route_status(route_id: str, req: StatusUpdate):
-    """Approve / reject / reopen every cell of a route at once."""
-    existing = db.query("SELECT COUNT(*) AS n FROM forecasts WHERE route_id = ?", (route_id,))
+def set_route_status(route_id: str, req: StatusUpdate,
+                     discipline: Optional[str] = None,
+                     section_id: Optional[str] = None):
+    """
+    Approve / reject / reopen a forecast.
+
+    Pass discipline and section_id to act on ONE line. Omit them and every line on the
+    route is updated -- which is the old behaviour, kept so nothing breaks, but it now
+    means approving another discipline's forecast as a side effect. The Approvals view
+    should send the line keys.
+    """
+    clauses, params = ["route_id = ?"], [route_id]
+    scoped = discipline is not None or section_id is not None
+    if scoped:
+        clauses.append("discipline = ?"); params.append(discipline or "")
+        clauses.append("section_id = ?"); params.append(section_id or "")
+    where = " AND ".join(clauses)
+
+    existing = db.query(f"SELECT COUNT(*) AS n FROM forecasts WHERE {where}", tuple(params))
     if existing[0]["n"] == 0:
         raise HTTPException(404, "No forecast for that route.")
-    db.execute("UPDATE forecasts SET status = ?, reject_reason = ? WHERE route_id = ?",
-               (req.status, req.reject_reason, route_id))
-    return {"status": "success", "route_id": route_id, "new_status": req.status}
+    db.execute(f"UPDATE forecasts SET status = ?, reject_reason = ? WHERE {where}",
+               tuple([req.status, req.reject_reason] + params))
+    return {"status": "success", "route_id": route_id, "new_status": req.status,
+            "scoped_to_line": scoped, "rows": existing[0]["n"]}
 
 
 # ------------------------------------------------------------------ public feed (map)
@@ -313,18 +433,24 @@ def public_forecast_matrix(
         (lo, hi),
     )
     factors = conversions.load_factors()
-    by_route = {}
+    by_line = {}
     for r in rows:
-        g = by_route.setdefault(r["route_id"], {
-            "route_id": r["route_id"], "material_type": r["material_type"],
+        # one entry per LINE — a route carrying two disciplines is two rows in the
+        # detail table, not one row with both disciplines' tonnage silently added up
+        key = (r["route_id"], r.get("discipline") or "", r.get("section_id") or "")
+        g = by_line.setdefault(key, {
+            "route_id": r["route_id"],
+            "discipline": r.get("discipline") or "",
+            "section_id": r.get("section_id") or "",
+            "material_type": r["material_type"],
             "material_description": r.get("material_description"),
-            "vehicle_type": r["vehicle_type"], "vehicle_type_2": r.get("vehicle_type_2"),
-            "split_pct": r.get("split_pct", 100), "monthly": {}, "total": 0.0,
+            "vehicle_type": r["vehicle_type"],
+            "monthly": {}, "total": 0.0,
         })
         v = conversions.convert_row(r, unit, factors)
         g["monthly"][str(r["month_index"])] = conversions.round_for_unit(v, unit)
         g["total"] += v
-    out = list(by_route.values())
+    out = list(by_line.values())
     for g in out:
         g["total"] = conversions.round_for_unit(g["total"], unit)
     out.sort(key=lambda x: x["total"], reverse=True)
@@ -385,6 +511,41 @@ def route_analysis(route_id: str, profile: Optional[str] = None):
     constants — no HERE calls, so it is cheap to open per row.
     """
     return network.route_analysis(route_id, profiles=[profile] if profile else None)
+
+
+@app.get("/api/routes/analysis-batch")
+def routes_analysis_batch(route_ids: Optional[str] = None, profile: Optional[str] = None):
+    """
+    Primary-option haul-cycle figures for many routes at once, keyed route_id -> profile.
+
+    This exists so the dashboard can stop computing its own cycle time. It had
+    `round / 45 km/h + (12 + 8) / 60` against the backend's real HERE leg durations and
+    per-vehicle turnaround, and the two disagreed by up to 47% on speed alone and 125% on
+    turnaround for an Artic Flatbed. Converging them by making the dashboard call the
+    backend is the point; a per-route request for every route on screen was the only
+    reason not to, and this removes it.
+
+    Only alt_index 0 is returned — the primary route, which is what a forecast's distance
+    follows. Routes with no baked geometry are simply absent from the result rather than
+    present with zeros; a caller must show that as 'not baked', not as nothing moving.
+    """
+    ids = [r.strip() for r in (route_ids or "").split(",") if r.strip()]
+    if not ids:
+        ids = [r["id"] for r in db.query("SELECT id FROM routes ORDER BY id")]
+
+    profs = [profile] if profile else None
+    out, missing = {}, []
+    for rid in ids:
+        res = network.route_analysis(rid, profiles=profs)
+        rows = [r for r in res.get("rows", []) if r.get("alt_index") == 0]
+        if not rows:
+            missing.append(rid)
+            continue
+        out[rid] = {r["profile"]: r for r in rows}
+
+    return {"analysis": out, "not_baked": missing,
+            "planning": conversions.load_factors().get("planning", {}),
+            "count": len(out)}
 
 
 @app.get("/api/locations/geojson")
