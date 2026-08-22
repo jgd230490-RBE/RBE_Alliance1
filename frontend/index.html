@@ -88,6 +88,7 @@ function Dashboard({ meta }){
   const routesById = useMemo(() => Object.fromEntries(routes.map(r => [r.route_id, r])), [routes]);
 
   const [rows, setRows] = useState(null);
+  const [analysis, setAnalysis] = useState(null);   // /api/routes/analysis-batch
   const [err, setErr] = useState(false);
   const [status, setStatus] = useState("Approved");
   const [unit, setUnit] = useState("t");
@@ -106,6 +107,24 @@ function Dashboard({ meta }){
       const idx = rs.map(x => x.month_index);
       if(idx.length){ setFromM(Math.min(...idx)); setToM(Math.max(...idx)); }
     }).catch(() => setErr(true));
+    return () => { live = false; };
+  }, []);
+
+  // Haul-cycle figures come from the BACKEND now.
+  //
+  // This screen used to work its own out — round trip over a flat 45 km/h plus one
+  // global 12+8 minute turnaround for every vehicle — while the route analysis panel
+  // used HERE's real routed durations and each vehicle's own turnaround. The same route
+  // therefore had two different cycle times depending on which screen you opened. On a
+  // 70 km/h trunk road the local formula overstated the cycle by about a third, and it
+  // understated an Artic Flatbed's 45-minute turnaround by more than half.
+  //
+  // One request covers every route, so this costs one fetch rather than one per row.
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/routes/analysis-batch`).then(r => r.json()).then(j => {
+      if(live) setAnalysis(j);
+    }).catch(() => { if(live) setAnalysis({ analysis: {}, not_baked: [], error: true }); });
     return () => { live = false; };
   }, []);
 
@@ -130,10 +149,15 @@ function Dashboard({ meta }){
     const tonnesM = new Array(n).fill(0);
     const split = {}; mats.forEach(m => split[m] = 0);
     const rAgg = {};
+    const AN = (analysis && analysis.analysis) || {};
     let totT=0, totTrips=0, totKm=0, totCo2=0;
     filtered.forEach(r => {
       const route = routesById[r.route_id] || {};
-      const dist = route.distance_km || 0, round = dist*2;
+      // the backend's routed distance for the vehicle on this line, falling back to the
+      // route's headline distance when that vehicle has not been baked
+      const an = (AN[r.route_id] || {})[r.vehicle_type];
+      const dist = an ? an.loaded_km : (route.distance_km ?? null);
+      const round = an ? (an.total_km || 0) : ((dist || 0) * 2);
       const t = toTonnes(r.quantity, r.unit, r.material_type, r.vehicle_type, factors);
       const trips = t / payload(factors, r.vehicle_type);
       const km = trips * round;
@@ -144,30 +168,43 @@ function Dashboard({ meta }){
       tripsM[k] += trips; co2M[k] += co2/1000; tonnesM[k] += t;
       split[r.material_type] += disp;
       totT += t; totTrips += trips; totKm += km; totCo2 += co2/1000;
-      const a = rAgg[r.route_id] || (rAgg[r.route_id] = { route_id:r.route_id, ipt:route.ipt||"—", dist, t:0, trips:0, km:0, co2:0, monthly:{} });
+      // keyed per LINE — a route carrying two disciplines is two rows, not one row with
+      // both disciplines' traffic silently added together
+      const key = `${r.route_id}|${r.discipline||""}|${r.section_id||""}`;
+      const a = rAgg[key] || (rAgg[key] = {
+        key, route_id:r.route_id, discipline:r.discipline||"", section_id:r.section_id||"",
+        ipt:route.ipt||"—", dist, vehicle:r.vehicle_type,
+        cycleH:(an ? an.cycle_hr : null), capacityPerDay:(an ? an.trips_per_day : null),
+        baked:!!an, t:0, trips:0, km:0, co2:0, monthly:{},
+      });
       a.t += t; a.trips += trips; a.km += km; a.co2 += co2/1000;
       a.monthly[r.month_index] = (a.monthly[r.month_index]||0) + trips;
     });
     const routeRows = Object.values(rAgg).map(a => {
-      const round = a.dist*2;
-      const cycleH = P.avg_haul_speed_kmh>0 ? (round/P.avg_haul_speed_kmh + (P.load_minutes+P.unload_minutes)/60) : 0;
       const mv = Object.values(a.monthly);
       const peakMonthTrips = mv.length ? Math.max(...mv) : 0;
+      // DEMAND per day — how many loads the tonnage needs. Distinct from the backend's
+      // capacityPerDay, which is how many one truck can physically do in a shift.
+      // Trucks needed = demand / capacity; showing only one of the two, as this screen
+      // used to, cannot answer a fleet-size question.
       const peakPerDay = P.working_days_per_month>0 ? peakMonthTrips/P.working_days_per_month : 0;
+      const trucks = (a.capacityPerDay > 0) ? Math.ceil(peakPerDay / a.capacityPerDay) : null;
       const intensity = a.t>0 ? (a.co2*1000/a.t) : 0;
-      return { ...a, cycleH, peakPerDay, intensity };
+      return { ...a, peakPerDay, trucks, intensity };
     });
     let peakIdx = 0; for(let i=1;i<n;i++) if(tonnesM[i]>tonnesM[peakIdx]) peakIdx = i;
     const peakMonth = tonnesM.some(x=>x>0) ? labels[peakIdx] : "—";
     return {
       lo, hi, labels, mats, demand, tripsM, co2M, split, routeRows,
       kpis: { totT, totTrips, totKm, totCo2, intensity: totT>0 ? totCo2*1000/totT : 0, peakMonth },
-      empty: filtered.length===0
+      empty: filtered.length===0,
+      unbaked: routeRows.filter(r => !r.baked).length,
     };
-  }, [rows, status, material, vehicle, fromM, toM, unit, factors, months, routesById]);
+  }, [rows, analysis, status, material, vehicle, fromM, toM, unit, factors, months, routesById]);
 
   if(err) return <div className="p-8 text-center text-slate-500">Couldn't load forecast data.</div>;
   if(!rows || !D) return <div className="p-8 text-center text-slate-400">Loading dashboard…</div>;
+  if(!analysis) return <div className="p-8 text-center text-slate-400">Loading haul-cycle figures…</div>;
 
   const sortedRoutes = [...D.routeRows].sort((a,b) => {
     const dir = sortDir==="asc" ? 1 : -1;
@@ -249,6 +286,7 @@ function Dashboard({ meta }){
             <thead className="bg-slate-50 text-slate-500 text-xs">
               <tr>
                 <th className="px-3 py-2 text-left font-semibold cursor-pointer select-none" onClick={()=>setSort("route_id")}>Route{arrow("route_id")}</th>
+                <th className="px-3 py-2 text-left font-semibold cursor-pointer select-none" onClick={()=>setSort("discipline")}>Discipline{arrow("discipline")}</th>
                 <th className="px-3 py-2 text-left font-semibold">IPT</th>
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("dist")}>Dist km{arrow("dist")}</th>
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("cycleH")}>Cycle h{arrow("cycleH")}</th>
@@ -258,30 +296,57 @@ function Dashboard({ meta }){
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("co2")}>tCO₂e{arrow("co2")}</th>
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("intensity")}>kg/t{arrow("intensity")}</th>
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("peakPerDay")}>Peak/day{arrow("peakPerDay")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("trucks")} title="Peak demand per day divided by what one truck can physically do in a shift">Trucks{arrow("trucks")}</th>
               </tr>
             </thead>
             <tbody>
               {sortedRoutes.map(r => (
-                <tr key={r.route_id} className="border-t border-slate-100 hover:bg-slate-50">
+                <tr key={r.key} className="border-t border-slate-100 hover:bg-slate-50">
                   <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{r.route_id}</td>
+                  <td className="px-3 py-2 text-slate-500 whitespace-nowrap">
+                    {r.discipline
+                      ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                          style={{ background:"rgba(0,55,135,.08)", color:"var(--navy)" }}
+                          title={r.section_id ? `Section ${r.section_id}` : "No section set"}>
+                          {r.discipline}
+                        </span>
+                      : <span className="text-slate-300" title="No discipline set on this forecast line">—</span>}
+                  </td>
                   <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{r.ipt}</td>
-                  <td className={numTd}>{r.dist.toFixed(1)}</td>
-                  <td className={numTd}>{r.cycleH.toFixed(2)}</td>
+                  {/* an unbaked route has NO distance, which is not the same as zero — a
+                      zero would sum silently into every total above */}
+                  <td className={numTd}>{r.dist == null ? <span className="text-slate-300" title="No cached geometry — bake this route">—</span> : r.dist.toFixed(1)}</td>
+                  <td className={numTd}>
+                    {r.cycleH == null
+                      ? <span className="text-slate-300" title="Cycle time needs baked geometry for this vehicle">not baked</span>
+                      : r.cycleH.toFixed(2)}
+                  </td>
                   <td className={numTd}>{Math.round(r.t).toLocaleString()}</td>
                   <td className={numTd}>{Math.round(r.trips).toLocaleString()}</td>
                   <td className={numTd}>{Math.round(r.km).toLocaleString()}</td>
                   <td className={numTd}>{r.co2.toFixed(1)}</td>
                   <td className={numTd}>{r.intensity.toFixed(1)}</td>
                   <td className={numTd}>{r.peakPerDay.toFixed(1)}</td>
+                  <td className={numTd} title={r.capacityPerDay ? `${r.capacityPerDay} trips/day per truck` : undefined}>
+                    {r.trucks == null ? <span className="text-slate-300">—</span> : r.trucks}
+                  </td>
                 </tr>
               ))}
-              {sortedRoutes.length===0 && <tr><td colSpan="10" className="px-3 py-6 text-center text-slate-400">No routes in range.</td></tr>}
+              {sortedRoutes.length===0 && <tr><td colSpan="12" className="px-3 py-6 text-center text-slate-400">No routes in range.</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
 
-      <p className="text-xs text-slate-400 px-1">Planning estimates only — no live deliveries or tracking. Distances from routed road geometry; carbon from DEFRA-2025-based factors in backend/factors.json (round trip: loaded out, empty return). Cycle time = drive + load/unload handling.</p>
+      {D.unbaked > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+          {D.unbaked} forecast line(s) reference a route with no cached geometry for their
+          vehicle, so cycle time, fleet size and truck-km are blank rather than estimated.
+          Bake those routes on the Data Management tab.
+        </div>
+      )}
+
+      <p className="text-xs text-slate-400 px-1">Planning estimates only — no live deliveries or tracking. Distances and durations come from the routed HERE geometry via <code>/api/routes/analysis-batch</code>, the same source as the route analysis panel — this screen no longer estimates its own. Carbon from DEFRA-2025-based factors in backend/factors.json (round trip: loaded out, empty return). Cycle = laden out + empty back + that vehicle's own load and unload time. Trucks = peak demand per day ÷ what one truck can do in a shift.</p>
     </div>
   );
 }
@@ -469,7 +534,8 @@ function Portal({ role, who, meta, metaErr }){
 // ================================================================= Matrix
 function Matrix({ meta, who, editTarget }){
   const { routes, materials, vehicles, units, months, factors,
-          material_categories = {}, seasonal_restrictions = [] } = meta;
+          material_categories = {}, seasonal_restrictions = [],
+          disciplines = [], work_sections = [] } = meta;
 
   const GUESS_TO_CAT = { "soil":"Earthworks / soil", "sand":"Small aggregate", "gravel":"Small aggregate",
     "limestone - rockfill":"Large aggregate / ballast", "limestone (shale aggregate)":"Small aggregate",
@@ -498,6 +564,10 @@ function Matrix({ meta, who, editTarget }){
     setDest(r.dest || "");
     setRouteId(editTarget.routeId);
     if(editTarget.year) setYear(editTarget.year);
+    // carry the line keys across, or "Edit" would reopen the route on a different
+    // discipline and the month cells would load from the wrong line
+    if(editTarget.discipline !== undefined) setDiscipline(editTarget.discipline || "");
+    if(editTarget.sectionId !== undefined) setSectionId(editTarget.sectionId || "");
   }, [editTarget]);
 
   // ---- material category + free-text detail ----
@@ -507,21 +577,32 @@ function Matrix({ meta, who, editTarget }){
   const suggestedVehicles = (cat.vehicles && cat.vehicles.length) ? cat.vehicles : vehicles;
   const volumeOk = cat.volume_convertible !== false;
 
-  // ---- vehicles (with optional second vehicle + split) ----
+  // ---- discipline + work section ----
+  // Both belong on the LINE, not on the route or the location. A lorry of track ballast
+  // delivering into a substructure section is still superstructure traffic; and sections
+  // overlap, so Tootsi Station sits in WS 12, WS 1 and WS 7.3 at once and no single
+  // section can be inferred from the destination.
+  const [discipline, setDiscipline] = useState("");
+  const [sectionId, setSectionId] = useState("");
+  const [siblings, setSiblings] = useState([]);   // other lines already on this route
+  const [caution, setCaution] = useState(null);   // returned by the save
+
+  // ---- vehicle (exactly one per line) ----
   const [vehicle, setVehicle] = useState(vehicles[0] || "");
-  const [useTwo, setUseTwo] = useState(false);
-  const [vehicle2, setVehicle2] = useState("");
-  const [split, setSplit] = useState(70);
   const [unit, setUnit] = useState(units[0] || "m3");
   const [year, setYear] = useState(months.years[0]);
   const [vals, setVals] = useState({});
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  // default the category from the route's material guess when the route resolves
+  // default the category from the route's material guess when the route resolves.
+  // /api/meta now normalises material_guess to a factors.json category server-side, so
+  // the value usually arrives already correct; the lookup stays for anything that does not.
   useEffect(() => {
     if(!route) return;
-    const c = GUESS_TO_CAT[(route.material_guess || "").trim().toLowerCase()];
+    const raw = (route.material_guess || "").trim();
+    if(materials.includes(raw)){ setMaterial(raw); return; }
+    const c = GUESS_TO_CAT[raw.toLowerCase()];
     if(c && materials.includes(c)) setMaterial(c);
   }, [routeId]);
 
@@ -531,13 +612,24 @@ function Matrix({ meta, who, editTarget }){
     setVehicle(v => suggestedVehicles.includes(v) ? v : (suggestedVehicles[0] || v));
   }, [material]);
 
-  // dual-vehicle forces a mass/volume unit (a 'vehicles' input is ambiguous with a mix)
+  // Material categories the chosen discipline actually moves. Advisory, not enforced --
+  // the discipline-to-category join is many-to-many and deliberately permissive, and a
+  // real delivery that does not fit the seed should be recordable, not blocked.
+  const disciplineCats = useMemo(() => {
+    const d = (disciplines || []).find(x => x.id === discipline);
+    return (d && d.materials) ? d.materials : null;
+  }, [discipline, disciplines]);
+  const materialFitsDiscipline = !discipline || !disciplineCats
+    || disciplineCats.includes(material);
+
+  // when the destination has a default section recorded, offer it as a starting point.
+  // It is a pre-fill and nothing more: sections overlap, so the destination cannot know
+  // which one a given delivery is for.
   useEffect(() => {
-    if(useTwo){
-      if(!vehicle2) setVehicle2(suggestedVehicles.find(v => v !== vehicle) || vehicles.find(v => v !== vehicle) || "");
-      if(unit === "vehicles") setUnit(volumeOk ? (cat.default_unit || "t") : "t");
-    }
-  }, [useTwo]);
+    if(!route || sectionId) return;
+    const d = (routes || []).find(r => r.route_id === routeId);
+    if(d && d.default_section_id) setSectionId(d.default_section_id);
+  }, [routeId]);
 
   // load saved cells for route+year
   useEffect(() => {
@@ -546,7 +638,12 @@ function Matrix({ meta, who, editTarget }){
     fetch(`${API}/forecasts`).then(r => r.json()).then(rows => {
       if(!live) return;
       const base = (year - months.start_year) * 12;
-      const mine = rows.filter(x => x.route_id === routeId && x.month_index > base && x.month_index <= base + 12);
+      // a route can now carry several lines in the same months, so the cells loaded are
+      // the ones for THIS discipline and section, not every row on the route
+      const mine = rows.filter(x => x.route_id === routeId
+        && (x.discipline || "") === discipline
+        && (x.section_id || "") === sectionId
+        && x.month_index > base && x.month_index <= base + 12);
       const next = {};
       mine.forEach(x => { next[x.month_index - base] = String(x.quantity); });
       setVals(next);
@@ -556,20 +653,31 @@ function Matrix({ meta, who, editTarget }){
         if(first.material_type && materials.includes(first.material_type)) setMaterial(first.material_type);
         if(first.vehicle_type) setVehicle(first.vehicle_type);
         setDescription(first.material_description || "");
-        if(first.vehicle_type_2){ setUseTwo(true); setVehicle2(first.vehicle_type_2); setSplit(first.split_pct ?? 70); }
-        else setUseTwo(false);
       }
+      // other lines already on this route, so a submitter can see them before adding one more
+      setSiblings(rows
+        .filter(x => x.route_id === routeId
+          && !((x.discipline || "") === discipline && (x.section_id || "") === sectionId))
+        .reduce((acc, x) => {
+          const k = `${x.discipline || ""}|${x.section_id || ""}`;
+          if(!acc.some(a => a.k === k)) acc.push({
+            k, discipline: x.discipline || "", section_id: x.section_id || "",
+            vehicle: x.vehicle_type, submitted_by: x.submitted_by,
+          });
+          return acc;
+        }, []));
     }).catch(() => {});
     return () => { live = false; };
-  }, [routeId, year]);
+  }, [routeId, year, discipline, sectionId]);
 
   const setMonth = (m, v) => setVals(s => ({ ...s, [m]: v }));
 
-  const p1 = payload(factors, vehicle);
-  const p2 = payload(factors, vehicle2);
-  const s = Math.max(0, Math.min(100, split)) / 100;
-  const effPayload = (useTwo && vehicle2) ? (1 / (s / p1 + (1 - s) / p2)) : p1;
-  const allowedUnits = units.filter(u => (u !== "m3" || volumeOk) && (u !== "vehicles" || !(useTwo && vehicle2)));
+  // One vehicle per line since Phase 2. A load split across two vehicle types is two
+  // lines now, which the widened forecasts key makes storable. The old blended payload
+  // averaged two haul cycles that are not close -- an Artic Flatbed turns round in 45
+  // minutes against a Tipper's 24 -- and hid that inside a single number.
+  const effPayload = payload(factors, vehicle);
+  const allowedUnits = units.filter(u => (u !== "m3" || volumeOk));
 
   const totalUnit = Object.values(vals).reduce((a, b) => a + (+b || 0), 0);
   const totalT = Object.entries(vals).reduce((a, [, q]) => a + toTonnes(q, unit, material, vehicle, factors), 0);
@@ -581,29 +689,34 @@ function Matrix({ meta, who, editTarget }){
       .filter(w => (w.months || []).some(m => entered.has(m)))
       .map(w => {
         const rv = w.restricted_vehicles || [];
-        const hit = rv.length === 0 || rv.includes(vehicle) || (useTwo && rv.includes(vehicle2));
-        return hit ? w.message : null;
+        return (rv.length === 0 || rv.includes(vehicle)) ? w.message : null;
       })
       .filter(Boolean);
-  }, [vals, vehicle, vehicle2, useTwo, seasonal_restrictions]);
+  }, [vals, vehicle, seasonal_restrictions]);
 
   const save = () => {
     if(!routeId){ setMsg({ ok: false, text: "Pick an origin and destination that map to a route first." }); return; }
-    setBusy(true); setMsg(null);
+    setBusy(true); setMsg(null); setCaution(null);
     const base = (year - months.start_year) * 12;
     const cells = [];
     for(let m = 1; m <= 12; m++) cells.push({ month_index: base + m, quantity: +vals[m] || 0 });
     fetch(`${API}/forecasts/bulk`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        route_id: routeId, material_type: material, material_description: description || null,
-        vehicle_type: vehicle, vehicle_type_2: (useTwo && vehicle2) ? vehicle2 : null,
-        split_pct: (useTwo && vehicle2) ? split : 100, submitted_by: who || null,
+        route_id: routeId, discipline, section_id: sectionId,
+        material_type: material, material_description: description || null,
+        vehicle_type: vehicle, submitted_by: who || null,
         unit, cells, status: "Pending",
       }),
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(() => setMsg({ ok: true, text: `Saved ${year} forecast for ${routeId}. Sent for approval.` }))
+      .then(j => {
+        setMsg({ ok: true, text: `Saved ${year} forecast for ${routeId}${discipline ? ` · ${discipline}` : ""}. Sent for approval.` });
+        // not an error — two disciplines on one route is the case the taxonomy exists
+        // for — but two people filling this in separately can double-count the same
+        // lorries without ever seeing each other's line
+        setCaution(j && j.caution ? j.caution : null);
+      })
       .catch(e => setMsg({ ok: false, text: `Couldn't save (${e}). Try again.` }))
       .finally(() => setBusy(false));
   };
@@ -640,9 +753,58 @@ function Matrix({ meta, who, editTarget }){
             )}
           </Field>
         </div>
-        {route && route.distance_km ? (
-          <p className="text-xs text-slate-400 -mt-1">{route.ipt || "—"} · {route.distance_km} km one-way</p>
+        {route ? (
+          <p className="text-xs text-slate-400 -mt-1">
+            {route.ipt || "—"}
+            {route.distance_km != null
+              ? <> · {route.distance_km} km one-way{route.distance_profile ? ` (${vehShort(route.distance_profile)})` : ""}</>
+              : <span style={{color:"var(--red)"}}> · not baked — no routed distance yet</span>}
+          </p>
         ) : null}
+
+        {/* Discipline and section sit on the LINE. Ballast to a substructure section is
+            still superstructure traffic, and sections overlap, so neither can be derived
+            from the route or the destination. */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="Discipline">
+            <select value={discipline} onChange={e => setDiscipline(e.target.value)} className={selCls}>
+              <option value="">— unassigned —</option>
+              {disciplines.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Work section">
+            {work_sections.length ? (
+              <select value={sectionId} onChange={e => setSectionId(e.target.value)} className={selCls}>
+                <option value="">— unassigned —</option>
+                {work_sections.map(s => (
+                  <option key={s.section_id} value={s.section_id}>
+                    {s.section_id}{s.name ? ` · ${s.name}` : ""}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-400 truncate"
+                title="Work sections are not seeded yet — their key space is still being settled against the scope document">
+                Not configured yet
+              </div>
+            )}
+          </Field>
+        </div>
+
+        {!materialFitsDiscipline && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
+            {material} isn't a material normally moved by {discipline}. That may well be
+            right — this is advisory, not a rule — but check it is the discipline you meant.
+          </div>
+        )}
+
+        {siblings.length > 0 && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
+            <span className="font-semibold">This route already carries {siblings.length} other forecast line{siblings.length > 1 ? "s" : ""}:</span>{" "}
+            {siblings.map(s => `${s.discipline || "unassigned"}${s.section_id ? " / " + s.section_id : ""}${s.submitted_by ? " (" + s.submitted_by + ")" : ""}`).join(" · ")}.
+            {" "}Different disciplines on one route are expected — just make sure you aren't counting the same lorries twice.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Field label="Material category">
@@ -657,7 +819,7 @@ function Matrix({ meta, who, editTarget }){
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Field label={useTwo ? "Vehicle 1" : "Vehicle"}>
+          <Field label="Vehicle">
             <select value={vehicle} onChange={e => setVehicle(e.target.value)} className={selCls}>
               {vehicles.map(v => <option key={v}>{v}</option>)}
             </select>
@@ -669,26 +831,11 @@ function Matrix({ meta, who, editTarget }){
           </Field>
         </div>
 
-        <div className="rounded-lg border border-slate-200 p-3">
-          <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-            <input type="checkbox" checked={useTwo} onChange={e => setUseTwo(e.target.checked)} style={{accentColor:"#003787"}} />
-            Split the load across a second vehicle
-          </label>
-          {useTwo && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-              <Field label="Vehicle 2">
-                <select value={vehicle2} onChange={e => setVehicle2(e.target.value)} className={selCls}>
-                  {vehicles.filter(v => v !== vehicle).map(v => <option key={v}>{v}</option>)}
-                </select>
-              </Field>
-              <div>
-                <span className="text-[11px] uppercase tracking-wide text-slate-400">Split · {split}% {vehicle} / {100 - split}% {vehicle2}</span>
-                <input type="range" min="0" max="100" step="5" value={split} onChange={e => setSplit(+e.target.value)}
-                  className="w-full mt-2" style={{accentColor:"#003787"}} />
-              </div>
-            </div>
-          )}
-        </div>
+        <p className="text-[11px] text-slate-400 -mt-1">
+          One vehicle per line. If a haul genuinely splits across two vehicle types, save
+          it as two lines — that keeps each one's real cycle time, which a blended payload
+          used to hide (an Artic Flatbed turns round in 45 minutes, a Tipper in 24).
+        </p>
 
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <Field label="Year">
@@ -721,7 +868,7 @@ function Matrix({ meta, who, editTarget }){
           <Stat label="≈ vehicle loads" value={fmt(totalVeh, "vehicles")} tone="var(--navy)" />
           <span className="text-xs text-slate-400 self-center">
             {volumeOk ? `${density(factors, material)} t/m³ · ` : ""}
-            {useTwo && vehicle2 ? `blended ${effPayload.toFixed(1)} t/load` : `${payload(factors, vehicle)} t/load`}
+            {`${payload(factors, vehicle)} t/load`}
           </span>
         </div>
 
@@ -736,6 +883,22 @@ function Matrix({ meta, who, editTarget }){
           </button>
           {msg && <span className="text-sm font-medium" style={{color: msg.ok ? "var(--green)" : "var(--red)"}}>{msg.text}</span>}
         </div>
+
+        {caution && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+            <div className="font-semibold">{caution.message}</div>
+            <ul className="mt-1 space-y-0.5 text-xs">
+              {(caution.lines || []).map((l, i) => (
+                <li key={i}>
+                  {l.discipline}{l.section_id && l.section_id !== "(unassigned)" ? ` / ${l.section_id}` : ""}
+                  {" — "}{l.months} month{l.months === 1 ? "" : "s"}
+                  {l.submitted_by ? `, submitted by ${l.submitted_by}` : ""}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-1 text-xs">Your forecast was saved. This is a heads-up, not an error.</div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -763,24 +926,36 @@ function MySubmissions({ meta, who, onEdit }){
     const g = {};
     rows.forEach(r => {
       const year = months.start_year + Math.floor((r.month_index - 1) / 12);
-      const key = r.route_id + "|" + year;
+      // per LINE and year. Grouped on route and year alone, a submitter's substructure
+      // and superstructure forecasts for one route would merge into a single row showing
+      // only whichever material happened to be seen first.
+      const disc = r.discipline || "", sect = r.section_id || "";
+      const key = [r.route_id, year, disc, sect].join("|");
       const e = g[key] || (g[key] = {
-        routeId: r.route_id, year, statuses: new Set(), material: r.material_type,
+        routeId: r.route_id, year, discipline: disc, sectionId: sect,
+        statuses: new Set(), material: r.material_type,
         material_description: r.material_description, vehicle: r.vehicle_type,
-        vehicle2: r.vehicle_type_2, unit: r.unit, months: 0,
+        unit: r.unit, months: 0,
       });
       e.statuses.add(r.status); e.months += 1;
     });
     return Object.values(g)
       .map(e => ({ ...e, status: e.statuses.size === 1 ? [...e.statuses][0] : "Mixed" }))
-      .sort((a, b) => (a.year - b.year) || a.routeId.localeCompare(b.routeId));
+      .sort((a, b) => (a.year - b.year) || a.routeId.localeCompare(b.routeId)
+        || a.discipline.localeCompare(b.discipline));
   }, [rows, months]);
 
-  const withdraw = (routeId, year) => {
-    if(!confirm(`Withdraw your ${year} forecast for ${routeId}?`)) return;
-    const base = (year - months.start_year) * 12;
-    const qs = `submitted_by=${encodeURIComponent(who)}&from=${base + 1}&to=${base + 12}`;
-    fetch(`${API}/forecasts/${encodeURIComponent(routeId)}?${qs}`, { method: "DELETE" })
+  // Scoped to the LINE. Without discipline and section_id this would delete every line
+  // the submitter has on that route that year — including a different discipline's.
+  const withdraw = (g) => {
+    const what = g.discipline ? `${g.discipline} forecast` : "forecast";
+    if(!confirm(`Withdraw your ${g.year} ${what} for ${g.routeId}?`)) return;
+    const base = (g.year - months.start_year) * 12;
+    const p = new URLSearchParams({
+      submitted_by: who, from: String(base + 1), to: String(base + 12),
+      discipline: g.discipline || "", section_id: g.sectionId || "",
+    });
+    fetch(`${API}/forecasts/${encodeURIComponent(g.routeId)}?${p}`, { method: "DELETE" })
       .then(() => setTick(t => t + 1)).catch(() => {});
   };
 
@@ -815,10 +990,11 @@ function MySubmissions({ meta, who, onEdit }){
               <thead className="bg-slate-50 text-slate-500 text-xs">
                 <tr>
                   <th className="px-3 py-2 text-left font-semibold">Route</th>
+                  <th className="px-3 py-2 text-left font-semibold">Discipline</th>
                   <th className="px-3 py-2 text-left font-semibold">From → to</th>
                   <th className="px-3 py-2 text-left font-semibold">Year</th>
                   <th className="px-3 py-2 text-left font-semibold">Material</th>
-                  <th className="px-3 py-2 text-left font-semibold">Vehicle(s)</th>
+                  <th className="px-3 py-2 text-left font-semibold">Vehicle</th>
                   <th className="px-3 py-2 text-center font-semibold">Months</th>
                   <th className="px-3 py-2 text-left font-semibold">Status</th>
                   <th className="px-3 py-2 text-right font-semibold">Actions</th>
@@ -828,18 +1004,25 @@ function MySubmissions({ meta, who, onEdit }){
                 {groups.map(g => {
                   const r = routeById[g.routeId] || {};
                   return (
-                    <tr key={g.routeId + g.year} className="border-t border-slate-100 hover:bg-slate-50">
+                    <tr key={`${g.routeId}|${g.year}|${g.discipline}|${g.sectionId}`} className="border-t border-slate-100 hover:bg-slate-50">
                       <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{g.routeId}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {g.discipline
+                          ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                              style={{ background:"rgba(0,55,135,.08)", color:"var(--navy)" }}
+                              title={g.sectionId ? `Section ${g.sectionId}` : "No section set"}>{g.discipline}</span>
+                          : <span className="text-slate-300">—</span>}
+                      </td>
                       <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{r.origin || "—"} → {r.dest || "—"}</td>
                       <td className="px-3 py-2 tabular-nums">{g.year}</td>
                       <td className="px-3 py-2 text-slate-600">{g.material}{g.material_description ? <span className="text-slate-400"> · {g.material_description}</span> : null}</td>
-                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{g.vehicle}{g.vehicle2 ? ` + ${g.vehicle2}` : ""}</td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{g.vehicle}</td>
                       <td className="px-3 py-2 text-center tabular-nums">{g.months}</td>
                       <td className="px-3 py-2">{badge(g.status)}</td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
-                        <button onClick={() => onEdit({ routeId: g.routeId, year: g.year })}
+                        <button onClick={() => onEdit({ routeId: g.routeId, year: g.year, discipline: g.discipline, sectionId: g.sectionId })}
                           className="text-[color:var(--navy)] font-semibold hover:underline mr-3">Edit</button>
-                        <button onClick={() => withdraw(g.routeId, g.year)}
+                        <button onClick={() => withdraw(g)}
                           className="text-[color:var(--red)] hover:underline">Withdraw</button>
                       </td>
                     </tr>
