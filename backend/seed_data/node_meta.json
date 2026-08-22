@@ -1,0 +1,105 @@
+{
+  "_README": "Salvaged from map/data/a1_data.js before it was retired. Vendor and material detail for network locations, recorded nowhere else. Work-section tags were deliberately not salvaged - see _build_node_meta.py for why.",
+  "matched": [
+    {
+      "source_name": "Anelema limestone",
+      "location_id": "Q07",
+      "location_name": "Anelema limestone",
+      "vendor": "OÜ Eesti Killustik",
+      "detail": "Limestone - rockfill"
+    },
+    {
+      "source_name": "Kobra Limestone",
+      "location_id": "Q12",
+      "location_name": "Kobra Limestone",
+      "vendor": "OÜ Kivikandur",
+      "detail": "Limestone - rockfill"
+    },
+    {
+      "source_name": "Potsepa sand",
+      "location_id": "Q03",
+      "location_name": "Potsepa sand",
+      "vendor": "OÜ Eesti Killustik",
+      "detail": "Sand"
+    },
+    {
+      "source_name": "Eassalu III sand",
+      "location_id": "Q05",
+      "location_name": "Eassalu III sand",
+      "vendor": "OÜ Merko Kaevandused",
+      "detail": "Sand"
+    },
+    {
+      "source_name": "Tarva limestone",
+      "location_id": "Q08",
+      "location_name": "Tarva limestone",
+      "vendor": "OÜ Magic Assets",
+      "detail": "Limestone - rockfill"
+    },
+    {
+      "source_name": "Tarva III limestone",
+      "location_id": "Q09",
+      "location_name": "Tarva III limestone",
+      "vendor": "OÜ Dozerland",
+      "detail": "Limestone - rockfill"
+    },
+    {
+      "source_name": "Vangu sand",
+      "location_id": "Q01",
+      "location_name": "Vangu sand",
+      "vendor": "OÜ Eesti Killustik",
+      "detail": "Sand"
+    },
+    {
+      "source_name": "Viluvere sand",
+      "location_id": "Q10",
+      "location_name": "Viluvere sand",
+      "vendor": "OÜ Inf Maavarad",
+      "detail": "Sand"
+    },
+    {
+      "source_name": "Tammistu gravel",
+      "location_id": "Q06",
+      "location_name": "Tammistu gravel",
+      "vendor": "OÜ Dozerland",
+      "detail": "Gravel"
+    },
+    {
+      "source_name": "Kivimäe III gravel",
+      "location_id": "Q04",
+      "location_name": "Kivimae III gravel",
+      "vendor": "OÜ Dozerland",
+      "detail": "Gravel"
+    },
+    {
+      "source_name": "Potsepa II gravel",
+      "location_id": "Q02",
+      "location_name": "Potsepa II gravel",
+      "vendor": "OÜ Eesti Killustik",
+      "detail": "Gravel"
+    },
+    {
+      "source_name": "Viluvere II gravel",
+      "location_id": "Q11",
+      "location_name": "Viluvere II gravel",
+      "vendor": "OÜ Verston Eesti",
+      "detail": "Gravel"
+    },
+    {
+      "source_name": "Estonia mine",
+      "location_id": "Q13",
+      "location_name": "Estonia mine",
+      "vendor": "OÜ Enefit Industry",
+      "detail": "Limestone (Shale aggregate)"
+    }
+  ],
+  "unmatched": [
+    {
+      "source_name": "Pärnu Construction Base",
+      "location_id": null,
+      "location_name": null,
+      "vendor": "OÜ Enefit Industry",
+      "detail": "Limestone (Shale aggregate)"
+    }
+  ]
+}
