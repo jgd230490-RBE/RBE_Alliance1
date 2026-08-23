@@ -174,13 +174,23 @@ def convert(quantity: float, from_unit: str, to_unit: str,
 
 # ------------------------------------------------------------------ forecasts (staff)
 @app.get("/api/forecasts")
-def list_forecasts(submitted_by: Optional[str] = None):
+def list_forecasts(submitted_by: Optional[str] = None, route_id: Optional[str] = None):
+    """
+    Forecast rows, optionally scoped.
+
+    route_id was added because the submission matrix reloads its cells whenever the
+    route, year, discipline OR section changes, and it was pulling the entire forecasts
+    table each time to find twelve of them. Four times the reload frequency on a
+    whole-table read is not a shape that ages well.
+    """
+    clauses, params = [], []
     if submitted_by:
-        return db.query(
-            "SELECT * FROM forecasts WHERE submitted_by = ? ORDER BY route_id, month_index",
-            (submitted_by,),
-        )
-    return db.query("SELECT * FROM forecasts ORDER BY route_id, month_index")
+        clauses.append("submitted_by = ?"); params.append(submitted_by)
+    if route_id:
+        clauses.append("route_id = ?"); params.append(route_id)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return db.query(f"SELECT * FROM forecasts{where} ORDER BY route_id, month_index",
+                    tuple(params))
 
 
 @app.delete("/api/forecasts/{route_id}")
@@ -511,6 +521,19 @@ def route_analysis(route_id: str, profile: Optional[str] = None):
     constants — no HERE calls, so it is cheap to open per row.
     """
     return network.route_analysis(route_id, profiles=[profile] if profile else None)
+
+
+@app.get("/api/public/map-data")
+def public_map_data(profile: Optional[str] = None):
+    """
+    Everything the public route map draws: route lines both directions, plus location
+    markers. Replaces the 4 MB static map/data/a1_data.js.
+
+    Unbaked routes are omitted rather than drawn as straight lines. On the admin map a
+    dashed straight line usefully says 'HERE could not route this'; on a public map it
+    would just look like a road that isn't there.
+    """
+    return network.public_map_data(profile=profile)
 
 
 @app.get("/api/routes/analysis-batch")

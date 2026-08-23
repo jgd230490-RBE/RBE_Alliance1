@@ -403,6 +403,133 @@ def routes_geojson(profile=DEFAULT_PROFILE, leg="loaded", alt_index=0):
     return {"type": "FeatureCollection", "features": feats}
 
 
+#: what the public map calls each direction. Its layer ids and toggles predate the
+#: network's loaded/return vocabulary, so the mapping is done here rather than renaming
+#: half the map's controls.
+_PUBLIC_LEG_TYPE = {"loaded": "Inbound Highway", "return": "Outbound Highway"}
+
+
+def public_map_data(profile=None):
+    """
+    One FeatureCollection for the public map: route lines plus location markers.
+
+    This replaces map/data/a1_data.js, a 4 MB static file keyed to the 69 legacy route
+    ids. Measured overlap between those ids and the routing network was 0, so once
+    forecasts were re-authored against network routes the map would have painted nothing.
+
+    Vehicle choice is "whichever is baked, labelled": the default profile where it has
+    geometry, otherwise any profile that does, with the vehicle named in vehicle_profile
+    and in the popup. Different vehicles genuinely route differently, so a map that
+    silently mixed them without saying so would be misleading; naming it is the honest
+    version of showing as much of the network as possible mid-bake.
+
+    Both legs are emitted. The map's layer ids and toggles are older than the network's
+    loaded/return naming, so they are mapped to 'Inbound Highway' / 'Outbound Highway'.
+
+    There is no Temp Haul Track output. The legacy file carried 97 such segments; the
+    network holds only a scalar origin_temp_km per route and no geometry, and drawing a
+    straight line of that length would be a fabricated shape on an otherwise surveyed
+    map. Phase 4 (temporary haul roads) is where these come back, as real drawn polylines
+    editable on the route itself.
+    """
+    factors = conversions.load_factors()
+    plan = factors.get("planning", {}) or {}
+    shift_hr = float(plan.get("shift_hours_per_day") or 10)
+
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+
+    # every primary-option geometry, in one query rather than per route
+    geo = {}
+    for g in db.query("SELECT * FROM route_geometry WHERE alt_index = 0"):
+        geo.setdefault(g["route_id"], {}).setdefault(g["vehicle_profile"], {})[g["leg"]] = g
+
+    # disciplines actually forecast on each route, for the map's discipline filter.
+    # A route can carry several -- that is the point of the widened key -- so this is a
+    # list per route and the map filters with an `in` expression, not an equality.
+    disc = {}
+    try:
+        for r in db.query("SELECT DISTINCT route_id, discipline FROM forecasts "
+                          "WHERE status = 'Approved' AND discipline <> ''"):
+            disc.setdefault(r["route_id"], []).append(r["discipline"])
+    except Exception:
+        pass   # forecasts table may not exist yet on a cold database
+
+    feats = []
+    for r in db.query("SELECT * FROM routes ORDER BY id"):
+        per_profile = geo.get(r["id"], {})
+        if not per_profile:
+            continue                      # not baked: nothing honest to draw
+        want = profile or DEFAULT_PROFILE
+        used = want if want in per_profile else sorted(per_profile)[0]
+        legs = per_profile[used]
+
+        o = locs.get(r["origin_id"], {}) or {}
+        d = locs.get(r["dest_id"], {}) or {}
+
+        loaded, ret = legs.get("loaded"), legs.get("return")
+        load_m, unload_m = _turnaround_minutes(used, factors)
+        cycle_hr = trips = None
+        if loaded and loaded["duration_hr"]:
+            out_hr = loaded["duration_hr"]
+            back_hr = (ret["duration_hr"] if ret and ret["duration_hr"] else out_hr)
+            cycle_hr = out_hr + back_hr + (load_m + unload_m) / 60.0
+            trips = int(shift_hr // cycle_hr) if cycle_hr > 0 else 0
+
+        for leg_name, g in (("loaded", loaded), ("return", ret)):
+            if not g or not g["geometry"]:
+                continue
+            feats.append({
+                "type": "Feature",
+                "properties": {
+                    "route_id": r["id"],
+                    "type": _PUBLIC_LEG_TYPE[leg_name],
+                    "leg": leg_name,
+                    "origin": o.get("name"), "dest": d.get("name"),
+                    "origin_id": r["origin_id"], "dest_id": r["dest_id"],
+                    "ipt": r["ipt"] or "",
+                    "material_category": r["material_category"] or "",
+                    "vehicle_profile": used,
+                    "profile_is_fallback": used != want,
+                    "baked_profiles": sorted(per_profile),
+                    "distance_km": g["distance_km"],
+                    "duration_hr": g["duration_hr"],
+                    "cycle_hr": round(cycle_hr, 2) if cycle_hr else None,
+                    "trips_per_day": trips,
+                    "disciplines": sorted(disc.get(r["id"], [])),
+                },
+                "geometry": {"type": "LineString",
+                             "coordinates": json.loads(g["geometry"])},
+            })
+
+    # location markers. aux_info keeps the shape the map's popup already expects, and is
+    # now built from the vendor/detail salvaged out of a1_data.js before it was retired.
+    for l in db.query("SELECT * FROM locations ORDER BY id"):
+        aux = ""
+        if l.get("vendor"):
+            aux += f"<p style='margin:4px 0;'><b>Vendor:</b> {l['vendor']}</p>"
+        if l.get("detail"):
+            aux += f"<p style='margin:4px 0;'><b>Detail:</b> {l['detail']}</p>"
+        lat, lon = _waypoint(l)
+        feats.append({
+            "type": "Feature",
+            "properties": {
+                "type": "Node",
+                "id": l["id"],
+                # the map disambiguates nothing itself, and C01/C02 are both called
+                # 'Parnu terminal', so the id rides along in the label
+                "name": l["name"],
+                "node_type": l.get("loc_type") or "Other",
+                "material": l.get("material") or "",   # popup calls .toLowerCase() on this
+                "ipt": "",
+                "vendor": l.get("vendor") or "",
+                "aux_info": aux,
+            },
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+        })
+
+    return {"type": "FeatureCollection", "features": feats}
+
+
 def locations_geojson():
     def _parse(s):
         try:
