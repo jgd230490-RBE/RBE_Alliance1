@@ -9,7 +9,6 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="config.js"></script>
-    <script src="data/a1_data.js"></script>
     <script src="data/alignment.js"></script>
     <script src="data/chainage.js"></script>
     <style>
@@ -99,7 +98,11 @@
         <h3>Route filtering</h3>
         <select id="filter-origin" onchange="applyFilters()"><option value="ALL">All origins</option></select>
         <select id="filter-dest" onchange="applyFilters()"><option value="ALL">All destinations</option></select>
-        <select id="filter-leg" onchange="applyFilters()"><option value="ALL">All route legs</option></select>
+        <!-- was the legacy 'leg' filter (Primary/Direct, Hub Distribution). The routing
+             network has no such field; discipline is the Phase 2 replacement and is the
+             view senior managers actually asked for. Populated from approved forecasts,
+             so it stays disabled until some exist. -->
+        <select id="filter-discipline" onchange="applyFilters()"><option value="ALL">All disciplines</option></select>
         <select id="filter-ipt" onchange="applyFilters()"><option value="ALL">All sector IPTs</option></select>
         <button class="btn btn-ghost" onclick="resetFilters()">Reset filters</button>
     </div>
@@ -124,9 +127,12 @@
 
     <div class="control-group">
         <h3>Haul routes</h3>
-        <div class="control-item"><label><input type="checkbox" id="layer-inbound" checked onchange="applyFilters()"> Inbound</label><span class="color-dot" style="background:#003787;"></span></div>
-        <div class="control-item"><label><input type="checkbox" id="layer-outbound" checked onchange="applyFilters()"> Outbound</label><span class="color-dot" style="background:#6D28D9;"></span></div>
-        <div class="control-item"><label><input type="checkbox" id="layer-temp" checked onchange="applyFilters()"> Temporary haul</label><span class="color-dot" style="background:#64748b;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-inbound" checked onchange="applyFilters()"> Laden (out)</label><span class="color-dot" style="background:#003787;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-outbound" checked onchange="applyFilters()"> Empty (return)</label><span class="color-dot" style="background:#6D28D9;"></span></div>
+        <!-- Temporary haul removed: the network stores only a scalar origin_temp_km per
+             route, no geometry, so there is nothing real to draw. Returns in Phase 4 as
+             drawn polylines edited on the route itself. -->
+        <div class="control-item" style="opacity:.55;"><label><input type="checkbox" id="layer-temp" disabled> Temporary haul <span style="font-size:10px;">(Phase 4)</span></label><span class="color-dot" style="background:#64748b;"></span></div>
     </div>
 </div>
 
@@ -150,9 +156,27 @@
 <div id="map"></div>
 
 <script>
-    const a1_data = window.a1_data;
+    // Route and node data now come from the routing network over the API, not from the
+    // 4 MB static map/data/a1_data.js that used to sit beside this file. That file was
+    // keyed to the 69 LEGACY route ids; measured overlap with the routing network was
+    // zero, so once forecasts were re-authored against network routes this map would
+    // have silently painted nothing. a1_data.js has been deleted.
+    //
+    // alignment.js and chainage.js are unaffected — they are surveyed reference
+    // geometry, not haul routes, and still load statically.
+    let a1_data = { type: 'FeatureCollection', features: [] };
     const alignment_data = window.alignment_data;
     const chainage_global_data = window.chainage_global_data;
+
+    // Which vehicle's roads are drawn. The network bakes per profile and different
+    // vehicles legitimately route differently, so the backend picks the default profile
+    // where it is baked, falls back to any profile that is, and NAMES the vehicle it
+    // used on every feature. Nothing here silently mixes vehicles without saying so.
+    async function loadNetwork(){
+        const r = await fetch(CONFIG.API_BASE + '/public/map-data');
+        if(!r.ok) throw new Error('map-data ' + r.status);
+        return await r.json();
+    }
 
     mapboxgl.accessToken = CONFIG.MAPBOX_TOKEN;
     const map = new mapboxgl.Map({ container: 'map', style: 'mapbox://styles/mapbox/light-v11', center: [24.85, 58.75], zoom: 7.8 });
@@ -166,66 +190,89 @@
 
     function populateFilters() {
         const origins = new Set(); const dests = new Set();
-        const legs = new Set(); const ipts = new Set();
-        
+        const discs = new Set(); const ipts = new Set();
+
         a1_data.features.forEach(f => {
             if (f.properties.origin) origins.add(f.properties.origin);
             if (f.properties.dest) dests.add(f.properties.dest);
-            if (f.properties.leg && f.properties.leg !== 'Unknown Leg') legs.add(f.properties.leg);
+            (f.properties.disciplines || []).forEach(d => discs.add(d));
             if (f.properties.ipt && f.properties.ipt !== 'Unknown_IPT') ipts.add(f.properties.ipt);
         });
-        
-        [...origins].filter(Boolean).sort().forEach(o => { document.getElementById('filter-origin').innerHTML += `<option value="${o}">${o}</option>`; });
-        [...dests].filter(Boolean).sort().forEach(d => { document.getElementById('filter-dest').innerHTML += `<option value="${d}">${d}</option>`; });
-        [...legs].filter(Boolean).sort().forEach(l => { document.getElementById('filter-leg').innerHTML += `<option value="${l}">${l}</option>`; });
-        [...ipts].filter(Boolean).sort().forEach(i => { document.getElementById('filter-ipt').innerHTML += `<option value="${i}">${i}</option>`; });
+
+        const fill = (id, vals) => {
+            const el = document.getElementById(id); if(!el) return;
+            [...vals].filter(Boolean).sort().forEach(v => { el.innerHTML += `<option value="${v}">${v}</option>`; });
+        };
+        fill('filter-origin', origins);
+        fill('filter-dest', dests);
+        fill('filter-ipt', ipts);
+        fill('filter-discipline', discs);
+
+        // Disciplines come from APPROVED forecasts. With none authored yet the list is
+        // empty, so the control says so rather than sitting there looking broken.
+        const dEl = document.getElementById('filter-discipline');
+        if (dEl && discs.size === 0) {
+            dEl.disabled = true;
+            dEl.options[0].text = 'No approved forecasts yet';
+        }
     }
 
-    function calculateKPIs(oFilter, dFilter, lFilter, iFilter) {
-        let routesCount = 0; let totalLoads = 0;
+    // "Capacity" used to sum max_loads — a hand-entered 1-6 per route from the legacy
+    // file, with no provenance and no equivalent in the routing network. It now sums what
+    // the baked geometry actually supports: shift hours divided by the real HERE cycle
+    // time, the same figure the forecasting dashboard uses. Reads 0 until routes are baked.
+    function calculateKPIs(oFilter, dFilter, discFilter, iFilter) {
+        let routesCount = 0; let totalTrips = 0;
         a1_data.features.forEach(f => {
             if (f.geometry.type === 'LineString' && f.properties.type === 'Inbound Highway') {
                 const props = f.properties;
-                if ((oFilter === 'ALL' || props.origin === oFilter) && 
+                if ((oFilter === 'ALL' || props.origin === oFilter) &&
                     (dFilter === 'ALL' || props.dest === dFilter) &&
-                    (lFilter === 'ALL' || props.leg === lFilter) &&
+                    (discFilter === 'ALL' || (props.disciplines || []).includes(discFilter)) &&
                     (iFilter === 'ALL' || props.ipt === iFilter)) {
-                    routesCount++; totalLoads += parseFloat(props.max_loads) || 0;
+                    routesCount++; totalTrips += parseFloat(props.trips_per_day) || 0;
                 }
             }
         });
         const er = document.getElementById('kpi-routes'); if (er) er.innerText = routesCount;
-        const ec = document.getElementById('kpi-capacity'); if (ec) ec.innerText = totalLoads.toLocaleString();
+        const ec = document.getElementById('kpi-capacity');
+        if (ec) ec.innerText = Math.round(totalTrips).toLocaleString();
     }
 
     function applyFilters() {
         const o = document.getElementById('filter-origin').value; const d = document.getElementById('filter-dest').value;
-        const l = document.getElementById('filter-leg').value; const i = document.getElementById('filter-ipt').value;
-        const inVis = document.getElementById('layer-inbound').checked; const outVis = document.getElementById('layer-outbound').checked; const tempVis = document.getElementById('layer-temp').checked;
-        
-        calculateKPIs(o, d, l, i);
-        let filterArr = ['all'];
-        if (o !== 'ALL') filterArr.push(['==', 'origin', o]);
-        if (d !== 'ALL') filterArr.push(['==', 'dest', d]);
-        if (l !== 'ALL') filterArr.push(['==', 'leg', l]);
-        if (i !== 'ALL') filterArr.push(['==', 'ipt', i]);
+        const disc = document.getElementById('filter-discipline').value; const i = document.getElementById('filter-ipt').value;
+        const inVis = document.getElementById('layer-inbound').checked; const outVis = document.getElementById('layer-outbound').checked;
 
-        if (map.getLayer('inbound-lines')) map.setFilter('inbound-lines', inVis ? ['all', ['==', 'type', 'Inbound Highway'], ...filterArr.slice(1)] : ['==', 'type', 'NONE']);
-        if (map.getLayer('outbound-lines')) map.setFilter('outbound-lines', outVis ? ['all', ['==', 'type', 'Outbound Highway'], ...filterArr.slice(1)] : ['==', 'type', 'NONE']);
-        if (map.getLayer('temp-lines')) map.setFilter('temp-lines', tempVis ? ['all', ['==', 'type', 'Temp Haul Track'], ...filterArr.slice(1)] : ['==', 'type', 'NONE']);
+        calculateKPIs(o, d, disc, i);
+        let filterArr = ['all'];
+        if (o !== 'ALL') filterArr.push(['==', ['get', 'origin'], o]);
+        if (d !== 'ALL') filterArr.push(['==', ['get', 'dest'], d]);
+        if (i !== 'ALL') filterArr.push(['==', ['get', 'ipt'], i]);
+        // a route can carry SEVERAL disciplines — that is the point of the widened
+        // forecast key — so this is a membership test, not an equality
+        if (disc !== 'ALL') filterArr.push(['in', disc, ['get', 'disciplines']]);
+
+        const none = ['==', ['get', 'type'], 'NONE'];
+        if (map.getLayer('inbound-lines')) map.setFilter('inbound-lines',
+            inVis ? ['all', ['==', ['get', 'type'], 'Inbound Highway'], ...filterArr.slice(1)] : none);
+        if (map.getLayer('outbound-lines')) map.setFilter('outbound-lines',
+            outVis ? ['all', ['==', ['get', 'type'], 'Outbound Highway'], ...filterArr.slice(1)] : none);
     }
 
-    function resetFilters() { 
-        document.getElementById('filter-origin').value = 'ALL'; document.getElementById('filter-dest').value = 'ALL'; 
-        document.getElementById('filter-leg').value = 'ALL'; document.getElementById('filter-ipt').value = 'ALL';
-        applyFilters(); 
+    function resetFilters() {
+        document.getElementById('filter-origin').value = 'ALL'; document.getElementById('filter-dest').value = 'ALL';
+        document.getElementById('filter-discipline').value = 'ALL'; document.getElementById('filter-ipt').value = 'ALL';
+        applyFilters();
     }
 
     function filterByNode(nodeName, nodeType) {
         resetFilters();
-        if (nodeType === 'Quarry' || nodeType === 'Hub') { document.getElementById('filter-origin').value = nodeName; }
-        else if (nodeType === 'Compound') { document.getElementById('filter-dest').value = nodeName; }
-        applyFilters(); if(window.innerWidth <= 768) toggleSidebar(); 
+        // network loc_types are Quarry | Port | Compound | Site | Other. 'Hub' was the
+        // legacy file's name for what the network calls a Port.
+        if (nodeType === 'Quarry' || nodeType === 'Hub' || nodeType === 'Port') { document.getElementById('filter-origin').value = nodeName; }
+        else { document.getElementById('filter-dest').value = nodeName; }
+        applyFilters(); if(window.innerWidth <= 768) toggleSidebar();
     }
 
     map.on('style.load', () => {
@@ -241,7 +288,7 @@
             'id': 'inbound-lines-casing',
             'type': 'line',
             'source': 'routes-source',
-            'filter': ['==', ['get', 'route_leg'], 'Inbound'], 
+            'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
             'paint': { 
                 'line-color': '#ffffff', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 7], 
@@ -254,7 +301,7 @@
             'id': 'inbound-lines',
             'type': 'line',
             'source': 'routes-source',
-            'filter': ['==', ['get', 'route_leg'], 'Inbound'], 
+            'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
             'paint': { 
                 'line-color': '#003787', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 6], 
@@ -269,7 +316,7 @@
             'id': 'outbound-lines-casing',
             'type': 'line',
             'source': 'routes-source',
-            'filter': ['==', ['get', 'route_leg'], 'Outbound'], 
+            'filter': ['==', ['get', 'type'], 'Outbound Highway'], 
             'paint': { 
                 'line-color': '#ffffff', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 8], 
@@ -282,7 +329,7 @@
             'id': 'outbound-lines',
             'type': 'line',
             'source': 'routes-source',
-            'filter': ['==', ['get', 'route_leg'], 'Outbound'], 
+            'filter': ['==', ['get', 'type'], 'Outbound Highway'], 
             'paint': { 
                 'line-color': '#6D28D9', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 6], 
@@ -291,19 +338,12 @@
             }
         });
 
-        // 3. TEMP HAUL ROUTES (Slate Purple)
-        map.addLayer({
-            'id': 'temp-lines',
-            'type': 'line',
-            'source': 'routes-source',
-            'filter': ['==', ['get', 'route_leg'], 'Temporary Haul Route'], 
-            'paint': { 
-                'line-color': '#64748B', 
-                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2, 12, 5], 
-                'line-opacity': 0.85, 
-                'line-dasharray': [1.5, 1.5] 
-            }
-        });
+        // 3. TEMP HAUL ROUTES — removed in Phase 2.
+        // The legacy static file carried 97 such segments. The routing network holds
+        // only a scalar origin_temp_km per route and no geometry for them, and drawing
+        // a straight line of that length would be a fabricated shape on a map where
+        // every other line is surveyed. They return in Phase 4 as real drawn polylines,
+        // editable on the route itself.
 
         // Alignment thinner (1.5)
         map.addLayer({ 'id': 'rail-alignment', 'type': 'line', 'source': 'alignment-source', 'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' }, 'paint': { 'line-color': '#000000', 'line-width': 1.5 } });
@@ -315,14 +355,15 @@
     });
 
     function setupHoverEvents() {
-        ['inbound-lines', 'outbound-lines', 'temp-lines'].forEach(lId => {
+        ['inbound-lines', 'outbound-lines'].forEach(lId => {
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
         });
     }
 
-    map.once('load', () => {
-        populateFilters();
+    function buildNodeMarkers() {
+        nodeMarkersArray.forEach(el => el.remove && el.remove());
+        nodeMarkersArray.length = 0;
         a1_data.features.forEach(f => {
             if (f.geometry.type === 'Point') {
                 const props = f.properties; const el = document.createElement('div');
@@ -345,11 +386,54 @@
                 if (props.aux_info) popupMarkup += props.aux_info;
                 popupMarkup += `<button onclick="filterByNode('${props.name}', '${props.node_type}')" style="margin-top:10px; width:100%; background:#003787; color:#fff; border:none; padding:8px; border-radius:4px; font-weight:bold; cursor:pointer;">Filter Routes to this Location</button></div>`;
 
-                new mapboxgl.Marker(el).setLngLat(f.geometry.coordinates).setPopup(new mapboxgl.Popup({ offset: 12 }).setHTML(popupMarkup)).addTo(map);
+                const mk = new mapboxgl.Marker(el).setLngLat(f.geometry.coordinates)
+                    .setPopup(new mapboxgl.Popup({ offset: 12 }).setHTML(popupMarkup)).addTo(map);
+                el._marker = mk;
                 nodeMarkersArray.push(el);
             }
         });
-    });
+        // respect the Sites & assets toggle if it was turned off before the data arrived
+        const nodeToggle = document.getElementById('layer-nodes');
+        if (nodeToggle && !nodeToggle.checked) toggleNodes(false);
+    }
+
+    // ---- initial network load -------------------------------------------------------
+    // Everything that reads a1_data has to wait for the fetch. The map itself renders
+    // immediately with its basemap and alignment; routes and markers arrive after.
+    async function initNetwork() {
+        const status = document.getElementById('forecast-status');
+        try {
+            a1_data = await loadNetwork();
+        } catch (e) {
+            if (status) status.textContent = 'Could not load the route network: ' + e.message;
+            console.error('map-data failed', e);
+            return;
+        }
+        const src = map.getSource('routes-source');
+        if (src) src.setData(a1_data);
+
+        populateFilters();
+        buildNodeMarkers();
+        buildRouteInfo();
+        applyFilters();
+
+        const lines = a1_data.features.filter(f => f.geometry.type === 'LineString');
+        const routes = new Set(lines.map(f => f.properties.route_id));
+        if (routes.size === 0 && status) {
+            status.textContent = 'No routes have cached geometry yet. Bake the network on the '
+                + 'Data Management tab and this map will fill in.';
+        }
+        // say plainly when a route is being drawn with a vehicle other than the default,
+        // rather than letting one map quietly mix profiles
+        const fallbacks = new Set(lines.filter(f => f.properties.profile_is_fallback)
+                                       .map(f => f.properties.route_id));
+        if (fallbacks.size) {
+            console.info(`${fallbacks.size} route(s) drawn with a fallback vehicle profile.`);
+        }
+    }
+
+    if (map.loaded()) initNetwork(); else map.once('load', initNetwork);
+
     function changeBasemap(styleUrl) {
         if (styleUrl === 'maaamet-ortho') { map.setStyle(maaametOrthoStyle()); return; }
         map.setStyle(styleUrl);
@@ -452,10 +536,6 @@
                         map.setPaintProperty('outbound-lines', 'line-color', '#f59e0b'); 
                         map.setPaintProperty('outbound-lines', 'line-opacity', 1.0);
                     }
-                    if (map.getLayer('temp-lines')) {
-                        map.setPaintProperty('temp-lines', 'line-color', '#8b5cf6'); 
-                        map.setPaintProperty('temp-lines', 'line-opacity', 1.0);
-                    }
 
                     // Setup Universal Hover Glow Layer (Sits behind the routes)
                     if (!map.getLayer('global-route-hover')) {
@@ -477,7 +557,7 @@
                 applySolidColors();
                 
                 // Track mouse over any route layer
-                const interactiveLayers = ['inbound-lines', 'outbound-lines', 'temp-lines', 'forecast-layer'];
+                const interactiveLayers = ['inbound-lines', 'outbound-lines', 'forecast-layer'];
                 interactiveLayers.forEach(layer => {
                     // Check dynamically when mouse moves in case layer is added later
                     map.on('mousemove', (e) => {
@@ -664,7 +744,10 @@
             if(f.geometry && (f.geometry.type==='LineString'||f.geometry.type==='MultiLineString')){
                 const rid=(f.properties.route_id||'').toString().trim().toLowerCase();
                 if(!rid) return;
-                const L=lineLenKm(f.geometry);
+                // the network reports the routed distance; only fall back to measuring
+                // the drawn line when it is missing
+                const L=(typeof f.properties.distance_km==='number')
+                    ? f.properties.distance_km : lineLenKm(f.geometry);
                 const cur=ROUTEINFO[rid]||{origin:f.properties.origin,dest:f.properties.dest,distance_km:0};
                 if(L>cur.distance_km){
                     cur.distance_km=L;
@@ -889,7 +972,7 @@
     (function initAnalysis(){
         buildRouteInfo();
         fetchMeta();
-        const routeLayers=['inbound-lines','outbound-lines','temp-lines','forecast-layer'];
+        const routeLayers=['inbound-lines','outbound-lines','forecast-layer'];
         routeLayers.forEach(lid=>{
             map.on('click', lid, (e)=>{
                 if(!e.features||!e.features.length) return;
