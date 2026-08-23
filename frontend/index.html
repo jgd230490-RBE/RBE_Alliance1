@@ -635,7 +635,9 @@ function Matrix({ meta, who, editTarget }){
   useEffect(() => {
     let live = true;
     if(!routeId){ setVals({}); return; }
-    fetch(`${API}/forecasts`).then(r => r.json()).then(rows => {
+    // scoped to this route — this reloads on every route, year, discipline AND section
+    // change, and it used to pull the whole forecasts table each time
+    fetch(`${API}/forecasts?route_id=${encodeURIComponent(routeId)}`).then(r => r.json()).then(rows => {
       if(!live) return;
       const base = (year - months.start_year) * 12;
       // a route can now carry several lines in the same months, so the cells loaded are
@@ -1464,6 +1466,7 @@ function DataManagement({ meta, who }){
   const [rIpt, setRIpt] = useState("");
   const [routeBusy, setRouteBusy] = useState(false);
   const [routeMsg, setRouteMsg] = useState("");
+  const [bakeLegs, setBakeLegs] = useState("both");   // bulk bake: both legs or laden only
 
   // ---- location management (Phase 1) ----
   const [mode, setMode] = useState("view");        // 'view' | 'add' | 'edit'
@@ -2037,6 +2040,52 @@ function DataManagement({ meta, who }){
     } catch(e){ setRouteMsg("Delete failed: " + e.message); }
   };
 
+  // Bulk bake. The backend endpoint /api/admin/bake-routes never went away — only its
+  // UI did, when the bake panel was rehomed. That was fine while the network was already
+  // baked, but a cold network needs 107 routes x 2 legs per vehicle, and the per-route
+  // Bake button only uses the "Show" selector's vehicle on a route that has no geometry
+  // yet. So a manual sweep is 107 clicks AND silently does one profile.
+  //
+  // The endpoint works in batches of legs and reports what is left, so this loops until
+  // 'remaining' hits 0 rather than trying to do it in one request that would time out.
+  const bulkBake = async () => {
+    const profs = rVehicles.length ? rVehicles : [showProfile];
+    const legLabel = bakeLegs === "loaded" ? "laden leg only" : "both legs";
+    if(!confirm(
+      `Bake ${profs.length} vehicle profile(s) across the whole network, ${legLabel}?\n\n` +
+      `${profs.map(vehShort).join(", ")}\n\n` +
+      `This calls HERE once per route per leg and can take several minutes. Routes that ` +
+      `already have geometry are re-routed, so a promoted alternative will be reset to ` +
+      `HERE's own ranking.`)) return;
+
+    setRouteBusy(true);
+    try {
+      for(const prof of profs){
+        let guard = 0;                 // the endpoint is the authority on 'remaining';
+        while(guard++ < 200){          // this only stops a bug becoming an infinite loop
+          const q = new URLSearchParams({ profile: prof, limit: "30" });
+          if(bakeLegs === "loaded") q.set("legs", "loaded");
+          if(tokenRef.current) q.set("token", tokenRef.current);
+          const res = await fetch(`${API}/admin/bake-routes?${q}`, { method: "POST" });
+          if(!res.ok){
+            const t = await res.text();
+            throw new Error(res.status === 403 ? "admin token rejected" : `${res.status} ${t.slice(0,120)}`);
+          }
+          const j = await res.json();
+          const left = j.remaining ?? 0;
+          setRouteMsg(`Baking ${vehShort(prof)} — ${left} leg(s) remaining…`);
+          await reloadNetwork();
+          if(left <= 0) break;
+        }
+      }
+      await reloadNetwork();
+      setRouteMsg(`Bulk bake finished for ${profs.map(vehShort).join(", ")}. Check the Vehicles column for anything still amber or red.`);
+    } catch(e){
+      setRouteMsg("Bulk bake stopped: " + e.message + " — already-baked routes are kept, so you can run it again.");
+    }
+    setRouteBusy(false);
+  };
+
   const clearRoutes = async () => {
     if(!confirm("Clear ALL routes and their geometry? Locations are kept. This is for retiring the V2 seed and can't be undone.")) return;
     if(!confirm("Really clear every route? Type-check: this removes all of them.")) return;
@@ -2456,11 +2505,31 @@ function DataManagement({ meta, who }){
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
           <span className="text-sm font-semibold text-slate-700">Routes <span className="text-slate-400 font-normal">· click a row to locate it on the map</span></span>
-          <button onClick={clearRoutes} disabled={routeBusy || !(status && status.length)}
-            className="text-xs font-semibold px-2.5 py-1 rounded-md border border-slate-200 text-[color:var(--red)] hover:bg-red-50 disabled:opacity-40">
-            Clear all routes
-          </button>
+          <span className="flex items-center gap-2">
+            {/* Bulk bake. Vehicles come from the tick-boxes on the Create route panel so
+                there is one vehicle list on the tab rather than two that can disagree. */}
+            <select value={bakeLegs} onChange={e => setBakeLegs(e.target.value)} className={sel}
+              title="Both legs gives a cycle time. Laden only halves the HERE calls but leaves the return unbaked.">
+              <option value="both">Both legs</option>
+              <option value="loaded">Laden leg only</option>
+            </select>
+            <button onClick={bulkBake} disabled={routeBusy || !(status && status.length)}
+              title={rVehicles.length
+                ? `Bake the whole network for ${rVehicles.map(vehShort).join(", ")} — ticked on the Create route panel`
+                : `No vehicles ticked on the Create route panel — will use ${vehShort(showProfile)}`}
+              className="text-xs font-semibold px-2.5 py-1 rounded-md text-white disabled:opacity-40"
+              style={{ background: "var(--navy)" }}>
+              {routeBusy ? "Baking…" : `Bake all · ${(rVehicles.length || 1)} vehicle(s)`}
+            </button>
+            <button onClick={clearRoutes} disabled={routeBusy || !(status && status.length)}
+              className="text-xs font-semibold px-2.5 py-1 rounded-md border border-slate-200 text-[color:var(--red)] hover:bg-red-50 disabled:opacity-40">
+              Clear all routes
+            </button>
+          </span>
         </div>
+        {routeMsg && (
+          <div className="px-4 py-2 border-b border-slate-100 text-xs text-slate-600 bg-slate-50">{routeMsg}</div>
+        )}
         <div className="overflow-auto" style={{ maxHeight: "40vh" }}>
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0">
