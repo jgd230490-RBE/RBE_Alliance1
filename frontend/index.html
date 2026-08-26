@@ -489,7 +489,7 @@ function Login({ onSignIn, onBack, savedName }){
 // ================================================================= Portal (tabbed)
 function Portal({ role, who, meta, metaErr }){
   const canApprove = CAN_APPROVE[role];
-  const tabs = ["Dashboard", "Forecast Matrix", "My submissions", ...(canApprove ? ["Approvals", "Data Management"] : []), "Public Route Map"];
+  const tabs = ["Dashboard", "Submit Forecast", "My submissions", ...(canApprove ? ["Approvals", "Data Management"] : []), "Public Route Map"];
   const [tab, setTab] = useState("Dashboard");
   const [editTarget, setEditTarget] = useState(null);   // {routeId, year} handed to the Matrix
 
@@ -500,7 +500,7 @@ function Portal({ role, who, meta, metaErr }){
   }
   if(!meta) return <div className="p-8 text-center text-slate-400">Loading…</div>;
 
-  const editInMatrix = (target) => { setEditTarget(target); setTab("Forecast Matrix"); };
+  const editInMatrix = (target) => { setEditTarget(target); setTab("Submit Forecast"); };
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -519,7 +519,7 @@ function Portal({ role, who, meta, metaErr }){
       </nav>
       <div className="flex-1 min-h-0 overflow-auto">
         {tab === "Dashboard" && <Dashboard meta={meta} />}
-        {tab === "Forecast Matrix" && <Matrix meta={meta} who={who} editTarget={editTarget} />}
+        {tab === "Submit Forecast" && <Matrix meta={meta} who={who} editTarget={editTarget} />}
         {tab === "My submissions" && <MySubmissions meta={meta} who={who} onEdit={editInMatrix} />}
         {tab === "Approvals" && canApprove && <Approvals />}
         {tab === "Data Management" && canApprove && <DataManagement meta={meta} who={who} />}
@@ -685,6 +685,20 @@ function Matrix({ meta, who, editTarget }){
   const totalT = Object.entries(vals).reduce((a, [, q]) => a + toTonnes(q, unit, material, vehicle, factors), 0);
   const totalVeh = totalT / (effPayload || 1);
 
+  // Daily rates. A year total tells you nothing about whether a site gate can cope;
+  // the peak month divided by working days is the number that sizes the fleet.
+  const perDay = useMemo(() => {
+    const wd = (factors.planning && factors.planning.working_days_per_month) || 22;
+    const monthlyT = Object.entries(vals)
+      .map(([, q]) => toTonnes(q, unit, material, vehicle, factors))
+      .filter(t => t > 0);
+    if(!monthlyT.length || wd <= 0) return { avgT:0, peakT:0, avgVeh:0, peakVeh:0, months:0 };
+    const avgT = (monthlyT.reduce((a, b) => a + b, 0) / monthlyT.length) / wd;
+    const peakT = Math.max(...monthlyT) / wd;
+    const p = effPayload || 1;
+    return { avgT, peakT, avgVeh: avgT / p, peakVeh: peakT / p, months: monthlyT.length };
+  }, [vals, unit, material, vehicle, factors, effPayload]);
+
   const warnings = useMemo(() => {
     const entered = new Set(Object.keys(vals).filter(m => +vals[m] > 0).map(Number));
     return (seasonal_restrictions || [])
@@ -727,7 +741,7 @@ function Matrix({ meta, who, editTarget }){
   return (
     <div className="max-w-7xl mx-auto p-5">
       <div className="mb-4">
-        <h2 className="text-lg font-bold text-[color:var(--navy-deep)]">Forecast matrix</h2>
+        <h2 className="text-lg font-bold text-[color:var(--navy-deep)]">Submit forecast</h2>
         <p className="text-sm text-slate-500">Choose where the material moves from and to — the route reference fills in automatically.</p>
       </div>
 
@@ -822,8 +836,20 @@ function Matrix({ meta, who, editTarget }){
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Field label="Vehicle">
+            {/* Restricted to the vehicles this material category is actually carried in.
+                factors.json has carried that list all along — it was only being used to
+                pick a DEFAULT, while the dropdown still offered every vehicle, so an
+                Artic Flatbed could be chosen for aggregates. Anything outside the list
+                stays visible but disabled rather than vanishing, so a wrong saved value
+                is obvious instead of silently swapped. */}
             <select value={vehicle} onChange={e => setVehicle(e.target.value)} className={selCls}>
-              {vehicles.map(v => <option key={v}>{v}</option>)}
+              {vehicles.map(v => {
+                const fits = suggestedVehicles.includes(v);
+                return <option key={v} value={v} disabled={!fits && v !== vehicle}
+                  style={{ color: fits ? undefined : "#cbd5e1" }}>
+                  {v}{fits ? "" : " · not used for this material"}
+                </option>;
+              })}
             </select>
           </Field>
           <Field label="Input unit">
@@ -868,6 +894,12 @@ function Matrix({ meta, who, editTarget }){
           <Stat label={`Year total (${unit === "m3" ? "m³" : unit})`} value={fmt(totalUnit, unit)} />
           <Stat label="≈ tonnes" value={fmt(totalT, "t")} />
           <Stat label="≈ vehicle loads" value={fmt(totalVeh, "vehicles")} tone="var(--navy)" />
+          {/* Per working DAY, not per calendar day — the peak month is what sizes a
+              fleet and a site gate, and an annual total hides it entirely. Averaged
+              across the months actually entered, not across all twelve. */}
+          <Stat label="Avg / day" value={`${fmt(perDay.avgVeh, "vehicles")} veh · ${fmt(perDay.avgT, "t")} t`} />
+          <Stat label="Peak month / day" value={`${fmt(perDay.peakVeh, "vehicles")} veh · ${fmt(perDay.peakT, "t")} t`}
+            tone="var(--red)" />
           <span className="text-xs text-slate-400 self-center">
             {volumeOk ? `${density(factors, material)} t/m³ · ` : ""}
             {`${payload(factors, vehicle)} t/load`}
@@ -937,9 +969,11 @@ function MySubmissions({ meta, who, onEdit }){
         routeId: r.route_id, year, discipline: disc, sectionId: sect,
         statuses: new Set(), material: r.material_type,
         material_description: r.material_description, vehicle: r.vehicle_type,
-        unit: r.unit, months: 0,
+        unit: r.unit, months: 0, quantity: 0, rejectReason: null,
       });
       e.statuses.add(r.status); e.months += 1;
+      e.quantity += (+r.quantity || 0);
+      if(r.reject_reason && !e.rejectReason) e.rejectReason = r.reject_reason;
     });
     return Object.values(g)
       .map(e => ({ ...e, status: e.statuses.size === 1 ? [...e.statuses][0] : "Mixed" }))
@@ -970,6 +1004,32 @@ function MySubmissions({ meta, who, onEdit }){
     return <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: c, background: bg }}>{s}</span>;
   };
 
+  // CSV export. Built and downloaded in the browser — no server round trip, and no
+  // dependency on a spreadsheet library.
+  const exportCsv = () => {
+    const cols = ["Route", "From", "To", "Year", "Discipline", "Section", "Material",
+                  "Description", "Vehicle", "Unit", "Quantity", "Months", "Status",
+                  "Rejection reason"];
+    const esc = (v) => {
+      const s = (v == null ? "" : String(v));
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [cols.join(",")];
+    groups.forEach(g => {
+      const r = routeById[g.routeId] || {};
+      lines.push([g.routeId, r.origin || "", r.dest || "", g.year, g.discipline || "",
+                  g.sectionId || "", g.material || "", g.material_description || "",
+                  g.vehicle || "", g.unit || "", Math.round(g.quantity * 10) / 10,
+                  g.months, g.status, g.rejectReason || ""].map(esc).join(","));
+    });
+    const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `my-submissions-${who || "export"}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+
   if(!who) return <div className="max-w-3xl mx-auto p-8 text-center text-slate-500">Sign in with your name to see and edit your submissions.</div>;
   if(err) return <div className="p-8 text-center text-slate-500">Couldn't load your submissions.</div>;
   if(!rows) return <div className="p-8 text-center text-slate-400">Loading your submissions…</div>;
@@ -980,10 +1040,18 @@ function MySubmissions({ meta, who, onEdit }){
         <h2 className="text-lg font-bold text-[color:var(--navy-deep)]">My submissions</h2>
         <p className="text-sm text-slate-500">Forecasts submitted as <span className="font-medium text-slate-700">{who}</span>. Edit re-opens a route in the matrix; a revised forecast is re-sent for approval.</p>
       </div>
+      {groups.length > 0 && (
+        <div className="flex justify-end mb-2">
+          <button onClick={exportCsv}
+            className="text-xs font-semibold px-2.5 py-1 rounded-md border border-slate-200 hover:bg-slate-50">
+            Export CSV
+          </button>
+        </div>
+      )}
 
       {groups.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-500">
-          You haven't submitted any forecasts yet. Head to the <span className="font-medium">Forecast Matrix</span> to add one.
+          You haven't submitted any forecasts yet. Head to <span className="font-medium">Submit Forecast</span> to add one.
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -1020,7 +1088,15 @@ function MySubmissions({ meta, who, onEdit }){
                       <td className="px-3 py-2 text-slate-600">{g.material}{g.material_description ? <span className="text-slate-400"> · {g.material_description}</span> : null}</td>
                       <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{g.vehicle}</td>
                       <td className="px-3 py-2 text-center tabular-nums">{g.months}</td>
-                      <td className="px-3 py-2">{badge(g.status)}</td>
+                      <td className="px-3 py-2">
+                        {badge(g.status)}
+                        {/* a rejection without its reason is just a dead end */}
+                        {g.rejectReason && (
+                          <div className="text-[11px] mt-1 max-w-[240px]" style={{ color: "var(--red)" }}>
+                            {g.rejectReason}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         <button onClick={() => onEdit({ routeId: g.routeId, year: g.year, discipline: g.discipline, sectionId: g.sectionId })}
                           className="text-[color:var(--navy)] font-semibold hover:underline mr-3">Edit</button>
@@ -1804,7 +1880,7 @@ function DataManagement({ meta, who }){
     setSubTab("locations");
     setSelected(null); setLocMsg("");
     setForm({ id: null, name: "", role: "origin", loc_type: "Quarry", supplies: [], receives: [],
-      lat: "", lon: "", gate_lat: "", gate_lon: "" });
+      vendor: "", detail: "", lat: "", lon: "", gate_lat: "", gate_lon: "" });
     setMode("add");
   };
   const openEditForNode = (id) => {
@@ -1817,6 +1893,7 @@ function DataManagement({ meta, who }){
       supplies, receives: asArray(p.receives),
       lat: feat.geometry.coordinates[1], lon: feat.geometry.coordinates[0],
       // blank means no gate surveyed — routing falls back to the marker above
+      vendor: p.vendor || "", detail: p.detail || "",
       gate_lat: p.gate_lat == null ? "" : p.gate_lat,
       gate_lon: p.gate_lon == null ? "" : p.gate_lon });
     setMode("edit");
@@ -1847,6 +1924,8 @@ function DataManagement({ meta, who }){
     supplies: f.role === "destination" ? [] : (f.supplies || []),
     receives: f.role === "origin" ? [] : (f.receives || []),
     materials: f.role === "destination" ? [] : (f.supplies || []),
+    vendor: (f.vendor || "").trim() || null,
+    detail: (f.detail || "").trim() || null,
     lat, lon, ...gateFrom(f),
   });
 
@@ -1911,6 +1990,9 @@ function DataManagement({ meta, who }){
     const body = {
       name: p.name || id, role: p.role || "both", loc_type: p.loc_type || p.role || "both",
       supplies, receives: asArray(p.receives), materials: supplies,
+      // this body is a full replace, so omitting these would clear an operator name
+      // just because someone nudged the marker
+      vendor: p.vendor || null, detail: p.detail || null,
       lat: +(+lat).toFixed(6), lon: +(+lng).toFixed(6),
       // carry the existing gate through — this body is a full replace, so omitting it
       // would clear a surveyed gate just because someone nudged the marker
@@ -2295,6 +2377,24 @@ function DataManagement({ meta, who }){
                   </label>
                 </div>
 
+                {/* Operator and free-text detail. Salvaged out of a1_data.js before that
+                    file was retired — the quarry operator existed nowhere else in the
+                    system — and editable here so it stays current. */}
+                <div className="grid grid-cols-1 gap-2">
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">Operator / company</span>
+                    <input value={form.vendor} onChange={e => setField("vendor", e.target.value)}
+                      placeholder="e.g. OÜ Eesti Killustik"
+                      className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">Detail / notes</span>
+                    <input value={form.detail} onChange={e => setField("detail", e.target.value)}
+                      placeholder="e.g. Limestone - rockfill"
+                      className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                  </label>
+                </div>
+
                 {/* Access gate — where trucks actually join the road, which for a big
                     site is nowhere near the marker in the middle of it. Optional: left
                     blank, routing uses the coordinates above. */}
@@ -2608,13 +2708,22 @@ function Approvals(){
   const load = () => fetch(`${API}/forecasts/summary`).then(r => r.json()).then(setRows).catch(() => setRows([]));
   useEffect(() => { load(); }, []);
 
-  const setStatus = (routeId, status) => {
+  // A rejection now REQUIRES a reason. It was optional, and — worse — the reason was
+  // stored and then never shown anywhere, so a submitter saw "Rejected" and nothing else.
+  // Approvals and withdrawals are scoped to the line, not the whole route, since a route
+  // can carry several disciplines.
+  const setStatus = (row, status) => {
     let reason = null;
     if(status === "Rejected"){
-      reason = window.prompt("Reason for rejection (optional):") || "";
+      reason = (window.prompt(
+        `Why is ${row.route_id}${row.discipline ? " · " + row.discipline : ""} being rejected?\n` +
+        `The submitter sees this, so say what needs to change.`) || "").trim();
+      if(!reason){ alert("A rejection needs a reason — nothing was changed."); return; }
     }
-    setBusy(routeId);
-    fetch(`${API}/routes/${encodeURIComponent(routeId)}/status`, {
+    const key = `${row.route_id}|${row.discipline || ""}|${row.section_id || ""}`;
+    setBusy(key);
+    const p = new URLSearchParams({ discipline: row.discipline || "", section_id: row.section_id || "" });
+    fetch(`${API}/routes/${encodeURIComponent(row.route_id)}/status?${p}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status, reject_reason: reason }),
     }).then(() => load()).finally(() => setBusy(""));
@@ -2647,6 +2756,7 @@ function Approvals(){
           <thead>
             <tr className="text-left text-slate-500 border-b border-slate-200 bg-slate-50">
               <th className="px-4 py-3 font-semibold">Route</th>
+              <th className="px-4 py-3 font-semibold">Discipline</th>
               <th className="px-4 py-3 font-semibold">Material · Vehicle</th>
               <th className="px-4 py-3 font-semibold">Window</th>
               <th className="px-4 py-3 font-semibold text-right">Total (veh)</th>
@@ -2655,23 +2765,40 @@ function Approvals(){
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
-              <tr key={r.route_id} className="border-b border-slate-100 last:border-0">
+            {rows.map(r => {
+              const key = `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}`;
+              return (
+              <tr key={key} className="border-b border-slate-100 last:border-0">
                 <td className="px-4 py-3 font-medium text-[color:var(--navy-deep)]">{r.route_id}</td>
+                <td className="px-4 py-3">
+                  {r.discipline
+                    ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                        style={{ background:"rgba(0,55,135,.08)", color:"var(--navy)" }}
+                        title={r.section_id ? `Section ${r.section_id}` : "No section set"}>{r.discipline}</span>
+                    : <span className="text-slate-300">—</span>}
+                </td>
                 <td className="px-4 py-3 text-slate-600">{r.material_type} · {r.vehicle_type}</td>
                 <td className="px-4 py-3 text-slate-600">{r.span} <span className="text-slate-400">({r.month_count} mo)</span></td>
                 <td className="px-4 py-3 text-right tabular-nums">{r.total_vehicles.toLocaleString()}</td>
-                <td className="px-4 py-3">{badge(r.status)}</td>
+                <td className="px-4 py-3">
+                  {badge(r.status)}
+                  {/* the reason was being stored and never shown to anyone */}
+                  {r.reject_reason && (
+                    <div className="text-[11px] mt-1 max-w-[220px]" style={{ color: "var(--red)" }}
+                      title={r.reject_reason}>{r.reject_reason}</div>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
-                  <button disabled={busy === r.route_id} onClick={() => setStatus(r.route_id, "Approved")}
+                  <button disabled={busy === key} onClick={() => setStatus(r, "Approved")}
                     className="px-3 py-1.5 rounded-md text-white text-xs font-semibold mr-1 disabled:opacity-50"
                     style={{background:"var(--green)"}}>Approve</button>
-                  <button disabled={busy === r.route_id} onClick={() => setStatus(r.route_id, "Rejected")}
+                  <button disabled={busy === key} onClick={() => setStatus(r, "Rejected")}
                     className="px-3 py-1.5 rounded-md text-white text-xs font-semibold disabled:opacity-50"
                     style={{background:"var(--red)"}}>Reject</button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
