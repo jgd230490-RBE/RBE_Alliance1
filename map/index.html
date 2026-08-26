@@ -127,8 +127,8 @@
 
     <div class="control-group">
         <h3>Haul routes</h3>
-        <div class="control-item"><label><input type="checkbox" id="layer-inbound" checked onchange="applyFilters()"> Laden (out)</label><span class="color-dot" style="background:#003787;"></span></div>
-        <div class="control-item"><label><input type="checkbox" id="layer-outbound" checked onchange="applyFilters()"> Empty (return)</label><span class="color-dot" style="background:#6D28D9;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-inbound" checked onchange="applyFilters()"> Laden (out)</label><span class="color-dot" style="background:#039E86;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-outbound" checked onchange="applyFilters()"> Empty (return)</label><span class="color-dot" style="background:#f59e0b;"></span></div>
         <!-- Temporary haul removed: the network stores only a scalar origin_temp_km per
              route, no geometry, so there is nothing real to draw. Returns in Phase 4 as
              drawn polylines edited on the route itself. -->
@@ -137,7 +137,9 @@
 </div>
 
 <div id="timeline-bar">
+  <button class="tl-btn" id="tl-prev" onclick="stepTimeline(-1)" title="Previous month">◀</button>
   <button class="tl-btn" id="tl-play" onclick="toggleTimeline()" title="Play / pause">▶</button>
+  <button class="tl-btn" id="tl-next" onclick="stepTimeline(1)" title="Next month">▶▶</button>
   <input type="range" id="tl-range" min="1" max="60" value="1" oninput="onTimelineScrub(this.value)">
   <span id="tl-label">Jan 2026</span>
   <button class="tl-close" onclick="closeTimeline()" title="Close timeline">&times;</button>
@@ -258,6 +260,11 @@
             inVis ? ['all', ['==', ['get', 'type'], 'Inbound Highway'], ...filterArr.slice(1)] : none);
         if (map.getLayer('outbound-lines')) map.setFilter('outbound-lines',
             outVis ? ['all', ['==', ['get', 'type'], 'Outbound Highway'], ...filterArr.slice(1)] : none);
+        // arrows carry the same filter as the line they belong to
+        if (map.getLayer('inbound-arrows')) map.setFilter('inbound-arrows',
+            inVis ? ['all', ['==', ['get', 'type'], 'Inbound Highway'], ...filterArr.slice(1)] : none);
+        if (map.getLayer('outbound-arrows')) map.setFilter('outbound-arrows',
+            outVis ? ['all', ['==', ['get', 'type'], 'Outbound Highway'], ...filterArr.slice(1)] : none);
     }
 
     function resetFilters() {
@@ -303,7 +310,7 @@
             'source': 'routes-source',
             'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
             'paint': { 
-                'line-color': '#003787', 
+                'line-color': '#039E86', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 6], 
                 'line-opacity': 1,
                 'line-offset': ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4]
@@ -331,7 +338,7 @@
             'source': 'routes-source',
             'filter': ['==', ['get', 'type'], 'Outbound Highway'], 
             'paint': { 
-                'line-color': '#6D28D9', 
+                'line-color': '#f59e0b', 
                 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 6], 
                 'line-opacity': 1,
                 'line-offset': ['interpolate', ['linear'], ['zoom'], 7, 1, 12, 4]
@@ -344,6 +351,33 @@
         // a straight line of that length would be a fabricated shape on a map where
         // every other line is surveyed. They return in Phase 4 as real drawn polylines,
         // editable on the route itself.
+
+        // Direction of travel, from zoom 12 in. symbol-placement 'line' repeats the
+        // glyph along the geometry and rotates it to the bearing, so laden-out and
+        // empty-back read as opposite flows rather than two parallel lines.
+        ['inbound', 'outbound'].forEach(dir => {
+            const id = dir + '-arrows';
+            if (map.getLayer(id)) return;
+            map.addLayer({
+                id, type: 'symbol', source: 'routes-source', minzoom: 12,
+                filter: ['==', ['get', 'type'],
+                         dir === 'inbound' ? 'Inbound Highway' : 'Outbound Highway'],
+                layout: {
+                    'symbol-placement': 'line',
+                    'symbol-spacing': 90,
+                    'text-field': '▶',
+                    'text-size': 11,
+                    'text-keep-upright': false,
+                    'text-allow-overlap': false,
+                    'text-offset': [0, dir === 'inbound' ? -0.35 : 0.35],
+                },
+                paint: {
+                    'text-color': dir === 'inbound' ? '#039E86' : '#f59e0b',
+                    'text-halo-color': '#ffffff',
+                    'text-halo-width': 1.4,
+                },
+            });
+        });
 
         // Alignment thinner (1.5)
         map.addLayer({ 'id': 'rail-alignment', 'type': 'line', 'source': 'alignment-source', 'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' }, 'paint': { 'line-color': '#000000', 'line-width': 1.5 } });
@@ -527,7 +561,10 @@
                 let targetSource = allSources.find(s => s.includes('route') || s.includes('a1')) || 'routes';
 
                 const applySolidColors = () => {
-                    // Force Solid Colors on Baseline Routes
+                    // Restores the base scheme. It used to CHANGE it — navy/amber-purple
+                    // became green/amber the moment the forecast overlay was switched on,
+                    // while the sidebar key still showed the old colours. The base layers
+                    // are green/amber now, so this only resets opacity after a highlight.
                     if (map.getLayer('inbound-lines')) {
                         map.setPaintProperty('inbound-lines', 'line-color', '#039E86'); 
                         map.setPaintProperty('inbound-lines', 'line-opacity', 1.0);
@@ -968,6 +1005,13 @@
     function stopTimeline(){ TL.playing=false; const b=document.getElementById('tl-play'); if(b) b.textContent='\u25B6'; if(TL.timer){ clearInterval(TL.timer); TL.timer=null; } }
     function setTimelineMonth(m){ TL.month=m; const r=document.getElementById('tl-range'); if(r) r.value=m; renderMonthFrame(m); }
     function onTimelineScrub(v){ stopTimeline(); setTimelineMonth(parseInt(v)); }
+    // step one month at a time — scrubbing a 60-wide slider by hand cannot reliably
+    // land on a single month
+    function stepTimeline(delta){
+        stopTimeline();
+        const max = CONFIG.MONTH_COUNT || 60;
+        setTimelineMonth(Math.min(max, Math.max(1, (TL.month || 1) + delta)));
+    }
 
     (function initAnalysis(){
         buildRouteInfo();
