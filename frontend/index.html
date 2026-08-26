@@ -1128,11 +1128,27 @@ const ALT_COLOR = "#94A3B8";
 const MAP_H = "62vh";     // map height — the right-hand column matches it and scrolls inside
 const NODE_COLORS = { "Quarry": "#C6841D", "Port": "#003787", "Compound": "#039E86", "Site": "#6D28D9" };
 
-// The two sub-tabs share one map, so instead of toggling layers we lean the styling
-// towards whichever half is in focus. Applied on add and re-applied after a basemap swap.
+// Phase 3 zones. The colour carries the only distinction that matters at a glance:
+// red means the router is steered away from this area, grey means it is drawn for
+// information and HERE never hears about it.
+const ZONE_ROUTING = "#BF2E55";
+const ZONE_ADVISORY = "#64748B";
+const ZONE_KINDS = [
+  ["closure", "Road closure"],
+  ["weight_limit", "Weight / height limit"],
+  ["works", "Works area"],
+  ["haul_road", "Haul road (Phase 4)"],
+  ["other", "Other"],
+];
+
+// The sub-tabs share one map, so instead of toggling layers we lean the styling towards
+// whichever half is in focus. Applied on add and re-applied after a basemap swap.
+// Zones borrow the Locations weighting: routes stay legible but recede, so the shape
+// being drawn over them is what reads.
 const EMPHASIS = {
   locations: { route: 2, routeOp: 0.45, casingOp: 0.30, node: 7, nodeStroke: 2 },
   routes:    { route: 3, routeOp: 1.00, casingOp: 0.85, node: 5, nodeStroke: 1.5 },
+  zones:     { route: 2, routeOp: 0.55, casingOp: 0.35, node: 5, nodeStroke: 1.5 },
 };
 
 function nodeExpr(){
@@ -1486,6 +1502,8 @@ function DataManagement({ meta, who }){
   const selFC = useRef({ type: "FeatureCollection", features: [] });
   const altFC = useRef({ type: "FeatureCollection", features: [] });
   const newFC = useRef({ type: "FeatureCollection", features: [] });   // provisional add marker
+  const zonesFC = useRef({ type: "FeatureCollection", features: [] }); // saved zones (Phase 3)
+  const drawFC = useRef({ type: "FeatureCollection", features: [] });  // the shape being drawn
   const geoCache = useRef({});
   const [mapReady, setMapReady] = useState(false);
   const [status, setStatus] = useState(null);
@@ -1544,6 +1562,19 @@ function DataManagement({ meta, who }){
   const [routeMsg, setRouteMsg] = useState("");
   const [bakeLegs, setBakeLegs] = useState("both");   // bulk bake: both legs or laden only
 
+  // ---- zones (Phase 3): geofencing and disruptions in one table ----
+  const [zoneList, setZoneList] = useState([]);
+  const [zoneForm, setZoneForm] = useState(null);   // null = not editing
+  const [zoneMsg, setZoneMsg] = useState("");
+  const [zoneBusy, setZoneBusy] = useState(false);
+  const [zoneSel, setZoneSel] = useState(null);     // highlighted zone id
+  // 'view' | 'draw'. Drawing collects vertices from map clicks into drawPts; nothing is
+  // sent until Save, so an abandoned draw costs nothing.
+  const [zoneDraw, setZoneDraw] = useState(false);
+  const [drawPts, setDrawPts] = useState([]);
+  const zoneDrawRef = useRef(false);
+  useEffect(() => { zoneDrawRef.current = zoneDraw; }, [zoneDraw]);
+
   // ---- location management (Phase 1) ----
   const [mode, setMode] = useState("view");        // 'view' | 'add' | 'edit'
   const [form, setForm] = useState(null);          // {id?, name, role, loc_type, supplies[], receives[], lat, lon}
@@ -1590,6 +1621,9 @@ function DataManagement({ meta, who }){
     if(!m.getSource("alts")) m.addSource("alts", { type: "geojson", data: altFC.current });
     if(!m.getSource("selnode")) m.addSource("selnode", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     if(!m.getSource("newnode")) m.addSource("newnode", { type: "geojson", data: newFC.current });
+    // Phase 3 zones: the saved shapes, and the one currently being drawn
+    if(!m.getSource("zones")) m.addSource("zones", { type: "geojson", data: zonesFC.current });
+    if(!m.getSource("draw")) m.addSource("draw", { type: "geojson", data: drawFC.current });
     // failed routes share the source but are filtered apart, so an unroutable pair is
     // visibly impossible rather than simply absent
     if(!m.getLayer("route-casing")) m.addLayer({ id: "route-casing", type: "line", source: "routes",
@@ -1613,6 +1647,27 @@ function DataManagement({ meta, who }){
       paint: { "circle-radius": 5, "circle-color": nodeExpr(), "circle-stroke-width": 1.5, "circle-stroke-color": "#fff" } });
     if(!m.getLayer("newnode-dot")) m.addLayer({ id: "newnode-dot", type: "circle", source: "newnode",
       paint: { "circle-radius": 8, "circle-color": "#FFC101", "circle-stroke-width": 3, "circle-stroke-color": "#003787", "circle-opacity": 0.95 } });
+    // Zone fills go on last so they sit above the routes: the whole point is seeing which
+    // lines cross one. A routing zone reads red, an advisory one grey — the colour is the
+    // difference between "the router avoids this" and "look at this".
+    if(!m.getLayer("zone-fill")) m.addLayer({ id: "zone-fill", type: "fill", source: "zones",
+      filter: ["==", ["geometry-type"], "Polygon"],
+      paint: { "fill-color": ["case", ["get", "affects_routing"], ZONE_ROUTING, ZONE_ADVISORY],
+               "fill-opacity": ["case", ["get", "in_force"], 0.22, 0.07] } });
+    if(!m.getLayer("zone-outline")) m.addLayer({ id: "zone-outline", type: "line", source: "zones",
+      paint: { "line-color": ["case", ["get", "affects_routing"], ZONE_ROUTING, ZONE_ADVISORY],
+               "line-width": ["case", ["get", "selected"], 3.5, 2],
+               // a zone that is out of its date window is dashed, not hidden — it still
+               // explains a bake that happened while it applied
+               "line-dasharray": ["case", ["get", "in_force"], ["literal", [1, 0]], ["literal", [2, 2]]] } });
+    if(!m.getLayer("zone-label")) m.addLayer({ id: "zone-label", type: "symbol", source: "zones",
+      layout: { "text-field": ["get", "name"], "text-size": 11, "symbol-placement": "point" },
+      paint: { "text-color": "#334155", "text-halo-color": "#ffffff", "text-halo-width": 2 } });
+    if(!m.getLayer("draw-line")) m.addLayer({ id: "draw-line", type: "line", source: "draw",
+      paint: { "line-color": "#BF2E55", "line-width": 2.5, "line-dasharray": [2, 1.5] } });
+    if(!m.getLayer("draw-vertex")) m.addLayer({ id: "draw-vertex", type: "circle", source: "draw",
+      filter: ["==", ["geometry-type"], "Point"],
+      paint: { "circle-radius": 5, "circle-color": "#fff", "circle-stroke-width": 2.5, "circle-stroke-color": "#BF2E55" } });
     applyEmphasis(m);   // a basemap switch resets paint, so re-lean towards the active sub-tab
   };
 
@@ -1657,8 +1712,11 @@ function DataManagement({ meta, who }){
         m.on("mousemove", onMove);
         m.once("mouseup", onUp);
       });
-      // unified click: place (add mode) / select node / select route
+      // unified click: add a zone vertex / place (add mode) / select node / select route.
+      // Zone drawing is checked first because it takes over the map entirely — while it
+      // is on, a click must never also select a route underneath the shape being drawn.
       m.on("click", (e) => {
+        if(zoneDrawRef.current){ (cbRef.current.addVertex || (()=>{}))(e.lngLat.lng, e.lngLat.lat); return; }
         if(modeRef.current === "add"){ (cbRef.current.placeAt || (()=>{}))(e.lngLat.lng, e.lngLat.lat); return; }
         if(justDragged.current) return;
         const box = [[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]];
@@ -2185,11 +2243,211 @@ function DataManagement({ meta, who }){
     setRouteBusy(false);
   };
 
+  // ================================================================ zones (Phase 3)
+  // Drawing is hand-rolled rather than mapbox-gl-draw: clicks append vertices, Save
+  // closes the ring. That keeps the "one Mapbox instance, no build step, no extra CDN"
+  // architecture intact and avoids coupling to a plugin version. The cost is no
+  // vertex-level editing — to change a shape you redraw it. If nudging single corners
+  // becomes necessary, mapbox-gl-draw is the upgrade and it drops into this same source.
+  const reloadZones = () =>
+    fetch(`${API}/zones`).then(r => r.json()).then(j => { setZoneList(j.zones || []); return j; });
+
+  useEffect(() => { reloadZones().catch(() => setZoneList([])); }, []);
+
+  const todayISO = () => new Date().toISOString().slice(0, 10);
+
+  // a zone is in force if it is active and today falls inside its (open-ended) window
+  const zoneInForce = (z) => {
+    if(!z || !z.active) return false;
+    const t = todayISO();
+    if(z.starts_on && t < z.starts_on) return false;
+    if(z.ends_on && t > z.ends_on) return false;
+    return true;
+  };
+
+  const ringOf = (pts) => {
+    const r = pts.map(p => [p[0], p[1]]);
+    if(r.length && (r[0][0] !== r[r.length-1][0] || r[0][1] !== r[r.length-1][1])) r.push([r[0][0], r[0][1]]);
+    return r;
+  };
+
+  const addVertex = (lng, lat) => setDrawPts(p => p.concat([[lng, lat]]));
+  const undoVertex = () => setDrawPts(p => p.slice(0, -1));
+  cbRef.current.addVertex = addVertex;
+
+  const blankZone = () => ({
+    id: null, name: "", kind: "closure", affects_routing: true,
+    starts_on: "", ends_on: "", note: "", active: true,
+  });
+
+  const startNewZone = () => {
+    setZoneForm(blankZone()); setDrawPts([]); setZoneDraw(true);
+    setZoneSel(null); setZoneMsg("Click the map to place corners — at least three. Save closes the shape.");
+  };
+
+  const editZone = (z) => {
+    setZoneForm({ id: z.id, name: z.name || "", kind: z.kind || "other",
+                  affects_routing: !!z.affects_routing, starts_on: z.starts_on || "",
+                  ends_on: z.ends_on || "", note: z.note || "", active: !!z.active });
+    setZoneSel(z.id);
+    // load the existing outline as editable vertices, dropping the repeated closing point
+    const c = (z.geometry && z.geometry.coordinates) || [];
+    const ring = (z.geometry && z.geometry.type === "Polygon") ? (c[0] || []) : c;
+    const pts = ring.slice();
+    if(pts.length > 1 && pts[0][0] === pts[pts.length-1][0] && pts[0][1] === pts[pts.length-1][1]) pts.pop();
+    setDrawPts(pts);
+    setZoneDraw(false);
+    setZoneMsg("");
+    const m = mapObj.current;
+    if(m && pts.length) { try { m.fitBounds(boundsOf(pts), { padding: 80, maxZoom: 13, duration: 600 }); } catch(e){} }
+  };
+
+  const cancelZone = () => { setZoneForm(null); setDrawPts([]); setZoneDraw(false); setZoneMsg(""); };
+
+  const setZField = (k, v) => setZoneForm(f => ({ ...f, [k]: v }));
+
+  // After a zone write the backend has already CLEARED the geometry it invalidated; it
+  // does not call HERE. Re-baking is this loop, which is the same /api/admin/bake-routes
+  // batch loop the bulk-bake button uses — after invalidation the only legs missing
+  // geometry are exactly the ones that were cleared, so it re-routes those and nothing
+  // else. Doing it server-side inside the write request would block one HTTP call on
+  // dozens of HERE round trips and time out on Render.
+  const rebakeAfterZone = async (inval) => {
+    const legs = (inval && inval.legs) || [];
+    if(!legs.length) return "";
+    const profs = Array.from(new Set(legs.map(l => l.vehicle_profile)));
+    let done = 0;
+    for(const prof of profs){
+      let guard = 0;
+      while(guard++ < 200){
+        const q = new URLSearchParams({ profile: prof, limit: "30" });
+        if(tokenRef.current) q.set("token", tokenRef.current);
+        const res = await fetch(`${API}/admin/bake-routes?${q}`, { method: "POST" });
+        if(!res.ok){
+          const t = await res.text();
+          throw new Error(res.status === 403 ? "admin token rejected" : `${res.status} ${t.slice(0,120)}`);
+        }
+        const j = await res.json();
+        done += j.baked || 0;
+        setZoneMsg(`Re-routing ${vehShort(prof)} — ${j.remaining ?? 0} leg(s) left…`);
+        if((j.remaining ?? 0) <= 0) break;
+      }
+    }
+    await reloadNetwork();
+    return ` Re-routed ${done} leg(s) across ${profs.length} vehicle profile(s).`;
+  };
+
+  const saveZone = async () => {
+    if(!zoneForm) return;
+    if(!zoneForm.name.trim()){ setZoneMsg("Give the zone a name."); return; }
+    if(drawPts.length < 3){ setZoneMsg("A zone needs at least three corners."); return; }
+    const body = {
+      name: zoneForm.name.trim(),
+      geometry: { type: "Polygon", coordinates: [ringOf(drawPts)] },
+      kind: zoneForm.kind, affects_routing: !!zoneForm.affects_routing,
+      starts_on: zoneForm.starts_on || null, ends_on: zoneForm.ends_on || null,
+      note: zoneForm.note || null, active: !!zoneForm.active,
+    };
+    setZoneBusy(true); setZoneMsg("Saving…");
+    try {
+      const qs = tokenRef.current ? `?token=${encodeURIComponent(tokenRef.current)}` : "";
+      const url = zoneForm.id ? `${API}/admin/zones/${encodeURIComponent(zoneForm.id)}${qs}`
+                              : `${API}/admin/zones${qs}`;
+      const res = await fetch(url, {
+        method: zoneForm.id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if(!res.ok){ const t = await res.text(); throw new Error(`${res.status} ${t.slice(0,160)}`); }
+      const j = await res.json();
+      await reloadZones();
+      const inv = j.invalidated || {};
+      let msg = `Saved ${(j.zone && j.zone.id) || ""}.`;
+      if(inv.leg_count) msg += ` ${inv.leg_count} baked leg(s) invalidated — re-routing now.`;
+      setZoneMsg(msg);
+      if(inv.leg_count) msg += await rebakeAfterZone(inv);
+      if(inv.approximate) msg += ` ${inv.approximate} of those were matched approximately (baked before zones existed, so there is no record of what they avoided).`;
+      setZoneMsg(msg);
+      setZoneForm(null); setDrawPts([]); setZoneDraw(false);
+    } catch(e){ setZoneMsg("Save failed: " + e.message); }
+    setZoneBusy(false);
+  };
+
+  const removeZone = async (z) => {
+    // show the HERE bill before spending it — /impact is a dry run
+    let impact = null;
+    try {
+      const qs = tokenRef.current ? `?token=${encodeURIComponent(tokenRef.current)}` : "";
+      const r = await fetch(`${API}/admin/zones/${encodeURIComponent(z.id)}/impact${qs}`);
+      if(r.ok) impact = (await r.json()).would_invalidate;
+    } catch(e){}
+    const calls = impact ? impact.here_calls : null;
+    if(!confirm(
+      `Delete zone ${z.id} "${z.name}"?\n\n` +
+      (calls === null ? "Could not check what this invalidates — the re-bake may be large.\n\n"
+                      : `${calls} baked leg(s) will be cleared and re-routed — that is ${calls} HERE call(s).\n\n`) +
+      "Deactivating instead (untick Active) stops it steering the router but keeps the record of why past bakes went the way they did.")) return;
+    setZoneBusy(true); setZoneMsg("Deleting…");
+    try {
+      const qs = tokenRef.current ? `?token=${encodeURIComponent(tokenRef.current)}` : "";
+      const res = await fetch(`${API}/admin/zones/${encodeURIComponent(z.id)}${qs}`, { method: "DELETE" });
+      if(!res.ok){ const t = await res.text(); throw new Error(`${res.status} ${t.slice(0,160)}`); }
+      const j = await res.json();
+      await reloadZones();
+      const inv = j.invalidated || {};
+      let msg = `Deleted ${z.id}.`;
+      if(inv.leg_count) msg += ` ${inv.leg_count} leg(s) invalidated — re-routing now.`;
+      setZoneMsg(msg);
+      if(inv.leg_count) msg += await rebakeAfterZone(inv);
+      setZoneMsg(msg);
+      if(zoneSel === z.id) setZoneSel(null);
+      if(zoneForm && zoneForm.id === z.id) cancelZone();
+    } catch(e){ setZoneMsg("Delete failed: " + e.message); }
+    setZoneBusy(false);
+  };
+
+  // push saved zones to the map
+  useEffect(() => {
+    const m = mapObj.current; if(!m || !mapReady) return;
+    const s = m.getSource("zones"); if(!s) return;
+    zonesFC.current = {
+      type: "FeatureCollection",
+      features: (zoneList || []).filter(z => z.geometry).map(z => ({
+        type: "Feature",
+        properties: { id: z.id, name: z.name, kind: z.kind,
+                      affects_routing: !!z.affects_routing,
+                      in_force: zoneInForce(z), selected: z.id === zoneSel },
+        geometry: z.geometry,
+      })),
+    };
+    s.setData(zonesFC.current);
+  }, [zoneList, zoneSel, mapReady]);
+
+  // push the in-progress shape to the map: the outline plus a dot per corner
+  useEffect(() => {
+    const m = mapObj.current; if(!m || !mapReady) return;
+    const s = m.getSource("draw"); if(!s) return;
+    const feats = drawPts.map(p => ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: p } }));
+    if(drawPts.length >= 2){
+      // drawn as a closed ring from three corners on, so what you see while placing is
+      // the shape that will be saved rather than an open chain that jumps shut on Save
+      const line = drawPts.length >= 3 ? ringOf(drawPts) : drawPts;
+      feats.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: line } });
+    }
+    drawFC.current = { type: "FeatureCollection", features: feats };
+    s.setData(drawFC.current);
+  }, [drawPts, mapReady]);
+
+  // leaving Zones abandons a half-drawn shape, so map clicks stop dropping corners
+  useEffect(() => {
+    if(subTab !== "zones" && (zoneDraw || zoneForm)) cancelZone();
+  }, [subTab]);
+
   // cursor reflects add mode
   useEffect(() => {
     const m = mapObj.current; if(!m || !mapReady) return;
-    try { m.getCanvas().style.cursor = mode === "add" ? "crosshair" : ""; } catch(e){}
-  }, [mode, mapReady]);
+    try { m.getCanvas().style.cursor = (mode === "add" || zoneDraw) ? "crosshair" : ""; } catch(e){}
+  }, [mode, zoneDraw, mapReady]);
 
   // sub-tab switch: re-lean the shared map
   useEffect(() => {
@@ -2231,6 +2489,9 @@ function DataManagement({ meta, who }){
   const bakedCount = (summary && summary.profiles && summary.profiles[showProfile]) ? summary.profiles[showProfile].baked : 0;
   const totalRoutes = summary ? summary.routes : 0;
   const onLoc = subTab === "locations";
+  const onZones = subTab === "zones";
+  // three sub-tabs now, so "not locations" no longer means "routes"
+  const onRoutes = subTab === "routes";
   // side by side, the panel column matches the map and scrolls inside itself, so the
   // map never slides out from under whatever you're editing
   const panelStyle = isWide ? { height: MAP_H, overflowY: "auto" } : undefined;
@@ -2271,7 +2532,8 @@ function DataManagement({ meta, who }){
       </div>
 
       <div className="flex gap-1 border-b border-slate-200">
-        {[["locations", "Locations", locs.length], ["routes", "Routes", (status || []).length]].map(([k, label, n]) => (
+        {[["locations", "Locations", locs.length], ["routes", "Routes", (status || []).length],
+          ["zones", "Zones", zoneList.length]].map(([k, label, n]) => (
           <button key={k} onClick={() => setSubTab(k)}
             className={"px-4 py-2 text-sm font-medium border-b-2 -mb-px transition " +
               (subTab === k ? "border-[color:var(--navy)] text-[color:var(--navy)]"
@@ -2438,7 +2700,130 @@ function DataManagement({ meta, who }){
           </div>
           )}
 
-          {!onLoc && (
+          {onZones && (
+          <div className="card p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-semibold text-slate-700">{zoneForm ? (zoneForm.id ? `Editing ${zoneForm.id}` : "New zone") : "Zones"}</div>
+              {!zoneForm && (
+                <button onClick={startNewZone} disabled={zoneBusy}
+                  className="text-xs font-semibold px-2.5 py-1 rounded-md text-white disabled:opacity-40" style={{ background: "var(--navy)" }}>+ Draw zone</button>
+              )}
+            </div>
+
+            {!zoneForm && (
+              <div className="space-y-2">
+                <p className="text-[11px] text-slate-400">
+                  A zone is one drawn area with a date range. Tick <strong>Affects routing</strong> and HERE is
+                  told to avoid it, and every baked route crossing it is re-routed. Leave it unticked and the
+                  zone is drawn on both maps for information only — the router never hears about it.
+                </p>
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                  HERE&rsquo;s avoid-areas parameter takes <strong>bounding boxes, not polygons</strong>. Whatever
+                  you draw is sent as the rectangle around it, so a long diagonal or L-shaped closure blocks
+                  more ground than it looks like. Draw several smaller zones instead of one large one where
+                  that matters — the panel shows the box each zone actually sends.
+                </p>
+              </div>
+            )}
+
+            {zoneForm && (
+              <div className="space-y-3">
+                <label className="block">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Name</span>
+                  <input value={zoneForm.name} onChange={e => setZField("name", e.target.value)}
+                    placeholder="e.g. Tootsi bridge closure"
+                    className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Kind</span>
+                  <select value={zoneForm.kind} onChange={e => setZField("kind", e.target.value)} className={"mt-1 w-full " + sel}>
+                    {ZONE_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">From</span>
+                    <input type="date" value={zoneForm.starts_on} onChange={e => setZField("starts_on", e.target.value)} className={"mt-1 w-full " + sel} />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">To</span>
+                    <input type="date" value={zoneForm.ends_on} onChange={e => setZField("ends_on", e.target.value)} className={"mt-1 w-full " + sel} />
+                  </label>
+                </div>
+                <p className="text-[11px] text-slate-400 -mt-1">Leave a date blank for open-ended. Both ends are inclusive.</p>
+
+                <label className="flex items-start gap-2 text-sm">
+                  <input type="checkbox" checked={zoneForm.affects_routing}
+                    onChange={e => setZField("affects_routing", e.target.checked)} className="mt-1" />
+                  <span>
+                    <span className="font-medium">Affects routing</span>
+                    <span className="block text-[11px] text-slate-400">Sends this area to HERE as avoid-areas and re-routes every baked leg that crosses it.</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm">
+                  <input type="checkbox" checked={zoneForm.active}
+                    onChange={e => setZField("active", e.target.checked)} className="mt-1" />
+                  <span>
+                    <span className="font-medium">Active</span>
+                    <span className="block text-[11px] text-slate-400">Untick to retire a zone without deleting it — the record of why past bakes went the way they did survives.</span>
+                  </span>
+                </label>
+                <label className="block">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Note</span>
+                  <textarea value={zoneForm.note} onChange={e => setZField("note", e.target.value)} rows="2"
+                    placeholder="Why it is closed, who to ask, permit reference…"
+                    className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                </label>
+
+                <div className="rounded-lg border border-slate-200 p-2.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">Shape · {drawPts.length} corner(s)</span>
+                    <span className="flex items-center gap-2">
+                      <button onClick={() => setZoneDraw(d => !d)}
+                        className={"text-xs font-semibold px-2 py-0.5 rounded-md " + (zoneDraw ? "text-white" : "border border-slate-200 text-slate-600")}
+                        style={zoneDraw ? { background: ZONE_ROUTING } : undefined}>
+                        {zoneDraw ? "Stop placing" : (drawPts.length ? "Add corners" : "Place corners")}
+                      </button>
+                      <button onClick={undoVertex} disabled={!drawPts.length}
+                        className="text-xs px-2 py-0.5 rounded-md border border-slate-200 text-slate-600 disabled:opacity-40">Undo</button>
+                      <button onClick={() => setDrawPts([])} disabled={!drawPts.length}
+                        className="text-xs px-2 py-0.5 rounded-md border border-slate-200 text-slate-600 disabled:opacity-40">Clear</button>
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    {zoneDraw ? "Click the map to drop a corner. Three or more makes a shape."
+                              : "Editing a shape means redrawing it — corners cannot be dragged individually."}
+                  </p>
+                  {drawPts.length >= 3 && (() => {
+                    const lons = drawPts.map(p => p[0]), lats = drawPts.map(p => p[1]);
+                    const w = Math.min(...lons), e2 = Math.max(...lons), so = Math.min(...lats), n = Math.max(...lats);
+                    return <p className="text-[11px] font-mono text-slate-500 break-all">
+                      Sent to HERE as bbox:{w.toFixed(4)},{so.toFixed(4)},{e2.toFixed(4)},{n.toFixed(4)}
+                    </p>;
+                  })()}
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button onClick={saveZone} disabled={zoneBusy}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-md text-white disabled:opacity-40" style={{ background: "var(--navy)" }}>
+                    {zoneBusy ? "Working…" : (zoneForm.id ? "Save changes" : "Create zone")}
+                  </button>
+                  <button onClick={cancelZone} disabled={zoneBusy}
+                    className="text-xs px-3 py-1.5 rounded-md border border-slate-200 text-slate-600 disabled:opacity-40">Cancel</button>
+                </div>
+                {zoneForm.affects_routing && (
+                  <p className="text-[11px] text-amber-700">
+                    Saving clears the baked geometry this zone invalidates and immediately re-routes it — one
+                    HERE call per leg. The count is reported as it runs.
+                  </p>
+                )}
+              </div>
+            )}
+            {zoneMsg && <p className="text-xs text-slate-600 mt-2">{zoneMsg}</p>}
+          </div>
+          )}
+
+          {onRoutes && (
           <div className="card p-4">
             <div className="text-sm font-semibold text-slate-700 mb-2">Create route</div>
             <div className="space-y-2.5">
@@ -2601,7 +2986,7 @@ function DataManagement({ meta, who }){
           </table>
         </div>
       </div>
-      ) : (
+      ) : onRoutes ? (
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
           <span className="text-sm font-semibold text-slate-700">Routes <span className="text-slate-400 font-normal">· click a row to locate it on the map</span></span>
@@ -2691,6 +3076,59 @@ function DataManagement({ meta, who }){
               })}
               {status && status.length === 0 && <tr><td colSpan="7" className="px-3 py-6 text-center text-slate-400">No routes yet — author one with “Create route”.</td></tr>}
               {!status && <tr><td colSpan="7" className="px-3 py-6 text-center text-slate-400">Loading…</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      ) : (
+      <div className="card overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
+          <span className="text-sm font-semibold text-slate-700">Zones <span className="text-slate-400 font-normal">· click a row to edit the zone and frame it on the map</span></span>
+          <button onClick={startNewZone} disabled={zoneBusy}
+            className="text-xs font-semibold px-2.5 py-1 rounded-md text-white disabled:opacity-40" style={{ background: "var(--navy)" }}>
+            + Draw zone
+          </button>
+        </div>
+        <div className="overflow-auto" style={{ maxHeight: "40vh" }}>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0">
+              <tr>
+                <th className={th}>ID</th><th className={th}>Name</th><th className={th}>Kind</th>
+                <th className={th}>Routing</th><th className={th}>From</th><th className={th}>To</th>
+                <th className={th}>State</th><th className={th}></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {(zoneList || []).map(z => {
+                const force = zoneInForce(z);
+                return (
+                  <tr key={z.id} onClick={() => editZone(z)}
+                      className={"cursor-pointer hover:bg-slate-50 " + (zoneSel === z.id ? "bg-slate-50" : "")}>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-500">{z.id}</td>
+                    <td className="px-3 py-2 font-medium">{z.name}</td>
+                    <td className="px-3 py-2 text-slate-500">{(ZONE_KINDS.find(k => k[0] === z.kind) || [null, z.kind])[1]}</td>
+                    <td className="px-3 py-2">
+                      {z.affects_routing
+                        ? <span className="text-xs font-semibold px-2 py-0.5 rounded" style={{ background: "#FDE8EE", color: ZONE_ROUTING }}>Avoided</span>
+                        : <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-500">Advisory</span>}
+                    </td>
+                    <td className="px-3 py-2 text-slate-500">{z.starts_on || "—"}</td>
+                    <td className="px-3 py-2 text-slate-500">{z.ends_on || "—"}</td>
+                    <td className="px-3 py-2 text-xs">
+                      {!z.active ? <span className="text-slate-400">Inactive</span>
+                        : force ? <span className="text-emerald-600 font-semibold">In force</span>
+                        : <span className="text-slate-400">Out of window</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <button onClick={e => { e.stopPropagation(); removeZone(z); }} disabled={zoneBusy}
+                        className="text-xs text-[color:var(--red)] hover:underline disabled:opacity-40">Delete</button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!zoneList.length && <tr><td colSpan="8" className="px-3 py-6 text-center text-slate-400">
+                No zones yet. Draw one to steer HERE around a closure, or to mark a works area for planners without changing routing.
+              </td></tr>}
             </tbody>
           </table>
         </div>
