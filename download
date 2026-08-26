@@ -1,5 +1,0 @@
-__pycache__/
-*.pyc
-*.db
-backend/forecasts_local.db
-.DS_Store
