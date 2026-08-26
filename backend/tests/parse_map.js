@@ -93,6 +93,30 @@ ok("no layer filters on the non-existent route_leg property", !code.includes("ro
 ok("layers filter on the type property instead",
   code.includes("['==', ['get', 'type'], 'Inbound Highway']"));
 
+// ---- Phase 3: the zone overlay -------------------------------------------------
+ok("zones are fetched from their own endpoint", code.includes("'/zones'"));
+ok("the overlay does NOT ride on /public/map-data",
+  !code.includes("zones-source', { type: 'geojson', data: a1_data"));
+ok("a zones source and fill layer exist",
+  code.includes("zones-source") && code.includes("'zone-fill'"));
+ok("the sidebar has a zones toggle", html.includes('id="layer-zones"'));
+ok("the toggle is wired to a handler", code.includes("function toggleZones"));
+ok("routing zones and advisory zones are coloured differently",
+  code.includes("['case', ['get', 'affects_routing']"));
+ok("zones re-add after a basemap switch, like every other layer",
+  code.includes("if (ZONES.loaded) ensureZoneLayers(); else loadZones();"));
+ok("the overlay follows the forecast timeline", code.includes("applyZoneMonth"));
+ok("closing the timeline restores every zone", code.includes("applyZoneMonth(null)"));
+ok("date filtering compares YYYYMMDD integers, not strings",
+  code.includes("function dnum") && code.includes("function monthSpan"));
+ok("an open-ended end date sorts last rather than being special-cased",
+  code.includes("99999999"));
+ok("only active zones are drawn", code.includes("z.active && z.geometry"));
+ok("clicking a zone explains whether routing is affected",
+  code.includes("Routing avoids this area") && code.includes("Advisory only"));
+ok("a missing zones endpoint is not surfaced as a page error",
+  code.includes("console.warn('zones unavailable'"));
+
 // ---- things that must NOT have been broken -----------------------------------
 for (const keep of [
   ["rail-alignment", "the rail alignment layer survives"],
