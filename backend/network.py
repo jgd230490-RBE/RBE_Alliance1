@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import db
 import conversions
 import here_routing
+import zones          # Phase 3 — supplies the avoid[areas] the bake path sends to HERE
 
 DEFAULT_PROFILE = "Artic Tipper (44t)"
 _SEED = os.path.join(os.path.dirname(__file__), "seed_data", "v2_network.json")
@@ -256,22 +257,34 @@ def _waypoint(loc):
     return float(loc["lat"]), float(loc["lon"])
 
 
-def _upsert_geom(route_id, profile, geometry, dist, dur, error, leg="loaded", alt_index=0):
+def _upsert_geom(route_id, profile, geometry, dist, dur, error, leg="loaded", alt_index=0,
+                 zones_applied=None):
+    """
+    Cache one baked geometry.
+
+    zones_applied records which zone ids were sent to HERE as avoid[areas] for this
+    bake — '' when none were in force, NULL when the row predates Phase 3. That
+    distinction is what lets zones.invalidate() be exact about "this leg was routed
+    around zone Z" instead of guessing from proximity. Written on every upsert,
+    including the error rows, so a failed bake does not leave a stale attribution
+    behind from the run before it.
+    """
     now = datetime.now(timezone.utc).isoformat()
     db.execute(
         """
         INSERT INTO route_geometry
             (route_id, vehicle_profile, leg, alt_index, geometry, distance_km,
-             duration_hr, computed_at, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             duration_hr, computed_at, error, zones_applied)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (route_id, vehicle_profile, leg, alt_index) DO UPDATE SET
-            geometry    = EXCLUDED.geometry,
-            distance_km = EXCLUDED.distance_km,
-            duration_hr = EXCLUDED.duration_hr,
-            computed_at = EXCLUDED.computed_at,
-            error       = EXCLUDED.error
+            geometry      = EXCLUDED.geometry,
+            distance_km   = EXCLUDED.distance_km,
+            duration_hr   = EXCLUDED.duration_hr,
+            computed_at   = EXCLUDED.computed_at,
+            error         = EXCLUDED.error,
+            zones_applied = EXCLUDED.zones_applied
         """,
-        (route_id, profile, leg, alt_index, geometry, dist, dur, now, error),
+        (route_id, profile, leg, alt_index, geometry, dist, dur, now, error, zones_applied),
     )
 
 
@@ -289,22 +302,57 @@ def clear_geometry(profile=None, leg=None):
     return True
 
 
-def _bake_leg(r, o, d, profile, leg, factors, alternatives=ALTERNATIVES):
+def active_avoid():
+    """
+    (avoid_area_strings, zone_id_tag) for the zones in force right now.
+
+    Resolved once per bake run rather than per leg: it costs two queries, and a run that
+    re-read it mid-batch could apply different avoid areas to different routes in the
+    same batch and leave the network internally inconsistent.
+
+    Returns '' rather than None for the tag when no zones apply — that is a positive
+    record of "baked with nothing avoided", which is not the same as the NULL a
+    pre-Phase-3 row carries.
+    """
+    try:
+        zs = zones.routing_zones()
+    except Exception:
+        return [], ""      # zones table may not exist yet on a cold database
+    areas, ids = [], []
+    for z in zs:
+        bb = zones.bbox_of(z["geometry"])
+        if bb:
+            areas.append(zones._avoid_str(bb))
+            ids.append(z["id"])
+    return areas, ",".join(sorted(ids))
+
+
+def _bake_leg(r, o, d, profile, leg, factors, alternatives=ALTERNATIVES,
+              avoid=None, zone_tag=None):
     """
     Route one direction of one route and cache every alternative HERE offers.
 
     Returns (n_stored, error_or_None). One HTTP call covers all alternatives. Stale
     higher alt_index rows are cleared first, so a re-bake that comes back with fewer
     options doesn't leave orphans behind from the previous run.
+
+    `avoid` is the Phase 3 zone list as HERE 'bbox:w,s,e,n' strings, and `zone_tag` the
+    matching zone ids stamped onto every row written. Callers that pass neither get
+    today's zones resolved for them — but a batch should resolve once and pass them in,
+    so every leg in the run is baked against the same set.
     """
+    if avoid is None and zone_tag is None:
+        avoid, zone_tag = active_avoid()
     a, b = (o, d) if leg == "loaded" else (d, o)
     a_lat, a_lon = _waypoint(a)
     b_lat, b_lon = _waypoint(b)
     try:
         opts = here_routing.routes(a_lat, a_lon, b_lat, b_lon, profile, factors,
+                                   avoid_areas=(avoid or None),
                                    alternatives=alternatives, laden=(leg == "loaded"))
     except Exception as e:
-        _upsert_geom(r["id"], profile, None, None, None, str(e)[:300], leg=leg, alt_index=0)
+        _upsert_geom(r["id"], profile, None, None, None, str(e)[:300], leg=leg, alt_index=0,
+                     zones_applied=zone_tag)
         return 0, str(e)
     db.execute(
         "DELETE FROM route_geometry WHERE route_id = ? AND vehicle_profile = ? "
@@ -313,7 +361,8 @@ def _bake_leg(r, o, d, profile, leg, factors, alternatives=ALTERNATIVES):
     )
     for i, res in enumerate(opts):
         _upsert_geom(r["id"], profile, json.dumps(res["geometry"]),
-                     res["distance_km"], res["duration_hr"], None, leg=leg, alt_index=i)
+                     res["distance_km"], res["duration_hr"], None, leg=leg, alt_index=i,
+                     zones_applied=zone_tag)
     return len(opts), None
 
 
@@ -325,6 +374,11 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
 
     `limit` counts legs, not routes, because each leg is one HERE call: a full network
     of 107 routes over both legs is 214 calls, not 107.
+
+    Every leg in one call is baked against the same set of zone avoid-areas, resolved
+    once at the top. Across repeated calls it can change — someone can draw a zone
+    halfway through a bake — so the applied set is stamped on each row and reported back
+    as `zones_applied`, rather than assumed uniform across the network.
     """
     if not here_routing.configured():
         return {"error": "HERE_API_KEY not set on the server", "baked": 0, "remaining": None}
@@ -337,16 +391,19 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
 
     locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
     factors = conversions.load_factors()
+    avoid, zone_tag = active_avoid()
     baked = errors = 0
     samples = []
     for r, leg in todo[:limit]:
         o = locs.get(r["origin_id"]); d = locs.get(r["dest_id"])
         if not o or not d:
             _upsert_geom(r["id"], profile, None, None, None,
-                         "missing origin/destination coordinates", leg=leg, alt_index=0)
+                         "missing origin/destination coordinates", leg=leg, alt_index=0,
+                         zones_applied=zone_tag)
             errors += 1
             continue
-        n, err = _bake_leg(r, o, d, profile, leg, factors, alternatives)
+        n, err = _bake_leg(r, o, d, profile, leg, factors, alternatives,
+                           avoid=avoid, zone_tag=zone_tag)
         if err:
             errors += 1
             if len(samples) < 5:
@@ -355,7 +412,9 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
             baked += 1
     remaining = max(0, len(todo) - min(limit, len(todo)))
     return {"profile": profile, "baked": baked, "errors": errors,
-            "remaining": remaining, "legs": list(legs), "error_samples": samples}
+            "remaining": remaining, "legs": list(legs), "error_samples": samples,
+            "zones_applied": [z for z in zone_tag.split(",") if z],
+            "avoid_areas": avoid}
 
 
 def routes_geojson(profile=DEFAULT_PROFILE, leg="loaded", alt_index=0):
@@ -765,17 +824,21 @@ def bake_route(route_id, profile=DEFAULT_PROFILE, legs=None, alternatives=ALTERN
     r = r[0]
     locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
     o = locs.get(r["origin_id"]); d = locs.get(r["dest_id"])
+    avoid, zone_tag = active_avoid()
     if not o or not d:
         for leg in legs:
             _upsert_geom(route_id, profile, None, None, None,
-                         "missing origin/destination coordinates", leg=leg, alt_index=0)
+                         "missing origin/destination coordinates", leg=leg, alt_index=0,
+                         zones_applied=zone_tag)
         return {"error": "missing origin/destination", "route_id": route_id}
 
     factors = conversions.load_factors()
-    out = {"route_id": route_id, "profile": profile, "legs": {}}
+    out = {"route_id": route_id, "profile": profile, "legs": {},
+           "zones_applied": [z for z in zone_tag.split(",") if z]}
     errs = []
     for leg in legs:
-        n, err = _bake_leg(r, o, d, profile, leg, factors, alternatives)
+        n, err = _bake_leg(r, o, d, profile, leg, factors, alternatives,
+                           avoid=avoid, zone_tag=zone_tag)
         if err:
             errs.append(f"{leg}: {err[:120]}")
             out["legs"][leg] = {"baked": False, "error": err[:200]}
@@ -1125,11 +1188,18 @@ def route_diagnostics(route_id, profile=DEFAULT_PROFILE, probe=False):
         ],
         "here_configured": here_routing.configured(),
     }
+    _probe_avoid, _zone_tag = active_avoid()
+    out["zones_in_force"] = [z for z in _zone_tag.split(",") if z]
+    out["avoid_areas"] = _probe_avoid
     if probe:
         factors = conversions.load_factors()
         out["probe"] = {
-            "loaded": here_routing.probe(o_lat, o_lon, d_lat, d_lon, profile, factors, laden=True),
-            "return": here_routing.probe(d_lat, d_lon, o_lat, o_lon, profile, factors, laden=False),
+            # the probe must send the same avoid[areas] a real bake would, or it
+            # answers a different question from the one being diagnosed
+            "loaded": here_routing.probe(o_lat, o_lon, d_lat, d_lon, profile, factors,
+                                         avoid_areas=(_probe_avoid or None), laden=True),
+            "return": here_routing.probe(d_lat, d_lon, o_lat, o_lon, profile, factors,
+                                         avoid_areas=(_probe_avoid or None), laden=False),
         }
         L, R = out["probe"]["loaded"], out["probe"]["return"]
         ld = (L.get("summaries") or [{}])[0].get("distance_km")
@@ -1159,6 +1229,7 @@ def compare_profiles(route_id, profiles=None, probe=False):
     o_lat, o_lon = _waypoint(o)
     d_lat, d_lon = _waypoint(d)
 
+    _probe_avoid, _zone_tag = active_avoid()
     rows = []
     for p in profiles:
         cached = db.query(
@@ -1169,7 +1240,8 @@ def compare_profiles(route_id, profiles=None, probe=False):
                  "gross_weight_kg": here_routing._truck_params(p, factors, laden=True)
                                         .get("vehicle[grossWeight]")}
         if probe:
-            pr = here_routing.probe(o_lat, o_lon, d_lat, d_lon, p, factors, laden=True)
+            pr = here_routing.probe(o_lat, o_lon, d_lat, d_lon, p, factors,
+                                    avoid_areas=(_probe_avoid or None), laden=True)
             entry["live_km"] = (pr.get("summaries") or [{}])[0].get("distance_km")
             entry["routes_returned"] = pr.get("routes_returned")
             entry["truck_params_present"] = pr.get("truck_params_present")
@@ -1187,7 +1259,76 @@ def compare_profiles(route_id, profiles=None, probe=False):
                  "it as a fault." if len(set(vals)) <= 1 and len(vals) > 1
                  else "Vehicles produced differing distances, so truck parameters are "
                       "reaching HERE."),
+        "zones_in_force": [z for z in _zone_tag.split(",") if z],
     }
+
+
+def zones_diagnostics(route_id=None, profile=DEFAULT_PROFILE, probe=False):
+    """
+    What the zone layer would actually send to HERE, and — with probe=true — what HERE
+    actually does with it.
+
+    This exists because the number of avoid[areas] HERE will accept, and what it does
+    when handed a box that encloses a route's own endpoint, are questions this codebase
+    has never verified against the live API. Rather than encode a guessed limit, the
+    diagnostic sends the current set on a real route and hands back the raw request and
+    response, with and without the zones, so a difference is attributable rather than
+    inferred from a single number. probe=true spends two HERE requests.
+
+    With no route_id it reports the zone set only and spends nothing.
+    """
+    avoid, tag = active_avoid()
+    try:
+        zs = zones.routing_zones()
+    except Exception as e:
+        return {"error": f"zones unavailable: {e}", "avoid_areas": avoid}
+
+    out = {
+        "zones_in_force": [{"id": z["id"], "name": z["name"], "kind": z["kind"],
+                            "starts_on": z["starts_on"], "ends_on": z["ends_on"],
+                            "bbox": z["bbox"], "avoid_area": z["avoid_area"]} for z in zs],
+        "count": len(zs),
+        "avoid_areas": avoid,
+        "zones_applied_tag": tag,
+        "here_configured": here_routing.configured(),
+        # how many baked legs carry each provenance, so "is the network baked against the
+        # zones I think it is" is answerable without opening the database
+        "baked_legs_by_tag": {},
+        "note": ("HERE's own limit on the number of avoid[areas] is NOT enforced here and "
+                 "has never been verified against the live API. If a bake starts failing "
+                 "once several zones exist, run this with probe=true and read the error "
+                 "HERE actually returns."),
+    }
+    try:
+        for row in db.query("SELECT zones_applied, COUNT(*) AS n FROM route_geometry "
+                            "GROUP BY zones_applied"):
+            k = row["zones_applied"]
+            out["baked_legs_by_tag"]["(pre-Phase-3)" if k is None else (k or "(none)")] = row["n"]
+    except Exception:
+        pass   # column added by the Phase 3 migration; absent on a database that skipped it
+
+    if route_id and probe:
+        r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+        if not r:
+            out["probe_error"] = f"route {route_id} not found"
+            return out
+        r = r[0]
+        locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+        o, d = locs.get(r["origin_id"]), locs.get(r["dest_id"])
+        if not o or not d:
+            out["probe_error"] = "missing origin/destination"
+            return out
+        o_lat, o_lon = _waypoint(o)
+        d_lat, d_lon = _waypoint(d)
+        factors = conversions.load_factors()
+        out["probe"] = {
+            "route_id": route_id, "profile": profile,
+            "with_zones": here_routing.probe(o_lat, o_lon, d_lat, d_lon, profile, factors,
+                                             avoid_areas=(avoid or None), laden=True),
+            "without_zones": here_routing.probe(o_lat, o_lon, d_lat, d_lon, profile,
+                                                factors, laden=True),
+        }
+    return out
 
 
 # --------------------------------------------------------------------------- #

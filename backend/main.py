@@ -27,6 +27,7 @@ import seed          # retained so an old import doesn't break; forecast seeding
 import network
 import here_routing
 import taxonomy
+import zones
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI):
     try:
         db.init_network_db()
         db.init_taxonomy_db()
+        db.init_zones_db()          # Phase 3. No seed — zones are drawn, never shipped.
         if network.seed_network():
             print("Seeded routing network from V2 (locations + routes).")
         network.backfill_location_roles()
@@ -744,6 +746,173 @@ def bake_route(route_id: str, profile: str = network.DEFAULT_PROFILE,
     _check_admin(token)
     want = tuple(l.strip() for l in legs.split(",") if l.strip() in network.LEGS) if legs else None
     return network.bake_route(route_id, profile, legs=want)
+
+
+@app.get("/api/admin/diagnostics/zones")
+def diagnostics_zones(route_id: Optional[str] = None,
+                      profile: str = network.DEFAULT_PROFILE,
+                      probe: bool = False, token: Optional[str] = None):
+    """
+    What the zone layer sends HERE, and with probe=true what HERE does with it.
+
+    Read this before believing anything about how many avoid[areas] the API tolerates —
+    that limit is not enforced in this codebase and has never been checked against the
+    live service. probe=true spends two HERE requests: the same route with and without
+    the current zone set, so a difference is attributable.
+    """
+    _check_admin(token)
+    return network.zones_diagnostics(route_id=route_id, profile=profile, probe=probe)
+
+
+# ------------------------------------------------------------------ zones (Phase 3)
+class ZoneIn(BaseModel):
+    """
+    A drawn zone. Geometry is a GeoJSON *geometry* (Polygon or LineString), not a
+    Feature — Mapbox Draw hands back Features, so the client sends feature.geometry.
+
+    affects_routing is the whole point of merging Phases 3 and 3.5 into one table:
+    TRUE and the bbox goes to HERE and baked routes crossing it are re-routed; FALSE and
+    it is drawn on the maps and the router never hears about it.
+    """
+    name: str
+    geometry: dict
+    kind: Optional[str] = "other"
+    affects_routing: bool = True
+    starts_on: Optional[str] = None          # 'YYYY-MM-DD' or null for open-ended
+    ends_on: Optional[str] = None
+    note: Optional[str] = None
+    active: bool = True
+
+
+def _zone_write_result(zone, inval):
+    """Shape shared by create/update/delete: the zone, plus what it just invalidated."""
+    return {"zone": zone, "invalidated": inval,
+            "rebake_required": inval.get("leg_count", 0) > 0,
+            "here_calls": inval.get("here_calls", 0)}
+
+
+@app.get("/api/zones")
+def list_zones(on: Optional[str] = None, include_inactive: bool = True):
+    """
+    Every zone, for the admin table and both maps.
+
+    Deliberately NOT under /api/admin: the public map draws disruptions and has no
+    token. Nothing here is sensitive — a zone is a shape, a name and a date range.
+    Pass on='YYYY-MM-DD' to get only those in force that day, which is how the public
+    map's timeline filters them.
+    """
+    return {"zones": zones.list_zones(include_inactive=include_inactive, on=on),
+            "summary": zones.summary(),
+            "kinds": list(zones.KINDS)}
+
+
+@app.get("/api/zones/{zone_id}")
+def get_zone(zone_id: str):
+    z = zones.get_zone(zone_id)
+    if not z:
+        raise HTTPException(404, "zone not found")
+    return z
+
+
+@app.post("/api/admin/zones")
+def create_zone(body: ZoneIn, token: Optional[str] = None):
+    """
+    Create a zone and immediately clear the baked geometry it invalidates.
+
+    Clearing is not the same as re-baking. This endpoint does NOT call HERE: it reports
+    how many legs must be re-routed and the client drives /api/admin/bake-routes until
+    'remaining' is 0, the same loop the bulk-bake button already uses. Doing the HERE
+    calls inline would block one HTTP request on dozens of round trips and time out on
+    Render long before it finished.
+    """
+    _check_admin(token)
+    z = zones.create_zone(
+        body.name, body.geometry, kind=body.kind, affects_routing=body.affects_routing,
+        starts_on=body.starts_on, ends_on=body.ends_on, note=body.note, active=body.active)
+    if z.get("error"):
+        raise HTTPException(400, z["error"])
+    # a zone that does not affect routing invalidates nothing — it is drawn, not routed
+    inval = (zones.invalidate(new_geometry=z["geometry"])
+             if (z["affects_routing"] and z["active"] and zones.applies_on(z))
+             else zones.invalidate(dry_run=True))
+    return _zone_write_result(z, inval)
+
+
+@app.put("/api/admin/zones/{zone_id}")
+def update_zone(zone_id: str, body: ZoneIn, token: Optional[str] = None):
+    """
+    Edit a zone and clear what the edit makes wrong.
+
+    An edit is two invalidations at once — routes that now cross the new shape, and
+    routes that were baked while the OLD shape was avoided. Both are passed to
+    zones.invalidate(), which is why the previous geometry is read before the write.
+
+    Only fields the client actually sent are written; see zones.update_zone().
+    """
+    _check_admin(token)
+    before = zones.get_zone(zone_id)
+    if not before:
+        raise HTTPException(404, "zone not found")
+
+    sent = set(_fields_set(body))
+    fields = {k: getattr(body, k) for k in
+              ("name", "geometry", "kind", "affects_routing", "starts_on", "ends_on",
+               "note", "active") if k in sent}
+    z = zones.update_zone(zone_id, **fields)
+    if z.get("error"):
+        raise HTTPException(400, z["error"])
+
+    now_routes = z["affects_routing"] and z["active"] and zones.applies_on(z)
+    was_routes = (before["affects_routing"] and before["active"]
+                  and zones.applies_on(before))
+    inval = zones.invalidate(
+        zone_id=zone_id,
+        new_geometry=(z["geometry"] if now_routes else None),
+        # the old shape only matters if it was actually steering the router before
+        old_geometry=(before["geometry"] if was_routes else None),
+    )
+    return _zone_write_result(z, inval)
+
+
+@app.delete("/api/admin/zones/{zone_id}")
+def delete_zone(zone_id: str, token: Optional[str] = None):
+    """
+    Delete a zone and clear geometry that was routed around it.
+
+    Consider deactivating instead (PUT with active=false). A deleted zone takes with it
+    the record of why a past bake went the way it did; a deactivated one stops steering
+    the router and stays explainable.
+    """
+    _check_admin(token)
+    before = zones.get_zone(zone_id)
+    if not before:
+        raise HTTPException(404, "zone not found")
+    was_routes = (before["affects_routing"] and before["active"]
+                  and zones.applies_on(before))
+    res = zones.delete_zone(zone_id)
+    if res.get("error"):
+        raise HTTPException(404, res["error"])
+    inval = zones.invalidate(
+        zone_id=zone_id,
+        old_geometry=(before["geometry"] if was_routes else None),
+    )
+    return _zone_write_result({"deleted": zone_id, "was": before}, inval)
+
+
+@app.get("/api/admin/zones/{zone_id}/impact")
+def zone_impact(zone_id: str, token: Optional[str] = None):
+    """
+    Dry run: what deleting or moving this zone would invalidate, without touching
+    anything. Use it to see the HERE bill before agreeing to it.
+    """
+    _check_admin(token)
+    z = zones.get_zone(zone_id)
+    if not z:
+        raise HTTPException(404, "zone not found")
+    return {"zone": z,
+            "would_invalidate": zones.invalidate(
+                zone_id=zone_id, new_geometry=z["geometry"],
+                old_geometry=z["geometry"], dry_run=True)}
 
 
 # ------------------------------------------------------------------ static

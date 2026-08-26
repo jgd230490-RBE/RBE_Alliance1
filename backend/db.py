@@ -247,6 +247,20 @@ def init_network_db():
         )
         conn.commit()
         _migrate_route_geometry_key(conn, cur)
+        # Phase 3: which zones were avoided when this leg was baked, as a comma-separated
+        # list of zone ids ('' = baked with no zones in force). Nullable, and NULL means
+        # "baked before zones existed, provenance unknown" — zones.invalidate() treats
+        # those rows differently and less precisely, so the distinction has to survive.
+        # Plain ADD COLUMN on both backends: no key change, so SQLite needs no rebuild.
+        for col, typ in (("zones_applied", "TEXT"),):
+            try:
+                if IS_PG:
+                    cur.execute(f"ALTER TABLE route_geometry ADD COLUMN IF NOT EXISTS {col} {typ}")
+                else:
+                    cur.execute(f"ALTER TABLE route_geometry ADD COLUMN {col} {typ}")
+                conn.commit()
+            except Exception:
+                conn.rollback()  # column already present — fine
     finally:
         conn.close()
 
@@ -423,3 +437,64 @@ def init_taxonomy_db():
         conn.commit()
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+#  Phase 3 — zones (geofencing + disruptions, one table)                       #
+# --------------------------------------------------------------------------- #
+def init_zones_db():
+    """
+    One table for both halves of Phase 3.
+
+    Phases 3 and 3.5 were planned separately — geofencing that steers HERE away from an
+    area, and curated disruptions drawn on the map with a date range. Built separately
+    that is two polygon editors, two tables, and no answer to the only question anyone
+    actually asks: "this closure shuts a road — does it change my routing?". One table
+    with an `affects_routing` flag answers it.
+
+      affects_routing = TRUE   the bbox goes to HERE as avoid[areas]; baked geometry
+                               that crosses it is invalidated and re-routed
+      affects_routing = FALSE  drawn on the map, ignored by the router — a works area
+                               planners should see but that does not close a road
+
+    `geometry` is a GeoJSON *geometry* object as text (Polygon or LineString), not a
+    Feature. The full shape is stored even though HERE only accepts bounding boxes,
+    because the map draws the real polygon and only the router reduces it — see
+    zones.bbox_of() for why that reduction over-blocks.
+
+    Dates are TEXT 'YYYY-MM-DD', matching the rest of the codebase's ISO-string habit
+    rather than introducing a DATE type that SQLite would not enforce anyway. NULL at
+    either end means open-ended: a zone with no starts_on has always applied.
+
+    `active` is not in the original Phase 3 sketch. It is here for the same reason the
+    taxonomy tables have it: a zone that stops applying is history someone may need to
+    explain a past bake, and deleting it destroys that. Deactivating leaves the record
+    and drops it out of routing.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS zones (
+                id              TEXT PRIMARY KEY,
+                name            TEXT NOT NULL,
+                kind            TEXT,
+                geometry        TEXT,
+                affects_routing BOOLEAN DEFAULT TRUE,
+                starts_on       TEXT,
+                ends_on         TEXT,
+                note            TEXT,
+                active          BOOLEAN DEFAULT TRUE,
+                created_at      TEXT,
+                updated_at      TEXT
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_zones():
+    return query("SELECT COUNT(*) AS n FROM zones")[0]["n"]
