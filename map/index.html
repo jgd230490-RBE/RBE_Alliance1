@@ -123,6 +123,12 @@
         <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleLayer('rail-alignment', this.checked)"> Rail alignment</label><span class="color-dot" style="background:#334155; border-radius:0; width:13px; height:2px;"></span></div>
         <div class="control-item"><label><input type="checkbox" id="layer-chainage" onchange="toggleLayer('chainage-global', this.checked); toggleLayer('chainage-labels', this.checked);"> Chainage markers</label><span class="color-dot" style="background:#94a3b8;"></span></div>
         <div class="control-item"><label><input type="checkbox" id="layer-nodes" checked onchange="toggleNodes(this.checked)"> Sites &amp; assets</label><span class="color-dot" style="background:#003787;"></span></div>
+        <!-- Phase 3. Two colours, one meaning each: red = the router is steered around
+             this area, grey = drawn for information and HERE never hears about it. With
+             the forecast timeline open these follow the month on screen, so a closure
+             that ends in March is gone by April. -->
+        <div class="control-item"><label><input type="checkbox" id="layer-zones" checked onchange="toggleZones(this.checked)"> Disruption zones</label><span class="color-dot" style="background:#BF2E55;"></span></div>
+        <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">red = avoided by routing · grey = advisory</span></div>
     </div>
 
     <div class="control-group">
@@ -384,14 +390,26 @@
         map.addLayer({ 'id': 'chainage-global', 'type': 'circle', 'source': 'chainage-source', 'layout': { 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none' }, 'paint': { 'circle-color': '#ffffff', 'circle-radius': 3, 'circle-stroke-width': 1, 'circle-stroke-color': '#333' } });
         map.addLayer({ 'id': 'chainage-labels', 'type': 'symbol', 'source': 'chainage-source', 'minzoom': 11, 'layout': { 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none', 'text-field': ['get', 'chaintxt'], 'text-size': 10, 'text-offset': [0, 1.2] }, 'paint': { 'text-color': '#333333', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
 
-        applyFilters(); 
-        setupHoverEvents(); 
+        applyFilters();
+        setupHoverEvents();
+        // zones ride on style.load like everything else, so a basemap switch re-adds them
+        if (ZONES.loaded) ensureZoneLayers(); else loadZones();
     });
 
     function setupHoverEvents() {
         ['inbound-lines', 'outbound-lines'].forEach(lId => {
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
+        });
+        ['zone-fill', 'zone-outline'].forEach(lId => {
+            map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
+            map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
+        });
+        // bound once, on the layer id — Mapbox tolerates a layer that does not exist yet
+        map.on('click', 'zone-fill', (e) => {
+            if (!e.features || !e.features.length) return;
+            new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat)
+                .setHTML(zonePopupHTML(e.features[0].properties)).addTo(map);
         });
     }
 
@@ -492,6 +510,119 @@
     }
     function toggleLayer(id, visible) { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'); }
     function toggleNodes(visible) { nodeMarkersArray.forEach(el => el.style.display = visible ? 'flex' : 'none'); }
+
+    // ===== Phase 3: zones (geofencing + disruptions, one table, one overlay) =====
+    // The admin app draws these; here they are read-only. Fetched from /api/zones rather
+    // than folded into /public/map-data on purpose — that endpoint's FeatureCollection is
+    // walked per-feature by the forecast timeline and the route filters, and dropping
+    // polygons into it would mean auditing every one of those loops.
+    const ZONES = { data: { type: 'FeatureCollection', features: [] }, loaded: false };
+
+    // Dates are compared as YYYYMMDD integers. An open-ended start is 0 and an open-ended
+    // end is 99999999, so "no dates at all" always overlaps and needs no special case.
+    function dnum(s, fallback) {
+        if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return fallback;
+        return parseInt(s.replace(/-/g, ''), 10);
+    }
+    // first and last day of a forecast month_index, as the same integers
+    function monthSpan(i) {
+        const y = CONFIG.START_YEAR + Math.floor((i - 1) / 12);
+        const m = ((i - 1) % 12) + 1;
+        const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        return [y * 10000 + m * 100 + 1, y * 10000 + m * 100 + last];
+    }
+
+    async function loadZones() {
+        try {
+            const r = await fetch(CONFIG.API_BASE + '/zones');
+            if (!r.ok) throw new Error('zones ' + r.status);
+            const j = await r.json();
+            ZONES.data = {
+                type: 'FeatureCollection',
+                features: (j.zones || []).filter(z => z.active && z.geometry).map(z => ({
+                    type: 'Feature',
+                    properties: {
+                        id: z.id, name: z.name || '', kind: z.kind || 'other',
+                        note: z.note || '', starts_on: z.starts_on || '', ends_on: z.ends_on || '',
+                        affects_routing: !!z.affects_routing,
+                        start_n: dnum(z.starts_on, 0), end_n: dnum(z.ends_on, 99999999),
+                    },
+                    geometry: z.geometry,
+                })),
+            };
+            ZONES.loaded = true;
+        } catch (e) {
+            // a map with no zones is correct, not broken — say nothing on the page
+            console.warn('zones unavailable', e);
+        }
+        ensureZoneLayers();
+    }
+
+    function ensureZoneLayers() {
+        if (!map.isStyleLoaded()) { map.once('style.load', ensureZoneLayers); return; }
+        if (!map.getSource('zones-source')) map.addSource('zones-source', { type: 'geojson', data: ZONES.data });
+        else map.getSource('zones-source').setData(ZONES.data);
+        const cb = document.getElementById('layer-zones');
+        const vis = (!cb || cb.checked) ? 'visible' : 'none';
+        if (!map.getLayer('zone-fill')) map.addLayer({
+            id: 'zone-fill', type: 'fill', source: 'zones-source',
+            layout: { visibility: vis },
+            paint: {
+                'fill-color': ['case', ['get', 'affects_routing'], CONFIG.COLORS.selection, '#64748B'],
+                'fill-opacity': 0.20,
+            },
+        });
+        if (!map.getLayer('zone-outline')) map.addLayer({
+            id: 'zone-outline', type: 'line', source: 'zones-source',
+            layout: { visibility: vis },
+            paint: {
+                'line-color': ['case', ['get', 'affects_routing'], CONFIG.COLORS.selection, '#64748B'],
+                'line-width': 2,
+            },
+        });
+        if (!map.getLayer('zone-label')) map.addLayer({
+            id: 'zone-label', type: 'symbol', source: 'zones-source', minzoom: 9,
+            layout: { visibility: vis, 'text-field': ['get', 'name'], 'text-size': 11 },
+            paint: { 'text-color': '#0A1446', 'text-halo-color': '#ffffff', 'text-halo-width': 2 },
+        });
+        applyZoneMonth((typeof TL !== 'undefined' && TL.on) ? TL.month : null);
+    }
+
+    // Restrict the overlay to zones whose date window overlaps the month on screen. With
+    // no timeline open (month === null) every active zone is shown, whatever its dates —
+    // a planner opening the map cold should see the whole picture, not just today's.
+    function applyZoneMonth(month) {
+        if (!map.getLayer('zone-fill')) return;
+        let f = null;
+        if (month) {
+            const [lo, hi] = monthSpan(month);
+            f = ['all', ['<=', ['get', 'start_n'], hi], ['>=', ['get', 'end_n'], lo]];
+        }
+        ['zone-fill', 'zone-outline', 'zone-label'].forEach(l => {
+            if (map.getLayer(l)) map.setFilter(l, f);
+        });
+    }
+
+    function toggleZones(visible) {
+        ['zone-fill', 'zone-outline', 'zone-label'].forEach(l => toggleLayer(l, visible));
+    }
+
+    function zonePopupHTML(p) {
+        const kindLabels = { closure: 'Road closure', weight_limit: 'Weight / height limit',
+                             works: 'Works area', haul_road: 'Haul road', other: 'Zone' };
+        const when = (p.starts_on || p.ends_on)
+            ? (p.starts_on || 'open') + ' → ' + (p.ends_on || 'open')
+            : 'no dates set';
+        return '<div style="min-width:210px;">' +
+            '<h4 style="margin:0 0 4px;color:' + CONFIG.COLORS.brandDark + ';font-size:13px;">' + (p.name || p.id) + '</h4>' +
+            '<div style="font-size:11.5px;color:#6b7280;">' + (kindLabels[p.kind] || p.kind) + ' · ' + when + '</div>' +
+            '<div style="font-size:11.5px;margin-top:6px;color:' +
+                (p.affects_routing === true || p.affects_routing === 'true' ? CONFIG.COLORS.selection : '#6b7280') + ';font-weight:600;">' +
+                (p.affects_routing === true || p.affects_routing === 'true'
+                    ? 'Routing avoids this area' : 'Advisory only — routing unaffected') + '</div>' +
+            (p.note ? '<div style="font-size:11.5px;margin-top:6px;color:#374151;">' + p.note + '</div>' : '') +
+            '</div>';
+    }
 </script>
 
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -994,6 +1125,7 @@
         const src=map.getSource('routes-source');
         if(src){ const d=src._data; d.features.forEach(f=>{ if(f.geometry.type==='LineString'||f.geometry.type==='MultiLineString') f.properties.is_forecast=false; }); src.setData(d); }
         ['forecast-labels','forecast-layer','forecast-casing','forecast-flow'].forEach(l=>{ if(map.getLayer(l)) map.removeLayer(l); });
+        applyZoneMonth(null);   // no month on screen: show every active zone again
     }
     function toggleTimeline(){ if(TL.playing) stopTimeline(); else startTimeline(); }
     function startTimeline(){
@@ -1003,7 +1135,13 @@
         TL.timer=setInterval(()=>{ TL.month = TL.month>=CONFIG.MONTH_COUNT ? 1 : TL.month+1; setTimelineMonth(TL.month); }, 750);
     }
     function stopTimeline(){ TL.playing=false; const b=document.getElementById('tl-play'); if(b) b.textContent='\u25B6'; if(TL.timer){ clearInterval(TL.timer); TL.timer=null; } }
-    function setTimelineMonth(m){ TL.month=m; const r=document.getElementById('tl-range'); if(r) r.value=m; renderMonthFrame(m); }
+    function setTimelineMonth(m){
+        TL.month=m; const r=document.getElementById('tl-range'); if(r) r.value=m;
+        renderMonthFrame(m);
+        // the zone overlay follows the month too: a closure that ended in March must not
+        // still be sitting over the map in April while the routes beneath it have moved on
+        applyZoneMonth(m);
+    }
     function onTimelineScrub(v){ stopTimeline(); setTimelineMonth(parseInt(v)); }
     // step one month at a time — scrubbing a 60-wide slider by hand cannot reliably
     // land on a single month
