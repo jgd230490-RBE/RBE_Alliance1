@@ -576,7 +576,8 @@ def _next_location_id():
 
 
 def create_location(name, role, materials=None, lat=None, lon=None, loc_type=None,
-                    supplies=None, receives=None, gate_lat=None, gate_lon=None):
+                    supplies=None, receives=None, gate_lat=None, gate_lon=None,
+                    vendor=None, detail=None):
     _ensure_location_columns()
     lid = _next_location_id()
     supplies = supplies if supplies is not None else (materials or [])
@@ -587,17 +588,19 @@ def create_location(name, role, materials=None, lat=None, lon=None, loc_type=Non
     # 'materials' mirrors 'supplies' so the existing map popup keeps working.
     db.execute(
         "INSERT INTO locations (id, name, loc_type, role, materials, supplies, receives, "
-        "lat, lon, gate_lat, gate_lon, material) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "lat, lon, gate_lat, gate_lon, vendor, detail, material) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (lid, name, loc_type or role, role, json.dumps(supplies), json.dumps(supplies),
-         json.dumps(receives), float(lat), float(lon), g_lat, g_lon, None),
+         json.dumps(receives), float(lat), float(lon), g_lat, g_lon,
+         (vendor or None), (detail or None), None),
     )
     return {"id": lid}
 
 
 def update_location(location_id, name=None, role=None, materials=None, lat=None, lon=None,
                     loc_type=None, supplies=None, receives=None,
-                    gate_lat=None, gate_lon=None, gate_given=False):
+                    gate_lat=None, gate_lon=None, gate_given=False,
+                    vendor=None, detail=None, meta_given=False):
     """
     Update a location. Moving it — or moving/clearing its gate — invalidates the cached
     geometry of every route that touches it, because the coordinate HERE routed to has
@@ -605,7 +608,8 @@ def update_location(location_id, name=None, role=None, materials=None, lat=None,
 
     `gate_given` distinguishes "the caller didn't mention the gate" (keep whatever is
     stored) from "the caller cleared the gate" (both halves blank). Without it there is
-    no way to remove a gate once set.
+    no way to remove a gate once set. `meta_given` does the same job for the operator
+    and detail fields — an older client that does not send them must not blank them.
     """
     _ensure_location_columns()
     cur = db.query("SELECT * FROM locations WHERE id = ?", (location_id,))
@@ -631,16 +635,19 @@ def update_location(location_id, name=None, role=None, materials=None, lat=None,
         supplies_json = cur.get("supplies")
         materials_json = json.dumps(materials) if materials is not None else cur.get("materials")
     receives_json = json.dumps(receives) if receives is not None else cur.get("receives")
+    new_vendor = vendor if meta_given else cur.get("vendor")
+    new_detail = detail if meta_given else cur.get("detail")
     db.execute(
         "UPDATE locations SET name = ?, loc_type = ?, role = ?, materials = ?, supplies = ?, "
-        "receives = ?, lat = ?, lon = ?, gate_lat = ?, gate_lon = ? WHERE id = ?",
+        "receives = ?, lat = ?, lon = ?, gate_lat = ?, gate_lon = ?, vendor = ?, detail = ? "
+        "WHERE id = ?",
         (name if name is not None else cur["name"],
          loc_type if loc_type is not None else cur["loc_type"],
          role if role is not None else cur["role"],
          materials_json, supplies_json, receives_json,
          float(lat) if lat is not None else cur["lat"],
          float(lon) if lon is not None else cur["lon"],
-         g_lat, g_lon,
+         g_lat, g_lon, new_vendor, new_detail,
          location_id),
     )
     affected = []

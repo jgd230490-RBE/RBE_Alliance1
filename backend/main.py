@@ -241,10 +241,15 @@ def forecasts_summary():
             "months": [], "statuses": set(),
             "unit": r["unit"], "material_type": r["material_type"],
             "vehicle_type": r["vehicle_type"], "submitted_by": r.get("submitted_by"),
+            # the rejection reason was being written and then never read by anything,
+            # so a submitter saw "Rejected" and no explanation
+            "reject_reason": None,
             "total_vehicles": 0.0,
         })
         g["months"].append(r["month_index"])
         g["statuses"].add(r["status"])
+        if r.get("reject_reason") and not g["reject_reason"]:
+            g["reject_reason"] = r["reject_reason"]
         g["total_vehicles"] += conversions.convert_row(r, "vehicles", factors)
 
     out = []
@@ -619,6 +624,10 @@ class LocationIn(BaseModel):
     # marker. Null (or omitted) means no gate surveyed yet; routing uses lat/lon.
     gate_lat: Optional[float] = None
     gate_lon: Optional[float] = None
+    # operator / free-text detail. Salvaged out of a1_data.js, where the quarry operator
+    # was the only copy anywhere, and editable in the Locations panel since.
+    vendor: Optional[str] = None
+    detail: Optional[str] = None
 
 
 def _fields_set(model):
@@ -637,7 +646,8 @@ def create_location(body: LocationIn, token: Optional[str] = None):
     _check_admin(token)
     return network.create_location(body.name, body.role, body.materials, body.lat, body.lon,
                                    body.loc_type, supplies=body.supplies, receives=body.receives,
-                                   gate_lat=body.gate_lat, gate_lon=body.gate_lon)
+                                   gate_lat=body.gate_lat, gate_lon=body.gate_lon,
+                                   vendor=body.vendor, detail=body.detail)
 
 
 @app.put("/api/admin/locations/{location_id}")
@@ -646,11 +656,14 @@ def update_location(location_id: str, body: LocationIn, token: Optional[str] = N
     # only touch the gate if the client mentioned it — otherwise a caller that doesn't
     # know about gates (or an older client) would silently wipe one that was set
     gate_given = bool({"gate_lat", "gate_lon"} & set(_fields_set(body)))
+    meta_given = bool({"vendor", "detail"} & set(_fields_set(body)))
     return network.update_location(location_id, body.name, body.role, body.materials,
                                    body.lat, body.lon, body.loc_type,
                                    supplies=body.supplies, receives=body.receives,
                                    gate_lat=body.gate_lat, gate_lon=body.gate_lon,
-                                   gate_given=gate_given)
+                                   gate_given=gate_given,
+                                   vendor=body.vendor, detail=body.detail,
+                                   meta_given=meta_given)
 
 
 @app.delete("/api/admin/locations/{location_id}")
