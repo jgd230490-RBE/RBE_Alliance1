@@ -405,10 +405,18 @@ ok("unique location names are left alone", "Muuga Harbour" in labels)
 ok("material_guess normalised to a factors.json category",
    mr["R-P01-C03"]["material_guess"] in known, str(mr["R-P01-C03"]["material_guess"]))
 
-# the regression this fixes: the retired legacy file had no distance key at all
-legacy = json.load(open(os.path.join(BACKEND, "seed_data", "routes.json"), encoding="utf-8"))
-ok("the retired legacy file genuinely carried no distance",
-   all("distance_km" not in r for r in legacy))
+# The regression this fixes: the retired legacy file had no distance key at all.
+# seed_data/routes.json is now dead weight that nothing loads, so it may legitimately
+# have been deleted from the repo — this records the finding when it is still there and
+# says so plainly when it is not, rather than failing over a file that is allowed to go.
+_legacy_path = os.path.join(BACKEND, "seed_data", "routes.json")
+if os.path.exists(_legacy_path):
+    legacy = json.load(open(_legacy_path, encoding="utf-8"))
+    ok("the retired legacy file genuinely carried no distance",
+       all("distance_km" not in r for r in legacy))
+else:
+    print("  note: seed_data/routes.json has been removed — "
+          "skipping the historical no-distance check")
 ok("meta now yields at least one non-zero distance",
    any((r["distance_km"] or 0) > 0 for r in mr.values()))
 
@@ -537,6 +545,54 @@ ok("no single global turnaround can serve both artics",
    flat != tip, f"flatbed={flat}m tipper={tip}m")
 ok("route_analysis resolves turnaround per vehicle, not globally",
    abs(row["turnaround_hr"] - tip / 60.0) < 1e-6, str(row["turnaround_hr"]))
+
+# =========================================================================== #
+#  9b. Quick fixes (2026-08-22)                                                #
+# =========================================================================== #
+# vendor / detail round-trip through create and update, and survive a body that
+# does not mention them (an older client must not blank an operator name)
+nid = network.create_location("Test Pit", "origin", materials=["Small aggregate"],
+                              lat=58.5, lon=24.7, loc_type="Quarry",
+                              vendor="OU Testija", detail="Sand")["id"]
+row = db.query("SELECT vendor, detail FROM locations WHERE id = ?", (nid,))[0]
+ok("create_location stores the operator", row["vendor"] == "OU Testija", str(row))
+ok("create_location stores the detail", row["detail"] == "Sand")
+
+network.update_location(nid, name="Test Pit", lat=58.6, lon=24.7)      # meta_given False
+row = db.query("SELECT vendor FROM locations WHERE id = ?", (nid,))[0]
+ok("an update that omits vendor does not blank it", row["vendor"] == "OU Testija", str(row))
+
+network.update_location(nid, name="Test Pit", lat=58.6, lon=24.7,
+                        vendor="OU Uus", detail=None, meta_given=True)
+row = db.query("SELECT vendor, detail FROM locations WHERE id = ?", (nid,))[0]
+ok("an update that names vendor does change it", row["vendor"] == "OU Uus", str(row))
+ok("and it can clear the detail", row["detail"] is None, str(row))
+network.delete_location(nid)
+
+# the rejection reason has to reach the people who need to read it
+save("R-Q06-C01", "earthworks", "WS3", 5.0, month=2)
+main.set_route_status("R-Q06-C01", main.StatusUpdate(status="Rejected",
+                      reject_reason="Volumes exceed the approved haul allowance"),
+                      discipline="earthworks", section_id="WS3")
+led = [g for g in main.forecasts_summary() if g["route_id"] == "R-Q06-C01"][0]
+ok("the ledger carries the rejection reason",
+   led["reject_reason"] == "Volumes exceed the approved haul allowance", str(led.get("reject_reason")))
+ok("and the row reads as Rejected", led["status"] == "Rejected")
+rows = main.list_forecasts(route_id="R-Q06-C01")
+ok("the reason is on the raw rows the submitter's view reads",
+   all(r["reject_reason"] for r in rows), str(rows[:1]))
+
+# every material category must name at least one vehicle, or the restricted dropdown
+# would leave a submitter unable to pick anything at all
+_cats = conversions.load_factors()["material_categories"]
+_bad = [k for k, v in _cats.items() if not k.startswith("_") and not (v.get("vehicles") or [])]
+ok("every material category lists usable vehicles", not _bad, str(_bad))
+_vnames = set(conversions.vehicle_names(conversions.load_factors()))
+_unknown = {v for k, c in _cats.items() if not k.startswith("_")
+            for v in (c.get("vehicles") or []) if v not in _vnames}
+ok("every vehicle named by a category actually exists", not _unknown, str(_unknown))
+ok("aggregates do not permit a flatbed",
+   "Artic Flatbed (44t)" not in (_cats["Large aggregate / ballast"].get("vehicles") or []))
 
 # =========================================================================== #
 #  10. Retired paths are actually gone (source-level)                          #
