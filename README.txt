@@ -1,254 +1,316 @@
-RBE Alliance 1 — PHASE 4: TEMPORARY HAUL ROADS
+RBE Alliance 1 — PHASE 2.5a
+Road restrictions (Tark Tee) · Street View · map polish
 ================================================================================
 Extract over your repo root, then commit.
-THERE ARE NO DELETIONS THIS TIME. Nothing needs removing by hand.
+NO DELETIONS. Nothing needs removing by hand.
 
-  backend/haul.py                      ->  backend/          (NEW)
-  backend/zones.py                     ->  backend/
-  backend/here_routing.py              ->  backend/
-  backend/network.py                   ->  backend/
-  backend/db.py                        ->  backend/
+  backend/projection.py                ->  backend/          (NEW)
+  backend/restrictions.py              ->  backend/          (NEW)
+  backend/streetview.py                ->  backend/          (NEW)
   backend/main.py                      ->  backend/
-  backend/tests/test_phase4.py         ->  backend/tests/    (NEW)
+  backend/tests/test_phase25a.py       ->  backend/tests/    (NEW)
   backend/tests/test_phase2.py         ->  backend/tests/    (RESTORED — see 1)
-  backend/tests/parse_frontend.js      ->  backend/tests/    (RESTORED — see 1)
+  backend/tests/parse_frontend.js      ->  backend/tests/
   backend/tests/parse_map.js           ->  backend/tests/
   frontend/index.html                  ->  frontend/
   map/index.html                       ->  map/
+  render.yaml                          ->  repo root         (⚠️ READ SECTION 2)
+  env.example                          ->  repo root
   README.txt                           ->  repo root
 
 factors.json is NOT included — nothing in it changed. Do not overwrite yours.
+zones.py, haul.py, network.py, db.py and here_routing.py are unchanged since
+Phase 4 and are not included.
 
 Tests, all run in this session:
-    python3 backend/tests/test_phase2.py     -> 139 passed   (unchanged)
-    python3 backend/tests/test_phase3.py     -> 151 passed   (unchanged)
-    python3 backend/tests/test_phase4.py     -> 202 passed   (new)
-    node     backend/tests/parse_frontend.js ->  84 passed   (59 + 25 new)
-    node     backend/tests/parse_map.js      ->  57 passed   (49 + 8 new)
-                                                ---
-                                                633 assertions
+    python3 backend/tests/test_phase2.py      -> 139 passed  (unchanged)
+    python3 backend/tests/test_phase3.py      -> 151 passed  (unchanged)
+    python3 backend/tests/test_phase4.py      -> 202 passed  (unchanged)
+    python3 backend/tests/test_phase25a.py    ->  77 passed  (new)
+    node     backend/tests/parse_frontend.js  ->  95 passed  (84 + 11 new)
+    node     backend/tests/parse_map.js       ->  81 passed  (57 + 24 new)
+                                                 ---
+                                                 745 assertions
 
-Committed locally in the session so the diff and message exist. The push failed,
-as always — the git proxy blocks it. Nothing reached GitHub.
-
-
---------------------------------------------------------------------------------
-1. THE TWO DELETED TEST HARNESSES ARE BACK IN THIS ZIP
---------------------------------------------------------------------------------
-I checked the repo at HEAD before starting anything. backend/tests/ still held
-only parse_map.js and test_phase3.py — commits bd540cb and 087bd07 were still the
-tip — so rbe-restore-test-harnesses.zip was never applied.
-
-test_phase2.py and parse_frontend.js are in this zip, recovered from the commit
-before their deletion and then updated for Phase 4. After extracting,
-`ls backend/tests/` should show FIVE files:
-
-    parse_frontend.js  parse_map.js  test_phase2.py  test_phase3.py  test_phase4.py
-
-You can discard the old restore zip.
+Committed locally. The push failed, as always — the git proxy blocks it.
 
 
 --------------------------------------------------------------------------------
-2. READ THIS BEFORE DRAWING A HAUL ROAD
+1. test_phase2.py WAS MISSING FROM THE REPO AGAIN
 --------------------------------------------------------------------------------
-HERE routes on HERE's map. A haul road just cut across a field is not in that
-map, and no parameter makes it appear. That single fact shaped the whole design,
-and it is why there are two modes:
+I cloned HEAD before starting. backend/haul.py is there, README.txt reads
+"PHASE 4", and every Phase 4 file matches my build byte for byte — so Phase 4
+landed cleanly. But backend/tests/ held only FOUR files: test_phase2.py was
+missing again.
 
-  SPLICE (the default)  Assumes HERE has never heard of the road.
-      Routes origin -> the road's near end with HERE, uses YOUR DRAWN LINE for
-      the road itself, then routes from the far end to the destination. Two HERE
-      calls per leg instead of one. Always works, because it never asks HERE
-      about a road it does not know. The geometry along the road is exactly what
-      you drew — no better and no worse.
+That is the fourth time this one file has gone astray. It is in this zip.
+After extracting, `ls backend/tests/` must show SIX:
 
-  VIA                   Assumes HERE already maps the road.
-      One call with the road's two ends as via-waypoints; HERE finds its own way
-      between them. Cheaper, and the line comes back snapped to real roads.
-      Correct ONLY if the road is genuinely in HERE's data. If it is not, HERE
-      routes between those two points along whatever public roads it does know,
-      returns a plausible-looking route that is wrong, and nothing in the
-      response says so.
+    parse_frontend.js  parse_map.js  test_phase2.py  test_phase3.py
+    test_phase4.py     test_phase25a.py
 
-Splice is the default because its failure mode is visible on the map and via's
-is not. Use via only for a haul road that is an existing forest or gravel track
-HERE already knows — and confirm that with the probe in section 5 first.
+Nothing in the running app depends on it. The cost is only that a future phase
+cannot prove it has not broken Phase 2. Worth a glance each time you commit.
 
 
 --------------------------------------------------------------------------------
-3. WHAT WAS BUILT
+2. ⚠️ render.yaml — CHECK THIS BEFORE ANY BLUEPRINT SYNC
 --------------------------------------------------------------------------------
-DRAWING. Data Management -> Zones has a second button, "+ Haul road". It uses the
-same click-to-place vertex collector as zones but saves an OPEN LINE instead of
-closing the ring, and the panel shows the drawn length and what the assigned
-speed makes of it in minutes as you draw.
+You upgraded the Postgres and web service in the Render dashboard. render.yaml
+in the repo still said:
 
-ATTACHING. A haul road does NOTHING until it is put on a route. Expand any route
-on the Routes tab and there is a panel above the analysis table: pick a road,
-Attach. Reorder with the arrows, Detach with the link. That is the "editable on
-the route itself" requirement from 2026-08-22 — no second drawing tool and no new
-top-level page.
+    plan: free      (web service)
+    plan: free      (database)
 
-Explicit attachment is not only simpler. Because nothing is inferred from
-proximity, "which legs does this haul road change" is a table lookup rather than
-a guess: Phase 3's zone invalidation has an approximate half for legs baked
-before it existed, and Phase 4's has none at all. It reports approximate: 0 every
-time, and that is a fact about the design rather than luck.
+so the blueprint now contradicts your deployment. If Render ever re-syncs the
+blueprint it tries to apply the file — and for the DATABASE that is the
+destructive direction.
 
-SPEED. HERE will not accept a custom speed, so an assigned one is applied
-afterwards. In splice mode the haul stretch is timed at drawn_length / speed
-outright — HERE never sees that stretch, so there is nothing to substitute, only
-to supply. In via mode HERE's own section time for the stretch is REPLACED by
-section_length / speed. Either way the adjusted figure lands in
-route_geometry.duration_hr, which is what route_analysis() reads, so cycle time,
-trips/day, tonnes/day, tonnes/month and CO2 all move.
+I have updated it to the plans I quoted when I recommended the upgrade:
 
-That was your choice ("full: recompute duration + feed cycle time"), and it is
-the useful version, but be clear about what it means: a number somebody types
-into a form now drives fleet sizing. So HERE's own figure is kept alongside it in
-duration_hr_here, the route analysis marks any affected cycle with a dagger, and
-hovering it shows what the cycle would have been on HERE's timing.
+    plan: starter          web service   ($7)
+    plan: basic-256mb      database      ($6)
 
-A haul road with NO speed set is routed through and its duration left exactly as
-HERE gave it. Blank means "not set", not zero — zero and negatives are rejected
-on the way in, because dividing by them is the actual bug. The route panel flags
-roads with no speed in red: a spliced road with no speed adds distance to the
-cycle and no time at all.
+**If you actually bought something else, fix those two lines before you commit,
+or at the very least before any blueprint sync.** I cannot see your dashboard
+from here, and guessing wrong in the file is worse than leaving it obviously
+wrong. The comments in the file say the same thing.
 
-origin_temp_km. Now derived, as you chose. It was seeded from V2, shown in
-routes_status(), and computed with nowhere — confirmed by grep. It now means "km
-of this route's loaded leg on drawn temporary haul road" and is recomputed on
-every attach, detach, reorder and haul-road edit. A route with no haul road
-attached reads 0, so the old V2 seed values will be gone from that column the
-first time anything refreshes it.
+Your API keys are now listed in render.yaml with `sync: false`, which tells
+Render they are dashboard-managed secrets and must not be wiped by a sync. Their
+VALUES are not in the file and must never be.
 
-  >>> If those V2 numbers were real survey data you wanted to keep, tell me
-  >>> BEFORE you apply this and I will move them to a separate column first.
-  >>> Once the refresh runs they are overwritten in the database.
-
-PUBLIC MAP. The "Temporary haul" toggle in the map sidebar is enabled again after
-being disabled and labelled "(Phase 4)" since Phase 2 step 2. It draws the real
-drawn polylines — dashed and amber, so they read as temporary works rather than
-surveyed network — with a popup giving the length, the assigned speed, the
-implied minutes and how many routes use it. The 97 legacy haul segments went with
-a1_data.js and are still not recoverable; these are only the roads drawn from now
-on.
+While you are in there: **ADMIN_TOKEN is still unset.** Every admin endpoint is
+open, and this delivery adds one more that spends money — the Street View proxy.
+`openssl rand -hex 24` → Render → Environment → paste into the Data Management
+header field.
 
 
 --------------------------------------------------------------------------------
-4. A BUG THAT WAS ALREADY THERE, NOW FIXED
+3. TARK TEE — you do not need to upload anything
 --------------------------------------------------------------------------------
-'haul_road' has been in zones.KINDS since Phase 3, doing nothing, with
-affects_routing defaulting to TRUE. Any zone of that kind drawn against the
-deployed Phase 3 build would have had its bounding box sent to HERE as an
-avoid[areas] — telling the router to steer AWAY from the road it is meant to use.
-Silently: the only symptom would be routes that got inexplicably longer.
+You asked whether you could "upload a data layer with all restrictions taken
+from tarktee". You do not have to. Tark Tee runs a live ArcGIS REST server and
+it carries exactly what you want:
 
-Haul roads are now excluded from the avoid list by KIND, not by a flag someone
-has to remember to untick. If you drew any haul-road zone since Phase 3 shipped,
-check it after applying this: its Routing column should read "Routed through",
-not "Avoided", and any route baked while it existed is worth re-baking.
+    weak bridges          mass restrictions       height restrictions
+    width restrictions    traffic restrictions    diversions
+
+(and, unused for now: truck_roads_60t / _80t / _25m, ice roads, and a
+restrictions_tallinn layer that will matter for the urban-site work in Phase 5.)
+
+It is fetched live, server-side, and cached for 30 minutes. Nothing to upload,
+nothing to keep up to date, and it cannot go stale — which is exactly the failure
+mode copying it into your own zones table would have had.
+
+WHAT YOU GET
+  * Six toggleable layers on the public map under "Road restrictions".
+    All OFF by default — it is a busy overlay on a map whose job is haul routes,
+    so you turn on the one you are asking about.
+  * Click any of them for a popup.
+  * **Every baked route is checked against every layer**, and the result appears
+    in that route's expanded panel on the Routes tab, next to the haul roads.
+    That is the part worth having: not a layer you look at, but "this route
+    passes a weak bridge".
+
+⚠️ TWO THINGS I HAD TO FIX OR REFUSE, AND YOU SHOULD KNOW ABOUT BOTH
+
+(a) THEIR COORDINATES ARE MISLABELLED AT SOURCE.
+    The service returns L-EST97 projected metres while declaring
+    "spatialReference": {"wkid": 4326}, and it ignores outSR. I checked both
+    f=geojson and f=json&outSR=4326 against the live service — same lie both
+    times. Anything that believed it would draw Estonian roads in the Indian
+    Ocean.
+
+    So backend/projection.py converts them. pyproj would be the normal tool and
+    my sandbox cannot install it, so it is the Lambert Conformal Conic maths
+    written out and verified two ways: the false origin is exact by definition,
+    and a round trip through the forward projection is accurate to 5.6 mm across
+    the whole country. Two real bridges land in the right counties for their road
+    numbers (13xxx = Ida-Viru, 14xxx = Jõgeva).
+
+    It converts only if the value actually looks projected, so the day Tark Tee
+    starts telling the truth this keeps working instead of double-converting.
+
+(b) I WILL NOT TELL YOU WHETHER A BRIDGE CAN TAKE YOUR TRUCK. ⚠️
+    Real nominal_load values from the live service look like this:
+
+        "N-8/NG-30"     "N-13/NG-60"     "N-18/NG-60"     ""
+
+    That is an Estonian bridge load CLASSIFICATION, not a tonnage. I do not know
+    what N-13/NG-60 permits, nobody has told me, and so nothing in this code
+    converts it to tonnes or compares it against a 44 t artic. The route panel
+    shows the class verbatim, the vehicle's laden weight beside it, and says
+    plainly that the comparison is not one the app can make.
+
+    **This is a question for you.** If N-x/NG-x maps to a tonne limit — or to a
+    rule like "N is the single-vehicle class and NG the tracked-vehicle class,
+    both in tonnes" — tell me and I will make it a real check with a real verdict.
+    Until then a confident green tick would be the worst possible output.
+
+    Note one of the five bridges I sampled has an EMPTY nominal_load. That is
+    handled, and reported as "no load class recorded" rather than as safe.
+
+ADVISORY ONLY, DELIBERATELY. None of this is fed to HERE as avoid-areas. HERE has
+its own truck restriction model and returns its own per-section notices, and two
+systems arguing about the same road would be worse than one. A "hit" means the
+restriction sits within 30 m of the baked line — not that it applies to your
+vehicle. That 30 m is judgement, the same status as the 3 km zone detour pad.
+
+DIAGNOSTIC:  /api/admin/diagnostics/restrictions?probe=true
+It shows the raw coordinate next to the converted one, so the mislabelling is
+visible rather than something you take on trust.
 
 
 --------------------------------------------------------------------------------
-5. THE TWO THINGS I COULD NOT TEST, AND THE PROBE THAT ANSWERS THEM
+4. STREET VIEW — added, and wired so it costs almost nothing
 --------------------------------------------------------------------------------
-HERE is never called from my sandbox. Both of these are inherited from a code
-comment written during Phase 2 and NEITHER has ever been checked against the live
-service:
+Mapbox has no street-level imagery, so this is Google Maps Platform: a separate
+product, a separate key and a separate bill from HERE.
 
-  a) that HERE ignores `alternatives` when via-waypoints are present
-  b) that a stopover via splits the response into one section per leg
+SET UP:
+  1. Google Cloud console → enable **Street View Static API** only.
+  2. Create an API key and restrict it to your Render server's IP.
+  3. Render → Environment → GOOGLE_MAPS_API_KEY
+  4. Optional but recommended: also set GOOGLE_MAPS_URL_SIGNING_SECRET.
 
-(b) is load-bearing: via mode's speed substitution only works if HERE isolates
-the haul stretch as its own section. The code detects that failure — if the split
-does not happen it applies NO speed adjustment rather than applying one to a
-section that might be the whole route, and says so in the response and in the
-per-road note. That detection is tested. The underlying behaviour is not.
+With no key set nothing breaks — popups simply show no photo.
 
-Run this against the live deployment, on a route you have attached a haul road to:
+THE COST TRICK, WHICH IS THE WHOLE DESIGN:
+Google's metadata endpoint is FREE and consumes no quota. Their words: "Street
+View Static API metadata requests are available at no charge. No quota is
+consumed when you request metadata." Only images are billable. So the app
+**always** asks metadata first and only ever requests a picture for a location
+Google actually has imagery for. A quarry down a private haul track — most of
+this network — costs nothing and shows nothing, instead of spending a paid
+request to receive a grey tile.
 
-    /api/admin/diagnostics/haul-roads?route_id=R001&probe=true
+On top of that: imagery is only looked up when you actually open a popup (not for
+27 locations on page load), metadata answers are cached for a week, and the key
+never reaches the browser because everything is proxied.
 
-It spends up to three HERE calls and reports:
+The popup also tells you how far away the nearest panorama is when that is more
+than 25 m, because on a long approach road the photo can be of somewhere else
+entirely.
 
-    probe.reading.here_drops_alternatives_with_via   -> answers (a)
-    probe.reading.sections_split_at_vias             -> answers (b)
-    probe.reading.via_mode_usable                    -> true if via mode is safe
+⚠️ I have NOT quoted a price anywhere in the code or here. Google's rates have
+changed twice recently — the universal $200 monthly credit is gone, replaced by
+per-SKU free tiers — and a stale figure in a comment is worse than none. Read the
+current rate off Google's pricing page.
+/api/admin/diagnostics/streetview reports how many billable requests this process
+has actually made, which is the number worth watching.
 
-If via_mode_usable is false, leave every haul road on splice. Send me what it
-returns and I will fold the answer into the notes so nobody re-derives it.
+Nothing is stored. Google's terms restrict caching Maps content, so the proxy
+streams and forgets, and there is an assertion that the module never opens a file
+or touches the database.
+
+
+--------------------------------------------------------------------------------
+5. MAP POLISH — and one item that was not what the backlog said
+--------------------------------------------------------------------------------
+⚠️ THE KPI CARDS DID NOT EXIST.
+The backlog read "KPI cards on the map synced to timeline + filters — KPIs recalc
+on filter but not on timeline scrub". Going to fix it, I found calculateKPIs()
+was writing to element ids (kpi-routes, kpi-capacity) that are not in the page at
+all. They had been removed at some point and the function was left behind,
+running on every filter change and updating nothing.
+
+So I built the cards rather than "syncing" cards that were not there. They sit in
+the sidebar under "At a glance" and follow the timeline as well as the filters:
+with the timeline open they count the routes carrying volume in the month on
+screen, and the label changes to say so — otherwise a month figure reads as a
+network figure that has mysteriously dropped.
+
+ANIMATION ONLY IN PLAY MODE. The ant-march dashes now move only while the
+timeline is playing, and the line is solid otherwise. The old loop also scheduled
+itself every frame for ever whether or not there was anything to animate; it now
+stops dead when playback stops. That matters on a phone.
+
+OFFSET COLLAPSES AT HIGH ZOOM. The ±1–4 px direction offset is what separates
+laden-out from empty-back at zoom 12. Past about zoom 14 the road is wider than
+the offset, so it stops separating anything and starts drawing the route in the
+verge — which is what the "1 m accuracy" complaint was really about. It now ramps
+up to zoom 12 and back to zero by zoom 17. Line width keeps growing instead, so a
+route at zoom 16 no longer looks like a scratch on a 40 px road.
+
+
+--------------------------------------------------------------------------------
+6. MOBILE — analysed, not built. Full version in claude/mobile-analysis.md
+--------------------------------------------------------------------------------
+Short version: **do not make the app responsive.** Build one new read-only phone
+screen and leave the other five tabs desktop-only.
+
+The finding is who is actually holding the phone. Submitters, planners and admins
+are all at a desk — nobody types a 60-month forecast matrix or draws a haul road
+on a phone. The person who genuinely needs this on a phone is a gate marshal,
+driver or site engineer asking "where does this load go and what should I watch
+for" — and that person **has no login and no screen** in the app today.
+
+Making the existing five tabs responsive would mean card-ifying 91 table columns
+to serve people who are sitting at a computer anyway.
+
+WORTH BUILDING, in order:
+  1. A `/m/` route-lookup screen: one route, the line on a map, cycle time, and —
+     the part that only exists as of today — its Tark Tee warnings and any haul
+     road on it. Every API it needs already exists.
+  2. Public map touch fixes: full-width sidebar under ~700 px, the timeline bar
+     is positioned assuming a 300 px sidebar is there, and tap targets are 7 px
+     where they want ~44. Half a day, and it is what you would show a client on a
+     phone.
+  3. A "what's on today" list. Cheap once (1) exists.
+
+DEFER: Approvals on mobile. It is the only genuinely mobile *write*, and the role
+gate is decorative — LOGINS is a client-side dict with plaintext passwords in
+view-source. Putting an approve button on the device most likely to be handed to
+someone or left unlocked makes that materially worse. Wait for real auth.
+
+BEFORE BUILDING ANY OF IT: ask whoever will actually hold the phone what they
+open it for. The whole analysis is inference from the code. It is a reasonable
+inference and it is still an inference — the likeliest way to waste the work is to
+build the route screen and discover the real need was "photograph a delivery note
+and attach it to a load".
+
+
+--------------------------------------------------------------------------------
+7. STILL OPEN FROM THE 2.5 BACKLOG
+--------------------------------------------------------------------------------
+AI-ASSISTED UPLOAD / AUTOFILL — parked, as you said. Still needs three real
+example files before it can be scoped. A parser for a known column layout is a
+week; "understand any document" is a different product.
+
+CONFIG PAGES — you chose a config table in Postgres with factors.json as the
+seed, now that the paid plan makes persistent storage a real option. NOT built
+here; it is a data-model change and belongs with 2.5b.
+
+STILL IN 2.5b (the next delivery): multi-year forecast entry, merged My
+submissions + Approvals, nav restructure, route editing, config pages.
+
+STILL BLOCKED ON FORECASTS EXISTING: origin/destination icons highlighting when
+in a forecast, and forecast route colours by discipline. Neither can be built
+until forecasts are re-authored — they would have nothing to colour.
+
+DRAG-TO-EDIT DRAWN SHAPES — you said not yet, revisit at Phase 5a. Agreed: gates
+are points and node dragging already works, so 5a gets it free for gates without
+adding mapbox-gl-draw and coupling to a plugin version.
+
+
+--------------------------------------------------------------------------------
+8. WHAT IS NOT TESTED
+--------------------------------------------------------------------------------
+Neither external service is ever called from my sandbox — the same rule HERE has
+followed since Phase 1. Every Tark Tee assertion is about parsing, reprojection
+and matching maths against a recorded fixture; every Street View assertion is
+about which endpoint is called and in what order. Tark Tee could rename a field
+tomorrow and the suite would still pass.
+
+The projection is the exception and IS properly tested, because it is pure maths
+with no dependency.
 
 Also unexercised, as in every phase: the HTTP layer (FastAPI cannot boot here),
-every Postgres branch of db.py, and anything needing a browser — the drawing
-mode, the route panel and the map layer are asserted at source level only.
+every Postgres branch of db.py, and anything needing a browser — the restriction
+overlay, the Street View thumbnails and the KPI cards are asserted at source
+level only.
 
-
---------------------------------------------------------------------------------
-6. THINGS TO EXPECT THAT MIGHT LOOK LIKE BUGS
---------------------------------------------------------------------------------
-ALTERNATIVES DISAPPEAR ON A ROUTE WITH A HAUL ROAD. A leg routed through one
-comes back as a single option. In via mode that is HERE's own behaviour (probably
-— see 5a). In splice mode it is my decision: alternatives across a spliced route
-would be the cross product of the alternatives on each sub-call, ranked by
-durations that are partly HERE's and partly assigned, which is a worse answer
-than one honest option. "Make primary" therefore has nothing to promote on those
-routes. The route panel warns about it up front, and promote_alternative returns
-a message naming the haul road instead of a bare cache miss. Detach the road and
-alternatives come back on the next bake.
-
-A BAKE NOW COSTS MORE HERE CALLS THAN LEGS. `limit` on /api/admin/bake-routes
-still counts legs, but a leg spliced through N haul roads is N+1 calls. The batch
-response has a new `here_calls` field with the real number, and the attach/detach
-panel quotes the cost before you spend it. On a network with no haul roads
-nothing changes — the same one call per leg as before.
-
-A HAUL ROAD THAT SEEMS TO DO NOTHING is almost always one of three things, and
-the UI now names all three: it is attached to no route (the Zones table says "no
-routes" in amber), it is inactive / outside its date window / not ticked "open to
-traffic" (the route panel says "not in force today"), or the route has never been
-baked. You said the network is only partly baked, so expect the third.
-
-DRAWING ORDER IS NOT DIRECTION. Which end of a road a truck enters is worked out
-per leg from where it is coming from, so the loaded leg and the return leg
-traverse the same drawn line in opposite directions. Clicking a road left to
-right says nothing about traffic.
-
-THE DRAWN LENGTH IS ONLY AS GOOD AS THE DRAWING. A curving road sketched with
-four clicks reads short, and the assigned speed is divided into that short
-figure. Click more points on a bendy road.
-
-
---------------------------------------------------------------------------------
-7. STILL OUTSTANDING, AND NOW MORE URGENT
---------------------------------------------------------------------------------
-RENDER POSTGRES IS STILL ON THE FREE PLAN. 30 days from creation, 14-day grace,
-then deleted. No backups, ever. Raised every session since 2026-08-21. Phase 4
-makes it worse again: haul roads invalidate and re-bake routes, and a spliced
-re-bake is more HERE calls than it used to be, all landing in a database with a
-deletion date. $6/month.
-
-ADMIN_TOKEN IS STILL UNSET ON RENDER, so every admin endpoint is open. Phase 4
-adds four more that spend HERE calls per click: attach, detach, reorder, and the
-haul diagnostic with probe=true. `openssl rand -hex 24` -> Render -> Environment
--> paste into the Data Management header field.
-
-
---------------------------------------------------------------------------------
-8. NOT BUILT, DELIBERATELY
---------------------------------------------------------------------------------
-  * No vertex dragging. Editing a haul road still means redrawing it, exactly as
-    for zones. mapbox-gl-draw remains the upgrade path and drops into the same
-    place. You have asked for drag-to-edit routes; that is the same mechanism and
-    still unbuilt.
-  * No warning that an approved forecast now assumes a different route. A haul
-    road changes cycle time and therefore trucks needed, and nothing tells a
-    planner that an already-approved forecast moved under them. Phase 3 has the
-    identical gap. It wants its own pass across both, not a patch on this one.
-  * Gates vs haul roads: I checked, and they do not collide. A gate moves an
-    endpoint via _waypoint(); a haul road inserts a middle. A site can have both
-    and they compose — the gate decides where the leg starts, the haul road what
-    it passes through. No change was needed.
-  * Mixed splice and via roads on ONE leg fall back to splicing everything, and
-    say so in the response rather than downgrading silently. Interleaving them
-    would break the section indices the via speed model reads.
+Run both diagnostics against the deployment once it is up:
+    /api/admin/diagnostics/restrictions?probe=true
+    /api/admin/diagnostics/streetview?probe=true&lat=…&lon=…

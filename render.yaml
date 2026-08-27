@@ -1,11 +1,17 @@
-# Render blueprint. Render reads this automatically when you create a
-# "Blueprint" from your GitHub repo, and provisions both the web service
-# and the database below. Free tier.
+# Render blueprint. Render reads this automatically when you create a "Blueprint"
+# from your GitHub repo, and provisions both the web service and the database.
+#
+# ⚠️ THESE PLAN VALUES MUST MATCH WHAT YOU ACTUALLY BOUGHT.
+# Both were `free` until 2026-08-27, when the plans were upgraded in the Render
+# dashboard. A blueprint file that still said `free` would try to apply that on the
+# next sync — and for the DATABASE that is the destructive direction. They are set
+# below to the plans quoted when the upgrade was recommended ($7 web, $6 database).
+# If you bought something else, correct these two lines BEFORE any blueprint sync.
 services:
   - type: web
     name: rbe-a1-logistics
     runtime: python
-    plan: free
+    plan: starter                 # was: free  (free slept after 15 min, 750 h/month cap)
     buildCommand: "pip install -r backend/requirements.txt"
     startCommand: "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
     envVars:
@@ -15,7 +21,17 @@ services:
         fromDatabase:
           name: rbe-a1-db
           property: connectionString
+      # Set these in the Render dashboard, NOT here — they are secrets and this file
+      # is public. Listed so a blueprint sync does not wipe them.
+      - key: HERE_API_KEY
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY          # Phase 2.5a — Street View. Optional.
+        sync: false
+      - key: GOOGLE_MAPS_URL_SIGNING_SECRET  # optional, recommended
+        sync: false
 
 databases:
   - name: rbe-a1-db
-    plan: free
+    plan: basic-256mb             # was: free  (expired after 30 days, then DELETED)
