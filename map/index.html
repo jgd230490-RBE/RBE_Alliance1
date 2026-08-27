@@ -44,12 +44,25 @@
         .control-item label { display:flex; align-items:center; gap:9px; cursor:pointer; width:100%; font-weight:500; color:var(--ink); }
         .control-item input[type=checkbox]{ accent-color:var(--navy); width:14px; height:14px; }
         .color-dot { width:11px; height:11px; border-radius:50%; display:inline-block; margin-left:auto; }
-        /* Phase 2.5a KPI cards */
-        .kpi-row{ display:flex; gap:8px; }
-        .kpi-card{ flex:1; background:#f6f8fb; border:1px solid var(--line); border-radius:8px; padding:9px 10px; }
-        .kpi-value{ font-size:19px; font-weight:700; letter-spacing:-.02em; color:var(--navy-deep); line-height:1.1; }
-        .kpi-label{ font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin-top:3px; }
-        .kpi-note{ font-size:10.5px; color:var(--muted); margin-top:7px; line-height:1.45; }
+        /* Phase 2.5a — KPI readout on the map itself, under the navigation control.
+           top:112px clears Mapbox's zoom + compass stack at its default sizing. */
+        #kpi-hud{ position:absolute; top:112px; right:10px; z-index:15; width:232px;
+                  background:rgba(255,255,255,.94); backdrop-filter:blur(6px);
+                  border:1px solid var(--line); border-radius:11px; padding:11px 12px;
+                  box-shadow:0 6px 22px rgba(16,24,40,.14); pointer-events:auto; }
+        .kpi-row{ display:flex; gap:9px; }
+        .kpi-card{ flex:1; }
+        .kpi-value{ font-size:22px; font-weight:700; letter-spacing:-.025em; color:var(--navy-deep); line-height:1.05; font-variant-numeric:tabular-nums; }
+        .kpi-label{ font-size:9.5px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin-top:3px; line-height:1.25; }
+        .kpi-note{ font-size:10px; color:var(--muted); margin-top:8px; line-height:1.45;
+                   border-top:1px solid var(--line); padding-top:7px; }
+        /* on a phone the note is the first thing to go, then the panel shrinks to the
+           two numbers — see claude/mobile-analysis.md */
+        @media (max-width:700px){
+            #kpi-hud{ width:auto; top:auto; bottom:74px; right:8px; left:8px; padding:9px 11px; }
+            #kpi-hud .kpi-note{ display:none; }
+            .kpi-value{ font-size:18px; }
+        }
         .restr-warn{ font-size:11px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:7px; padding:7px 9px; margin-top:8px; line-height:1.45; }
 
         .fc-box h3{ border:none; }
@@ -161,24 +174,26 @@
         </div>
     </div>
 
-    <!-- Phase 2.5a — these cards previously existed only in calculateKPIs(), which wrote
-         to element ids that had been deleted from the page. The function ran on every
-         filter change and updated nothing. Rebuilt here, and now driven by the timeline
-         as well as the filters. -->
-    <div class="control-group">
-        <h3>At a glance</h3>
-        <div class="kpi-row">
-            <div class="kpi-card">
-                <div class="kpi-value" id="kpi-routes">—</div>
-                <div class="kpi-label" id="kpi-routes-label">Active routes</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-value" id="kpi-capacity">—</div>
-                <div class="kpi-label">Trips / day</div>
-            </div>
+</div>
+
+<!-- Phase 2.5a — KPI readout ON THE MAP, not in the sidebar.
+     Sits under the Mapbox navigation control at top-right, so it is visible with the
+     sidebar collapsed and while the timeline is playing — which is when the numbers are
+     actually changing and worth watching. Collapses to a single line on a narrow screen.
+     (These cards previously existed only inside calculateKPIs(), which wrote to element
+     ids that had been deleted from the page and so updated nothing.) -->
+<div id="kpi-hud">
+    <div class="kpi-row">
+        <div class="kpi-card">
+            <div class="kpi-value" id="kpi-routes">—</div>
+            <div class="kpi-label" id="kpi-routes-label">Active routes</div>
         </div>
-        <div class="kpi-note" id="kpi-note"></div>
+        <div class="kpi-card">
+            <div class="kpi-value" id="kpi-capacity">—</div>
+            <div class="kpi-label">Trips / day</div>
+        </div>
     </div>
+    <div class="kpi-note" id="kpi-note"></div>
 </div>
 
 <div id="timeline-bar">
@@ -369,33 +384,11 @@
         const WIDTH_CASING = ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 7, 16, 12];
 
 
-        // 1. INBOUND ROUTES (Deep Sapphire Blue)
-        // Casing (Halo)
-        map.addLayer({
-            'id': 'inbound-lines-casing',
-            'type': 'line',
-            'source': 'routes-source',
-            'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
-            'paint': { 
-                'line-color': '#ffffff', 
-                'line-width': WIDTH_CASING, 
-                'line-opacity': 0.8,
-                'line-offset': OFFSET_IN
-            }
-        });
-        // Core Line
-        map.addLayer({
-            'id': 'inbound-lines',
-            'type': 'line',
-            'source': 'routes-source',
-            'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
-            'paint': { 
-                'line-color': '#039E86', 
-                'line-width': WIDTH_CORE, 
-                'line-opacity': 1,
-                'line-offset': OFFSET_IN
-            }
-        });
+        // ⚠️ LAYER ADD ORDER IS Z-ORDER. Outbound is added FIRST so that inbound
+        // (laden, out) draws ON TOP of it. The laden leg is the one the network is
+        // planned around and the one a forecast's distance follows, so where the two
+        // overlap it is the one that should be readable. Reversing these two blocks
+        // silently reverses that, which is exactly what had happened.
 
         // 2. OUTBOUND ROUTES (Bright Cyan/Teal)
         // Casing (Halo)
@@ -422,6 +415,34 @@
                 'line-width': WIDTH_CORE, 
                 'line-opacity': 1,
                 'line-offset': OFFSET_OUT
+            }
+        });
+
+        // 1. INBOUND ROUTES (Deep Sapphire Blue)
+        // Casing (Halo)
+        map.addLayer({
+            'id': 'inbound-lines-casing',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
+            'paint': { 
+                'line-color': '#ffffff', 
+                'line-width': WIDTH_CASING, 
+                'line-opacity': 0.8,
+                'line-offset': OFFSET_IN
+            }
+        });
+        // Core Line
+        map.addLayer({
+            'id': 'inbound-lines',
+            'type': 'line',
+            'source': 'routes-source',
+            'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
+            'paint': { 
+                'line-color': '#039E86', 
+                'line-width': WIDTH_CORE, 
+                'line-opacity': 1,
+                'line-offset': OFFSET_IN
             }
         });
 
@@ -791,9 +812,11 @@
     // ADVISORY ONLY. This is not fed to the router: HERE has its own restriction model
     // and returns its own notices, and two systems arguing about the same road would be
     // worse than one. It is drawn so a planner can see what a route runs past.
-    const RESTR = { data:null, loading:false, layers:[] };
-    const RESTR_COLOR = '#B4341C';
-    const RESTR_NOTE_COLOR = '#8a6d3b';
+    // Colours come from /api/restrictions/layers, NOT from constants here. Two reasons:
+    // the sidebar legend and the map layer then read the same value and cannot drift (that
+    // has had to be fixed on this map once already), and adding a layer server-side needs
+    // no change in this file.
+    const RESTR = { data:null, loading:false, layers:[], colour:{} };
 
     async function loadRestrictions(){
         if(RESTR.loading) return;
@@ -801,6 +824,8 @@
         try{
             const cat = await fetch(CONFIG.API_BASE + '/restrictions/layers').then(r=>r.json());
             RESTR.layers = cat.layers || [];
+            RESTR.colour = {};
+            RESTR.layers.forEach(l => { RESTR.colour[l.key] = l.colour; });
             buildRestrictionToggles();
             const fc = await fetch(CONFIG.API_BASE + '/restrictions').then(r=>r.json());
             RESTR.data = fc;
@@ -822,8 +847,7 @@
         box.innerHTML = RESTR.layers.map(l =>
             '<div class="control-item"><label><input type="checkbox" id="restr-' + l.key +
             '" onchange="toggleRestriction(\'' + l.key + '\', this.checked)"> ' + l.label +
-            '</label><span class="color-dot" style="background:' +
-            (l.severity === 'warn' ? RESTR_COLOR : RESTR_NOTE_COLOR) + ';"></span></div>'
+            '</label><span class="color-dot" style="background:' + l.colour + ';"></span></div>'
         ).join('');
         // all off by default: this is a busy overlay on a map whose job is haul routes,
         // and a planner turns on the one they are asking about
@@ -842,21 +866,37 @@
 
         // one pair of layers for everything, filtered by _kind, so adding a layer to
         // backend/restrictions.py needs no change here
+        // the feature carries its own colour, stamped server-side from the same catalogue
+        // the legend dots are built from — so a layer can never be a different colour on
+        // the map than it is in the sidebar
+        const COLOUR = ['coalesce', ['get', '_colour'], '#64748B'];
         if(!map.getLayer('restriction-lines')) map.addLayer({
             id:'restriction-lines', type:'line', source:'restrictions-source',
             filter:['in', ['geometry-type'], ['literal', ['LineString','MultiLineString']]],
-            layout:{ visibility:'none' },
-            paint:{ 'line-color':['case',['==',['get','_severity'],'warn'],RESTR_COLOR,RESTR_NOTE_COLOR],
-                    'line-width':['interpolate',['linear'],['zoom'],7,2,14,5],
-                    'line-dasharray':[1,1.2], 'line-opacity':0.9 },
+            layout:{ visibility:'none', 'line-cap':'round' },
+            paint:{ 'line-color':COLOUR,
+                    'line-width':['interpolate',['linear'],['zoom'],7,2.5,14,6],
+                    'line-dasharray':[1,1.2], 'line-opacity':0.95 },
         });
         if(!map.getLayer('restriction-points')) map.addLayer({
             id:'restriction-points', type:'circle', source:'restrictions-source',
             filter:['in', ['geometry-type'], ['literal', ['Point','MultiPoint']]],
             layout:{ visibility:'none' },
-            paint:{ 'circle-radius':['interpolate',['linear'],['zoom'],7,3.5,14,7],
-                    'circle-color':['case',['==',['get','_severity'],'warn'],RESTR_COLOR,RESTR_NOTE_COLOR],
-                    'circle-stroke-width':1.5, 'circle-stroke-color':'#ffffff' },
+            paint:{ 'circle-radius':['interpolate',['linear'],['zoom'],7,4,14,8],
+                    'circle-color':COLOUR,
+                    'circle-stroke-width':1.75, 'circle-stroke-color':'#ffffff' },
+        });
+        // the VALUE, on the map, from zoom 11 — "4 m" beside the dot is the entire point
+        // of the layer, and reading it should not need a click
+        if(!map.getLayer('restriction-labels')) map.addLayer({
+            id:'restriction-labels', type:'symbol', source:'restrictions-source',
+            minzoom:11, layout:{ visibility:'none',
+                'text-field':['case',
+                    ['all', ['has','_limit'], ['!=', ['get','_limit'], null]],
+                    ['concat', ['to-string', ['get','_limit']], ' ', ['coalesce',['get','_unit'],'']],
+                    ''],
+                'text-size':11, 'text-offset':[0,1.1], 'text-allow-overlap':false },
+            paint:{ 'text-color':COLOUR, 'text-halo-color':'#ffffff', 'text-halo-width':2 },
         });
         applyRestrictionFilter();
     }
@@ -867,7 +907,8 @@
         const on = RESTR.layers.filter(l => restrictionVisible(l.key)).map(l => l.key);
         const vis = on.length ? 'visible' : 'none';
         [['restriction-lines', ['LineString','MultiLineString']],
-         ['restriction-points', ['Point','MultiPoint']]].forEach(([id, types]) => {
+         ['restriction-points', ['Point','MultiPoint']],
+         ['restriction-labels', ['Point','MultiPoint']]].forEach(([id, types]) => {
             if(!map.getLayer(id)) return;
             map.setLayoutProperty(id, 'visibility', vis);
             map.setFilter(id, ['all',
@@ -881,24 +922,44 @@
         applyRestrictionFilter();
     }
 
+    // Leads with the VALUE. The first version of this hunted through guessed field names
+    // and showed that a height restriction existed without ever showing that it was 4 m,
+    // which is the only part anyone needs. _headline is stamped server-side from the real
+    // schema (restriction_limit is a number; the unit comes from the layer).
     function restrictionPopupHTML(p){
-        const title = p.bridge_name || p.name || p.road_name || p._label || 'Restriction';
+        const colour = p._colour || '#64748B';
+        const title = p._headline || p._label || 'Restriction';
+        const where = p.road_name || (p.road_nr ? 'Road ' + p.road_nr : '');
+        const km = (p.km_from != null && p.km_to != null && (p.km_from || p.km_to))
+            ? ' · km ' + p.km_from + '–' + p.km_to : '';
         let body = '<div style="font-size:11.5px;color:#6b7280;">' + (p._label || '') +
-                   (p.road_nr ? ' · road ' + p.road_nr : '') + '</div>';
+                   (where ? ' · ' + where : '') + km + '</div>';
+
+        if(p.bridge_name) body += '<div style="font-size:12px;margin-top:6px;"><b>' + p.bridge_name + '</b></div>';
         if(p.nominal_load){
-            // quoted verbatim and NOT converted: this is an Estonian bridge load class,
-            // not a tonnage, and nobody has established the mapping. See
-            // backend/restrictions.check_route().
-            body += '<div style="font-size:12px;margin-top:6px;">Nominal load <b>' + p.nominal_load + '</b></div>' +
-                    '<div style="font-size:10.5px;color:#92400e;margin-top:3px;">A load class, not tonnes — read it against your vehicle, it is not a number this app can compare.</div>';
+            // quoted verbatim and NOT converted: an Estonian bridge load class is not a
+            // tonnage and nobody has established the mapping.
+            body += '<div style="font-size:10.5px;color:#92400e;margin-top:4px;">' +
+                    'A load class, not tonnes — read it against your vehicle. It is not a number this app can compare.</div>';
         }
-        ['restriction','piirang','value','height','width','mass','description'].forEach(k=>{
-            if(p[k] && k !== 'description') body += '<div style="font-size:12px;margin-top:4px;">' + k + ': <b>' + p[k] + '</b></div>';
-        });
+        if(p.effect || p.cause){
+            const det = [p.effect, p.cause].filter(Boolean).join(' · ');
+            if(det) body += '<div style="font-size:11.5px;margin-top:5px;color:' + colour + ';font-weight:600;">' + det + '</div>';
+        }
+        if(p.extra_info) body += '<div style="font-size:11px;margin-top:6px;color:#374151;">' + p.extra_info + '</div>';
+        if(p.detour_comment) body += '<div style="font-size:11px;margin-top:4px;color:#374151;"><b>Diversion:</b> ' + p.detour_comment + '</div>';
         if(p.construction_year) body += '<div style="font-size:11px;color:#6b7280;margin-top:4px;">Built ' + p.construction_year + '</div>';
+        if(p._from || p._to){
+            body += '<div style="font-size:11px;color:#6b7280;margin-top:5px;">' +
+                    (p._from || 'open') + ' → ' + (p._to || 'open') + '</div>';
+        }
+        const phone = p.traffic_ctrl_contact_phone || p.contractor_contact_phone;
+        const org = p.traffic_ctrl_organization || p.contractor_organization;
+        if(org || phone) body += '<div style="font-size:11px;color:#6b7280;margin-top:4px;">' +
+            (org || '') + (phone ? ' · ' + phone : '') + '</div>';
         body += '<div style="font-size:10px;color:#8a9099;margin-top:7px;">Estonian Transport Administration · Tark Tee</div>';
-        return '<div style="min-width:210px;"><h4 style="margin:0 0 4px;color:' +
-               CONFIG.COLORS.brandDark + ';font-size:13px;">' + title + '</h4>' + body + '</div>';
+        return '<div style="min-width:220px;"><h4 style="margin:0 0 4px;color:' + colour +
+               ';font-size:13.5px;">' + title + '</h4>' + body + '</div>';
     }
 
     // ---- Phase 4: temporary haul roads -------------------------------------------
