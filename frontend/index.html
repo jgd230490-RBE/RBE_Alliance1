@@ -1133,12 +1133,25 @@ const NODE_COLORS = { "Quarry": "#C6841D", "Port": "#003787", "Compound": "#039E
 // information and HERE never hears about it.
 const ZONE_ROUTING = "#BF2E55";
 const ZONE_ADVISORY = "#64748B";
+// Phase 4. A haul road is the one kind that is NOT an obstacle: every other kind with
+// "affects routing" on goes to HERE as an area to avoid, and a haul road is a road to
+// route through. It gets its own colour because red would read as "closed".
+const ZONE_HAUL = "#C2790B";
+const HAUL_KIND = "haul_road";
 const ZONE_KINDS = [
   ["closure", "Road closure"],
   ["weight_limit", "Weight / height limit"],
   ["works", "Works area"],
-  ["haul_road", "Haul road (Phase 4)"],
+  ["haul_road", "Temporary haul road"],
   ["other", "Other"],
+];
+// Which of the two ways of making a route use a haul road applies. This is a fact about
+// HERE's map data, not a preference — see the backend's haul.py. Splice is the default
+// because its failure mode (geometry only as good as the drawing) is visible, and via's
+// (a confident wrong route through roads HERE does know) is not.
+const HAUL_MODES = [
+  ["splice", "Splice — HERE does not map this road (default, safe)"],
+  ["via", "Via — HERE already maps this road"],
 ];
 
 // The sub-tabs share one map, so instead of toggling layers we lean the styling towards
@@ -1222,7 +1235,208 @@ function VehChips({ profiles }){
 // Step C — haul-cycle figures for one route, fetched on demand when its row is opened.
 // Everything here is derived from cached geometry plus factors.json, so opening a row
 // costs one cheap request and never touches HERE.
-function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting, leg }){
+// Phase 4 — haul roads on ONE route, edited on the route itself rather than in a separate
+// drawing tool. That was the explicit requirement: a haul road belongs to the routes that
+// use it, and attaching it here is what makes it do anything at all.
+//
+// Every write clears the route's baked legs and drives the same /api/admin/bake-routes
+// loop the zone writes use. It is more HERE calls than it looks: a spliced haul road costs
+// two calls per leg, not one, and the count is shown before it is spent.
+function HaulRoads({ routeId, haulRoads, token, onChanged }){
+  const [plan, setPlan] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [pick, setPick] = useState("");
+
+  const load = () => fetch(`${API}/routes/${encodeURIComponent(routeId)}/haul-roads`)
+    .then(r => r.json()).then(j => { setPlan(j); return j; });
+
+  useEffect(() => { let live = true; load().catch(() => { if(live) setPlan(null); });
+                    return () => { live = false; }; }, [routeId]);
+
+  const attached = (plan && plan.links || []).filter(l => l.route_id === routeId);
+  const byId = {};
+  (haulRoads || []).forEach(z => { byId[z.id] = z; });
+  const available = (haulRoads || []).filter(z => !attached.some(l => l.zone_id === z.id));
+
+  const qs = () => (token ? `?token=${encodeURIComponent(token)}` : "");
+
+  const run = async (fn, label) => {
+    setBusy(true); setMsg(label);
+    try {
+      const j = await fn();
+      await load();
+      const inv = j.invalidated || {};
+      let m = label.replace(/…$/, " — done.");
+      if(inv.leg_count){
+        m += ` ${inv.leg_count} baked leg(s) cleared, ${inv.here_calls} HERE call(s) to re-route.`;
+        setMsg(m);
+        if(onChanged) m += await onChanged(inv);
+      }
+      setMsg(m);
+    } catch(e){ setMsg("Failed: " + e.message); }
+    setBusy(false);
+  };
+
+  const post = async (url, opts) => {
+    const res = await fetch(url, opts);
+    if(!res.ok){ const t = await res.text(); throw new Error(`${res.status} ${t.slice(0, 160)}`); }
+    return res.json();
+  };
+
+  const attach = () => {
+    if(!pick) return;
+    const z = byId[pick];
+    run(() => post(`${API}/admin/routes/${encodeURIComponent(routeId)}/haul-roads${qs()}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ zone_id: pick, seq: null }),
+    }), `Attaching ${(z && z.name) || pick}…`).then(() => setPick(""));
+  };
+
+  const detach = (zid) => {
+    const z = byId[zid];
+    if(!confirm(`Take ${(z && z.name) || zid} off ${routeId}?\n\nEvery baked leg of this route is cleared and re-routed.`)) return;
+    run(() => post(`${API}/admin/routes/${encodeURIComponent(routeId)}/haul-roads/${encodeURIComponent(zid)}${qs()}`,
+                   { method: "DELETE" }), `Detaching ${(z && z.name) || zid}…`);
+  };
+
+  const move = (i, d) => {
+    const ids = attached.map(l => l.zone_id);
+    const j = i + d;
+    if(j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    run(() => post(`${API}/admin/routes/${encodeURIComponent(routeId)}/haul-roads/order${qs()}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ zone_ids: ids }),
+    }), "Reordering…");
+  };
+
+  const loadedPlan = (plan && plan.plan && plan.plan.loaded) || [];
+  const noSpeed = loadedPlan.filter(s => !s.speed_kph);
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-2.5 mb-3">
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <span className="text-[11px] uppercase tracking-wide" style={{ color: ZONE_HAUL }}>
+          Temporary haul roads on this route
+        </span>
+        {plan && plan.here_calls_per_bake != null && !!attached.length && (
+          <span className="text-[10px] text-slate-400">
+            a full re-bake of this route is {plan.here_calls_per_bake} HERE call(s)
+          </span>
+        )}
+      </div>
+
+      {!attached.length && (
+        <p className="text-[11px] text-slate-500">
+          None. This route is routed by HERE end to end.
+        </p>
+      )}
+
+      {!!attached.length && (
+        <table className="text-[11px] w-full mb-2">
+          <thead className="text-slate-400">
+            <tr>
+              <th className="px-1 py-0.5 text-left font-semibold">Order</th>
+              <th className="px-1 py-0.5 text-left font-semibold">Road</th>
+              <th className="px-1 py-0.5 text-right font-semibold">Drawn km</th>
+              <th className="px-1 py-0.5 text-right font-semibold">Speed</th>
+              <th className="px-1 py-0.5 text-right font-semibold">Adds</th>
+              <th className="px-1 py-0.5 text-left font-semibold">Mode</th>
+              <th className="px-1 py-0.5"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {attached.map((l, i) => {
+              const z = byId[l.zone_id] || {};
+              const step = loadedPlan.find(s => s.zone_id === l.zone_id);
+              const inPlan = !!step;
+              return (
+                <tr key={l.zone_id} className="border-t border-slate-100">
+                  <td className="px-1 py-1 text-slate-400">
+                    <button onClick={() => move(i, -1)} disabled={busy || i === 0}
+                      title="Earlier on the outbound leg"
+                      className="px-1 disabled:opacity-25 hover:text-slate-700">▲</button>
+                    <button onClick={() => move(i, 1)} disabled={busy || i === attached.length - 1}
+                      title="Later on the outbound leg"
+                      className="px-1 disabled:opacity-25 hover:text-slate-700">▼</button>
+                  </td>
+                  <td className="px-1 py-1">
+                    <span className="font-medium text-slate-700">{z.name || l.zone_id}</span>
+                    <span className="text-slate-400"> {l.zone_id}</span>
+                    {!inPlan && (
+                      <span className="block text-[10px]" style={{ color: "var(--red)" }}>
+                        not in force today — inactive, outside its dates, or not open to traffic,
+                        so no route is threaded through it
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-1 py-1 text-right tabular-nums">{z.length_km != null ? z.length_km.toFixed(2) : "—"}</td>
+                  <td className="px-1 py-1 text-right tabular-nums">
+                    {z.speed_kph ? `${z.speed_kph} km/h`
+                                 : <span style={{ color: "var(--red)" }}>not set</span>}
+                  </td>
+                  <td className="px-1 py-1 text-right tabular-nums">
+                    {step && step.assigned_duration_hr
+                      ? `${Math.round(step.assigned_duration_hr * 60)} min`
+                      : <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-1 py-1 text-slate-500">
+                    {(z.haul_mode || "splice")}
+                    {!z.haul_mode && <span className="text-slate-300"> (default)</span>}
+                  </td>
+                  <td className="px-1 py-1 text-right">
+                    <button onClick={() => detach(l.zone_id)} disabled={busy}
+                      className="text-[10px] font-semibold text-[color:var(--red)] hover:underline disabled:opacity-40">Detach</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      <div className="flex items-center gap-2">
+        <select value={pick} onChange={e => setPick(e.target.value)} disabled={busy || !available.length}
+          className="border border-slate-200 rounded-lg px-2 py-1 text-[11px] bg-white disabled:opacity-40">
+          <option value="">{available.length ? "Add a haul road…" : "No other haul roads drawn"}</option>
+          {available.map(z => (
+            <option key={z.id} value={z.id}>
+              {z.name} · {z.length_km != null ? `${z.length_km.toFixed(1)} km` : "—"}{z.speed_kph ? ` @ ${z.speed_kph} km/h` : " (no speed)"}
+            </option>
+          ))}
+        </select>
+        <button onClick={attach} disabled={busy || !pick}
+          className="text-[11px] font-semibold px-2 py-1 rounded-md text-white disabled:opacity-40"
+          style={{ background: ZONE_HAUL }}>Attach</button>
+      </div>
+
+      {!!attached.length && (
+        <p className="text-[10px] text-slate-400 mt-1.5">
+          Order is the outbound direction; the return leg meets them in reverse and enters each
+          road from the other end. Which end is entry is worked out per leg from the geometry, so
+          the order you drew a road in does not matter.
+        </p>
+      )}
+      {!!noSpeed.length && (
+        <p className="text-[10px] mt-1" style={{ color: "var(--red)" }}>
+          {noSpeed.length} of these has no assigned speed, so its stretch adds distance but no time
+          to the cycle. Set one on the Zones tab.
+        </p>
+      )}
+      {!!attached.length && (
+        <p className="text-[10px] text-amber-700 mt-1">
+          A leg routed through a haul road comes back as a <strong>single option</strong> — there
+          are no alternatives to promote on this route while a haul road is attached.
+        </p>
+      )}
+      {msg && <p className="text-[11px] text-slate-600 mt-1.5">{msg}</p>}
+    </div>
+  );
+}
+
+function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting, leg,
+                        haulRoads, token, onHaulChanged }){
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
 
@@ -1242,6 +1456,7 @@ function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting
   return (
     <tr className="bg-slate-50/70">
       <td colSpan={colSpan} className="px-4 py-3">
+        <HaulRoads routeId={routeId} haulRoads={haulRoads} token={token} onChanged={onHaulChanged} />
         {err && <p className="text-xs" style={{ color: "var(--red)" }}>Couldn't load analysis: {err}</p>}
         {!data && !err && <p className="text-xs text-slate-400">Loading analysis…</p>}
         {data && !data.rows.length && (
@@ -1296,7 +1511,12 @@ function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting
                     <td className={cell} title={`${r.load_minutes} min load + ${r.unload_minutes} min unload`}>
                       {Math.round((r.turnaround_hr || 0) * 60)}m
                     </td>
-                    <td className={cell}>{r.cycle_hr} h</td>
+                    <td className={cell}
+                      title={r.haul_speed_applied
+                        ? `Includes an assigned haul speed over ${r.haul_km} km (${(r.haul_zones || []).join(", ")}). On HERE's own timing this cycle would be ${r.cycle_hr_here} h.`
+                        : undefined}>
+                      {r.cycle_hr} h{r.haul_speed_applied ? <span style={{ color: ZONE_HAUL }}>†</span> : null}
+                    </td>
                     <td className={cell}>{r.trips_per_day || <span className="text-slate-300">0</span>}</td>
                     <td className={cell}>{r.tonnes_per_day}</td>
                     <td className={cell}>{r.tonnes_per_month}</td>
@@ -1323,6 +1543,15 @@ function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting
               shift; t/month assumes {data.planning.working_days_per_month} working days.
               {data.rows.some(r => r.return_estimated) && " * return leg not baked — assumed to mirror the outbound."}
             </p>
+            {data.rows.some(r => r.haul_speed_applied) && (
+              <p className="text-[11px] mt-1" style={{ color: ZONE_HAUL }}>
+                † part of this cycle runs on a temporary haul road at an <strong>assigned</strong> speed,
+                not a speed HERE measured. HERE will not accept a custom speed, so the haul stretch is
+                timed at <em>drawn length ÷ assigned speed</em> and substituted in. Hover the cycle for
+                what the figure would be on HERE&rsquo;s own timing. It is a planning assumption, and it
+                is only as good as the line somebody drew.
+              </p>
+            )}
             <p className="text-[11px] text-slate-400 mt-1">
               Click a row to draw that option on the map — it turns red, the vehicle's other
               options stay grey. “Make primary” swaps an alternative into first place so it
@@ -1564,6 +1793,7 @@ function DataManagement({ meta, who }){
 
   // ---- zones (Phase 3): geofencing and disruptions in one table ----
   const [zoneList, setZoneList] = useState([]);
+  const [haulUse, setHaulUse] = useState({});      // Phase 4: zone_id -> routes attached
   const [zoneForm, setZoneForm] = useState(null);   // null = not editing
   const [zoneMsg, setZoneMsg] = useState("");
   const [zoneBusy, setZoneBusy] = useState(false);
@@ -1655,8 +1885,10 @@ function DataManagement({ meta, who }){
       paint: { "fill-color": ["case", ["get", "affects_routing"], ZONE_ROUTING, ZONE_ADVISORY],
                "fill-opacity": ["case", ["get", "in_force"], 0.22, 0.07] } });
     if(!m.getLayer("zone-outline")) m.addLayer({ id: "zone-outline", type: "line", source: "zones",
-      paint: { "line-color": ["case", ["get", "affects_routing"], ZONE_ROUTING, ZONE_ADVISORY],
-               "line-width": ["case", ["get", "selected"], 3.5, 2],
+      paint: { "line-color": ["case", ["get", "is_haul"], ZONE_HAUL,
+                              ["get", "affects_routing"], ZONE_ROUTING, ZONE_ADVISORY],
+               // a haul road is a line, not an outline — it needs to read as a road
+               "line-width": ["case", ["get", "selected"], 3.5, ["get", "is_haul"], 3, 2],
                // a zone that is out of its date window is dashed, not hidden — it still
                // explains a bake that happened while it applied
                "line-dasharray": ["case", ["get", "in_force"], ["literal", [1, 0]], ["literal", [2, 2]]] } });
@@ -2250,7 +2482,14 @@ function DataManagement({ meta, who }){
   // vertex-level editing — to change a shape you redraw it. If nudging single corners
   // becomes necessary, mapbox-gl-draw is the upgrade and it drops into this same source.
   const reloadZones = () =>
-    fetch(`${API}/zones`).then(r => r.json()).then(j => { setZoneList(j.zones || []); return j; });
+    fetch(`${API}/zones`).then(r => r.json()).then(j => {
+      setZoneList(j.zones || []);
+      // Phase 4: zone_id -> number of routes attached. A haul road on no route is the
+      // commonest reason one "does nothing", and the table has to say so rather than
+      // leaving it to be discovered after a bake that changed nothing.
+      setHaulUse(j.haul_links || {});
+      return j;
+    });
 
   useEffect(() => { reloadZones().catch(() => setZoneList([])); }, []);
 
@@ -2275,9 +2514,16 @@ function DataManagement({ meta, who }){
   const undoVertex = () => setDrawPts(p => p.slice(0, -1));
   cbRef.current.addVertex = addVertex;
 
+  // Phase 4: a haul road is drawn as an open line, everything else as a closed ring.
+  // The difference is one condition rather than a second drawing tool, which is why the
+  // hand-rolled vertex collector was worth keeping: the same clicks mean both things.
+  const isHaul = (f) => !!f && f.kind === HAUL_KIND;
+  const minPts = (f) => isHaul(f) ? 2 : 3;
+
   const blankZone = () => ({
     id: null, name: "", kind: "closure", affects_routing: true,
     starts_on: "", ends_on: "", note: "", active: true,
+    speed_kph: "", haul_mode: "",
   });
 
   const startNewZone = () => {
@@ -2285,16 +2531,27 @@ function DataManagement({ meta, who }){
     setZoneSel(null); setZoneMsg("Click the map to place corners — at least three. Save closes the shape.");
   };
 
+  const startNewHaul = () => {
+    setZoneForm({ ...blankZone(), kind: HAUL_KIND }); setDrawPts([]); setZoneDraw(true);
+    setZoneSel(null);
+    setZoneMsg("Click the map along the haul road — at least two points. It is saved as an open line, not a closed shape.");
+  };
+
   const editZone = (z) => {
     setZoneForm({ id: z.id, name: z.name || "", kind: z.kind || "other",
                   affects_routing: !!z.affects_routing, starts_on: z.starts_on || "",
-                  ends_on: z.ends_on || "", note: z.note || "", active: !!z.active });
+                  ends_on: z.ends_on || "", note: z.note || "", active: !!z.active,
+                  speed_kph: (z.speed_kph == null ? "" : String(z.speed_kph)),
+                  haul_mode: z.haul_mode || "" });
     setZoneSel(z.id);
-    // load the existing outline as editable vertices, dropping the repeated closing point
+    // load the existing shape as editable vertices. A polygon's repeated closing point is
+    // dropped; a haul road has none to drop, and popping its last point would shorten the
+    // road by one vertex every time it was opened.
     const c = (z.geometry && z.geometry.coordinates) || [];
     const ring = (z.geometry && z.geometry.type === "Polygon") ? (c[0] || []) : c;
     const pts = ring.slice();
-    if(pts.length > 1 && pts[0][0] === pts[pts.length-1][0] && pts[0][1] === pts[pts.length-1][1]) pts.pop();
+    if(z.geometry && z.geometry.type === "Polygon"
+       && pts.length > 1 && pts[0][0] === pts[pts.length-1][0] && pts[0][1] === pts[pts.length-1][1]) pts.pop();
     setDrawPts(pts);
     setZoneDraw(false);
     setZoneMsg("");
@@ -2334,19 +2591,34 @@ function DataManagement({ meta, who }){
       }
     }
     await reloadNetwork();
+    // Phase 4: the zone list carries the haul-road link counts and the derived lengths,
+    // so a re-bake driven by an attach has to refresh it too or the "used by" column
+    // keeps showing the state before the change.
+    await reloadZones().catch(() => {});
     return ` Re-routed ${done} leg(s) across ${profs.length} vehicle profile(s).`;
   };
 
   const saveZone = async () => {
     if(!zoneForm) return;
+    const haulNow = isHaul(zoneForm);
     if(!zoneForm.name.trim()){ setZoneMsg("Give the zone a name."); return; }
-    if(drawPts.length < 3){ setZoneMsg("A zone needs at least three corners."); return; }
+    if(drawPts.length < minPts(zoneForm)){
+      setZoneMsg(haulNow ? "A haul road needs at least two points — it is travelled along."
+                         : "A zone needs at least three corners."); return; }
     const body = {
       name: zoneForm.name.trim(),
-      geometry: { type: "Polygon", coordinates: [ringOf(drawPts)] },
+      geometry: haulNow
+        ? { type: "LineString", coordinates: drawPts.map(p => [p[0], p[1]]) }
+        : { type: "Polygon", coordinates: [ringOf(drawPts)] },
       kind: zoneForm.kind, affects_routing: !!zoneForm.affects_routing,
       starts_on: zoneForm.starts_on || null, ends_on: zoneForm.ends_on || null,
       note: zoneForm.note || null, active: !!zoneForm.active,
+      // sent for every kind, ignored by the backend for the others. Blank stays null:
+      // "no assigned speed" is not "0 km/h", and a haul road with no speed keeps HERE's
+      // own timing rather than contributing an infinite one.
+      speed_kph: (haulNow && String(zoneForm.speed_kph).trim() !== ""
+                  ? Number(zoneForm.speed_kph) : null),
+      haul_mode: (haulNow && zoneForm.haul_mode ? zoneForm.haul_mode : null),
     };
     setZoneBusy(true); setZoneMsg("Saving…");
     try {
@@ -2416,6 +2688,7 @@ function DataManagement({ meta, who }){
         type: "Feature",
         properties: { id: z.id, name: z.name, kind: z.kind,
                       affects_routing: !!z.affects_routing,
+                      is_haul: z.kind === HAUL_KIND,
                       in_force: zoneInForce(z), selected: z.id === zoneSel },
         geometry: z.geometry,
       })),
@@ -2430,13 +2703,16 @@ function DataManagement({ meta, who }){
     const feats = drawPts.map(p => ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: p } }));
     if(drawPts.length >= 2){
       // drawn as a closed ring from three corners on, so what you see while placing is
-      // the shape that will be saved rather than an open chain that jumps shut on Save
-      const line = drawPts.length >= 3 ? ringOf(drawPts) : drawPts;
+      // the shape that will be saved rather than an open chain that jumps shut on Save.
+      // A haul road is never closed — it is a road, and showing it shut would be showing
+      // a shape that Save is not going to produce.
+      const haulNow = isHaul(zoneForm);
+      const line = (!haulNow && drawPts.length >= 3) ? ringOf(drawPts) : drawPts;
       feats.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: line } });
     }
     drawFC.current = { type: "FeatureCollection", features: feats };
     s.setData(drawFC.current);
-  }, [drawPts, mapReady]);
+  }, [drawPts, mapReady, zoneForm && zoneForm.kind]);
 
   // leaving Zones abandons a half-drawn shape, so map clicks stop dropping corners
   useEffect(() => {
@@ -2488,6 +2764,11 @@ function DataManagement({ meta, who }){
   const sel = "border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm bg-white";
   const bakedCount = (summary && summary.profiles && summary.profiles[showProfile]) ? summary.profiles[showProfile].baked : 0;
   const totalRoutes = summary ? summary.routes : 0;
+  // Phase 4: the haul roads a route can be given. Derived from the zone list rather than
+  // fetched separately — they are zones, and two lists that can disagree is exactly the
+  // failure the merged zones table was built to avoid.
+  const haulRoadList = (zoneList || []).filter(z => z.kind === HAUL_KIND);
+
   const onLoc = subTab === "locations";
   const onZones = subTab === "zones";
   // three sub-tabs now, so "not locations" no longer means "routes"
@@ -2705,8 +2986,13 @@ function DataManagement({ meta, who }){
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm font-semibold text-slate-700">{zoneForm ? (zoneForm.id ? `Editing ${zoneForm.id}` : "New zone") : "Zones"}</div>
               {!zoneForm && (
-                <button onClick={startNewZone} disabled={zoneBusy}
-                  className="text-xs font-semibold px-2.5 py-1 rounded-md text-white disabled:opacity-40" style={{ background: "var(--navy)" }}>+ Draw zone</button>
+                <span className="flex items-center gap-2">
+                  <button onClick={startNewZone} disabled={zoneBusy}
+                    className="text-xs font-semibold px-2.5 py-1 rounded-md text-white disabled:opacity-40" style={{ background: "var(--navy)" }}>+ Draw zone</button>
+                  <button onClick={startNewHaul} disabled={zoneBusy}
+                    title="A temporary haul road: an open line with an assigned speed, attached to routes on the Routes tab"
+                    className="text-xs font-semibold px-2.5 py-1 rounded-md text-white disabled:opacity-40" style={{ background: ZONE_HAUL }}>+ Haul road</button>
+                </span>
               )}
             </div>
 
@@ -2722,6 +3008,14 @@ function DataManagement({ meta, who }){
                   you draw is sent as the rectangle around it, so a long diagonal or L-shaped closure blocks
                   more ground than it looks like. Draw several smaller zones instead of one large one where
                   that matters — the panel shows the box each zone actually sends.
+                </p>
+                <p className="text-[11px] text-slate-600 border border-slate-200 rounded p-2">
+                  <strong style={{ color: ZONE_HAUL }}>Temporary haul roads</strong> are the one kind that
+                  works the other way round: drawn as an open <em>line</em> with a speed, and routes are sent
+                  <em> through</em> them rather than around. A haul road is never put in HERE&rsquo;s avoid
+                  list — that would steer the router away from the road it is meant to use. It does nothing
+                  until you attach it to a route, which is done by expanding that route on the
+                  <strong> Routes</strong> tab.
                 </p>
               </div>
             )}
@@ -2752,12 +3046,58 @@ function DataManagement({ meta, who }){
                 </div>
                 <p className="text-[11px] text-slate-400 -mt-1">Leave a date blank for open-ended. Both ends are inclusive.</p>
 
+                {isHaul(zoneForm) && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-2.5 space-y-2.5">
+                    <div className="text-[11px] uppercase tracking-wide" style={{ color: ZONE_HAUL }}>Haul road</div>
+                    <label className="block">
+                      <span className="text-[11px] uppercase tracking-wide text-slate-400">Assigned speed (km/h)</span>
+                      <input type="number" min="1" step="1" value={zoneForm.speed_kph}
+                        onChange={e => setZField("speed_kph", e.target.value)}
+                        placeholder="e.g. 25"
+                        className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                      <span className="block text-[11px] text-slate-500 mt-1">
+                        HERE will not accept a custom speed, so this is applied afterwards:
+                        the haul stretch is timed at <em>length ÷ speed</em> and that figure
+                        goes into the cycle time the dashboard and route analysis read.
+                        <strong> Leave it blank and HERE&rsquo;s own timing stands</strong> —
+                        blank means &ldquo;not set&rdquo;, not zero.
+                      </span>
+                    </label>
+                    <label className="block">
+                      <span className="text-[11px] uppercase tracking-wide text-slate-400">Mode</span>
+                      <select value={zoneForm.haul_mode} onChange={e => setZField("haul_mode", e.target.value)} className={"mt-1 w-full " + sel}>
+                        <option value="">Default (splice)</option>
+                        {HAUL_MODES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                      <span className="block text-[11px] text-slate-500 mt-1">
+                        This is a fact about HERE&rsquo;s map, not a preference. <strong>Splice</strong>
+                        assumes HERE has never heard of this road: it routes to one end, uses the
+                        line you drew, then routes on from the other end — two HERE calls per leg
+                        instead of one, and the drawn line is exactly what you get.
+                        <strong> Via</strong> assumes HERE already maps it and lets HERE find its own
+                        way through — one call, snapped to real roads, and <em>wrong without warning</em>
+                        if the road is not in HERE&rsquo;s data. Run the haul-road diagnostic with
+                        <span className="font-mono"> probe=true</span> before choosing Via.
+                      </span>
+                    </label>
+                    <p className="text-[11px] text-amber-800">
+                      A haul road does nothing until it is <strong>attached to a route</strong> —
+                      expand a route on the Routes tab to do that. Drawing one near a route
+                      changes nothing on its own, deliberately: nothing gets re-baked by accident.
+                    </p>
+                  </div>
+                )}
+
                 <label className="flex items-start gap-2 text-sm">
                   <input type="checkbox" checked={zoneForm.affects_routing}
                     onChange={e => setZField("affects_routing", e.target.checked)} className="mt-1" />
                   <span>
-                    <span className="font-medium">Affects routing</span>
-                    <span className="block text-[11px] text-slate-400">Sends this area to HERE as avoid-areas and re-routes every baked leg that crosses it.</span>
+                    <span className="font-medium">{isHaul(zoneForm) ? "Open to traffic" : "Affects routing"}</span>
+                    <span className="block text-[11px] text-slate-400">
+                      {isHaul(zoneForm)
+                        ? "Untick and the road is drawn on both maps but no route is threaded through it — a haul road that is planned but not open yet."
+                        : "Sends this area to HERE as avoid-areas and re-routes every baked leg that crosses it."}
+                    </span>
                   </span>
                 </label>
                 <label className="flex items-start gap-2 text-sm">
@@ -2777,12 +3117,16 @@ function DataManagement({ meta, who }){
 
                 <div className="rounded-lg border border-slate-200 p-2.5 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] uppercase tracking-wide text-slate-400">Shape · {drawPts.length} corner(s)</span>
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                      {isHaul(zoneForm) ? `Line · ${drawPts.length} point(s)` : `Shape · ${drawPts.length} corner(s)`}
+                    </span>
                     <span className="flex items-center gap-2">
                       <button onClick={() => setZoneDraw(d => !d)}
                         className={"text-xs font-semibold px-2 py-0.5 rounded-md " + (zoneDraw ? "text-white" : "border border-slate-200 text-slate-600")}
-                        style={zoneDraw ? { background: ZONE_ROUTING } : undefined}>
-                        {zoneDraw ? "Stop placing" : (drawPts.length ? "Add corners" : "Place corners")}
+                        style={zoneDraw ? { background: isHaul(zoneForm) ? ZONE_HAUL : ZONE_ROUTING } : undefined}>
+                        {zoneDraw ? "Stop placing"
+                                  : (drawPts.length ? (isHaul(zoneForm) ? "Add points" : "Add corners")
+                                                    : (isHaul(zoneForm) ? "Place points" : "Place corners"))}
                       </button>
                       <button onClick={undoVertex} disabled={!drawPts.length}
                         className="text-xs px-2 py-0.5 rounded-md border border-slate-200 text-slate-600 disabled:opacity-40">Undo</button>
@@ -2791,10 +3135,32 @@ function DataManagement({ meta, who }){
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    {zoneDraw ? "Click the map to drop a corner. Three or more makes a shape."
-                              : "Editing a shape means redrawing it — corners cannot be dragged individually."}
+                    {zoneDraw
+                      ? (isHaul(zoneForm)
+                         ? "Click along the road. Two or more points makes a line, and it stays open — the order you click is the order it is drawn, not the direction of travel."
+                         : "Click the map to drop a corner. Three or more makes a shape.")
+                      : "Editing a shape means redrawing it — points cannot be dragged individually."}
                   </p>
-                  {drawPts.length >= 3 && (() => {
+                  {isHaul(zoneForm) && drawPts.length >= 2 && (() => {
+                    // drawn length, computed the same way the backend does, so the figure
+                    // in the form is the one the speed will be divided into
+                    let km = 0;
+                    for(let i = 0; i < drawPts.length - 1; i++){
+                      const [x1, y1] = drawPts[i], [x2, y2] = drawPts[i + 1];
+                      const p1 = y1 * Math.PI / 180, p2 = y2 * Math.PI / 180;
+                      const dp = p2 - p1, dl = (x2 - x1) * Math.PI / 180;
+                      const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+                      km += 2 * 6371.0088 * Math.asin(Math.min(1, Math.sqrt(a)));
+                    }
+                    const sp = Number(zoneForm.speed_kph);
+                    return <p className="text-[11px] text-slate-500">
+                      Drawn length <span className="font-mono">{km.toFixed(2)} km</span>
+                      {sp > 0
+                        ? <> · at {sp} km/h that is <span className="font-mono">{(km / sp * 60).toFixed(0)} min</span> each way</>
+                        : <> · no speed set, so this stretch adds no time to the cycle</>}
+                    </p>;
+                  })()}
+                  {!isHaul(zoneForm) && drawPts.length >= 3 && (() => {
                     const lons = drawPts.map(p => p[0]), lats = drawPts.map(p => p[1]);
                     const w = Math.min(...lons), e2 = Math.max(...lons), so = Math.min(...lats), n = Math.max(...lats);
                     return <p className="text-[11px] font-mono text-slate-500 break-all">
@@ -2811,10 +3177,17 @@ function DataManagement({ meta, who }){
                   <button onClick={cancelZone} disabled={zoneBusy}
                     className="text-xs px-3 py-1.5 rounded-md border border-slate-200 text-slate-600 disabled:opacity-40">Cancel</button>
                 </div>
-                {zoneForm.affects_routing && (
+                {zoneForm.affects_routing && !isHaul(zoneForm) && (
                   <p className="text-[11px] text-amber-700">
                     Saving clears the baked geometry this zone invalidates and immediately re-routes it — one
                     HERE call per leg. The count is reported as it runs.
+                  </p>
+                )}
+                {isHaul(zoneForm) && (
+                  <p className="text-[11px] text-amber-700">
+                    {zoneForm.id
+                      ? "Saving re-routes every leg baked through this road, and every leg of every route it is attached to. A spliced road costs two HERE calls per leg, not one — the count is reported before it runs."
+                      : "A new haul road is attached to nothing, so saving re-routes nothing. Attach it to a route on the Routes tab to make it do something."}
                   </p>
                 )}
               </div>
@@ -3047,7 +3420,16 @@ function DataManagement({ meta, who }){
                           transform: open ? "rotate(90deg)" : "none", fontSize: 10 }}>▶</span>
                       </button>
                     </td>
-                    <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{r.id}</td>
+                    <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">
+                      {r.id}
+                      {!!(r.haul_roads || []).length && (
+                        <span title={`Routed through ${(r.haul_roads || []).length} temporary haul road(s): ${(r.haul_roads || []).join(", ")}. Expand the row to edit.`}
+                          className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                          style={{ background: "rgba(194,121,11,.12)", color: ZONE_HAUL }}>
+                          haul ×{(r.haul_roads || []).length}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{r.origin} → {r.dest}</td>
                     <td className="px-3 py-2 text-slate-500">{r.ipt || "—"}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{pinfo && pinfo.distance_km != null ? pinfo.distance_km : "—"}</td>
@@ -3070,7 +3452,10 @@ function DataManagement({ meta, who }){
                     leg={showLeg}
                     onFocus={selected === r.id ? focusGeom : (p, a) => { selectRoute(r.id); focusGeom(p, a); }}
                     onPromote={selected === r.id ? promoteAlt : null}
-                    promoting={promoting} />}
+                    promoting={promoting}
+                    haulRoads={haulRoadList}
+                    token={tokenRef.current}
+                    onHaulChanged={rebakeAfterZone} />}
                   </React.Fragment>
                 );
               })}
@@ -3084,10 +3469,16 @@ function DataManagement({ meta, who }){
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
           <span className="text-sm font-semibold text-slate-700">Zones <span className="text-slate-400 font-normal">· click a row to edit the zone and frame it on the map</span></span>
-          <button onClick={startNewZone} disabled={zoneBusy}
-            className="text-xs font-semibold px-2.5 py-1 rounded-md text-white disabled:opacity-40" style={{ background: "var(--navy)" }}>
-            + Draw zone
-          </button>
+          <span className="flex items-center gap-2">
+            <button onClick={startNewZone} disabled={zoneBusy}
+              className="text-xs font-semibold px-2.5 py-1 rounded-md text-white disabled:opacity-40" style={{ background: "var(--navy)" }}>
+              + Draw zone
+            </button>
+            <button onClick={startNewHaul} disabled={zoneBusy}
+              className="text-xs font-semibold px-2.5 py-1 rounded-md text-white disabled:opacity-40" style={{ background: ZONE_HAUL }}>
+              + Haul road
+            </button>
+          </span>
         </div>
         <div className="overflow-auto" style={{ maxHeight: "40vh" }}>
           <table className="w-full text-sm">
@@ -3095,7 +3486,7 @@ function DataManagement({ meta, who }){
               <tr>
                 <th className={th}>ID</th><th className={th}>Name</th><th className={th}>Kind</th>
                 <th className={th}>Routing</th><th className={th}>From</th><th className={th}>To</th>
-                <th className={th}>State</th><th className={th}></th>
+                <th className={th}>State</th><th className={th}>Used by</th><th className={th}></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -3108,7 +3499,15 @@ function DataManagement({ meta, who }){
                     <td className="px-3 py-2 font-medium">{z.name}</td>
                     <td className="px-3 py-2 text-slate-500">{(ZONE_KINDS.find(k => k[0] === z.kind) || [null, z.kind])[1]}</td>
                     <td className="px-3 py-2">
-                      {z.affects_routing
+                      {z.kind === HAUL_KIND
+                        ? (z.affects_routing
+                           ? <span className="text-xs font-semibold px-2 py-0.5 rounded whitespace-nowrap"
+                               style={{ background: "rgba(194,121,11,.12)", color: ZONE_HAUL }}
+                               title="Routes attached to this road are sent through it — it is never in HERE's avoid list">
+                               Routed through{z.speed_kph ? ` @ ${z.speed_kph}` : ""}
+                             </span>
+                           : <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-500" title="Drawn but not open to traffic">Not open</span>)
+                        : z.affects_routing
                         ? <span className="text-xs font-semibold px-2 py-0.5 rounded" style={{ background: "#FDE8EE", color: ZONE_ROUTING }}>Avoided</span>
                         : <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-500">Advisory</span>}
                     </td>
@@ -3119,6 +3518,15 @@ function DataManagement({ meta, who }){
                         : force ? <span className="text-emerald-600 font-semibold">In force</span>
                         : <span className="text-slate-400">Out of window</span>}
                     </td>
+                    <td className="px-3 py-2 text-xs">
+                      {z.kind !== HAUL_KIND ? <span className="text-slate-300">—</span>
+                        : haulUse[z.id]
+                        ? <span className="text-slate-600">{haulUse[z.id]} route(s)</span>
+                        : <span style={{ color: ZONE_HAUL }}
+                            title="Drawn, but on no route — so it changes nothing. Attach it by expanding a route on the Routes tab.">
+                            no routes
+                          </span>}
+                    </td>
                     <td className="px-3 py-2 text-right">
                       <button onClick={e => { e.stopPropagation(); removeZone(z); }} disabled={zoneBusy}
                         className="text-xs text-[color:var(--red)] hover:underline disabled:opacity-40">Delete</button>
@@ -3126,8 +3534,8 @@ function DataManagement({ meta, who }){
                   </tr>
                 );
               })}
-              {!zoneList.length && <tr><td colSpan="8" className="px-3 py-6 text-center text-slate-400">
-                No zones yet. Draw one to steer HERE around a closure, or to mark a works area for planners without changing routing.
+              {!zoneList.length && <tr><td colSpan="9" className="px-3 py-6 text-center text-slate-400">
+                No zones yet. Draw one to steer HERE around a closure, to mark a works area for planners without changing routing, or draw a temporary haul road for routes to run through.
               </td></tr>}
             </tbody>
           </table>
