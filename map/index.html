@@ -138,7 +138,7 @@
         <!-- Temporary haul removed: the network stores only a scalar origin_temp_km per
              route, no geometry, so there is nothing real to draw. Returns in Phase 4 as
              drawn polylines edited on the route itself. -->
-        <div class="control-item" style="opacity:.55;"><label><input type="checkbox" id="layer-temp" disabled> Temporary haul <span style="font-size:10px;">(Phase 4)</span></label><span class="color-dot" style="background:#64748b;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-temp" checked onchange="toggleTempHaul(this.checked)"> Temporary haul</label><span class="color-dot" style="background:#C2790B;"></span></div>
     </div>
 </div>
 
@@ -351,12 +351,37 @@
             }
         });
 
-        // 3. TEMP HAUL ROUTES — removed in Phase 2.
-        // The legacy static file carried 97 such segments. The routing network holds
-        // only a scalar origin_temp_km per route and no geometry for them, and drawing
-        // a straight line of that length would be a fabricated shape on a map where
-        // every other line is surveyed. They return in Phase 4 as real drawn polylines,
-        // editable on the route itself.
+        // 3. TEMPORARY HAUL ROADS — back in Phase 4, as real drawn polylines.
+        //
+        // Removed in Phase 2 because the network held only a scalar origin_temp_km per
+        // route and no geometry, so a straight line of that length would have been a
+        // fabricated shape on a map where every other line is surveyed. What is drawn now
+        // is the line somebody clicked onto the map and nothing inferred. The 97 legacy
+        // segments went with a1_data.js and are not recoverable — these are only the roads
+        // drawn since.
+        //
+        // Dashed deliberately: these are temporary works, not the permanent network, and
+        // the dash is the only thing separating them at a glance from a surveyed route.
+        if (!map.getLayer('temp-haul-lines')) map.addLayer({
+            id: 'temp-haul-lines', type: 'line', source: 'routes-source',
+            filter: ['==', ['get', 'type'], 'Temp Haul Track'],
+            layout: { visibility: tempHaulVisible() ? 'visible' : 'none',
+                      'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+                'line-color': '#C2790B',
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2, 12, 5],
+                'line-dasharray': [2, 1.4],
+                'line-opacity': 0.95,
+            },
+        });
+        if (!map.getLayer('temp-haul-label')) map.addLayer({
+            id: 'temp-haul-label', type: 'symbol', source: 'routes-source', minzoom: 10,
+            filter: ['==', ['get', 'type'], 'Temp Haul Track'],
+            layout: { visibility: tempHaulVisible() ? 'visible' : 'none',
+                      'symbol-placement': 'line-center',
+                      'text-field': ['get', 'name'], 'text-size': 11 },
+            paint: { 'text-color': '#7A4C05', 'text-halo-color': '#ffffff', 'text-halo-width': 2 },
+        });
 
         // Direction of travel, from zoom 12 in. symbol-placement 'line' repeats the
         // glyph along the geometry and rotates it to the bearing, so laden-out and
@@ -405,11 +430,20 @@
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
         });
+        ['temp-haul-lines'].forEach(lId => {
+            map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
+            map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
+        });
         // bound once, on the layer id — Mapbox tolerates a layer that does not exist yet
         map.on('click', 'zone-fill', (e) => {
             if (!e.features || !e.features.length) return;
             new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat)
                 .setHTML(zonePopupHTML(e.features[0].properties)).addTo(map);
+        });
+        map.on('click', 'temp-haul-lines', (e) => {
+            if (!e.features || !e.features.length) return;
+            new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat)
+                .setHTML(tempHaulPopupHTML(e.features[0].properties)).addTo(map);
         });
     }
 
@@ -593,10 +627,16 @@
     // a planner opening the map cold should see the whole picture, not just today's.
     function applyZoneMonth(month) {
         if (!map.getLayer('zone-fill')) return;
-        let f = null;
+        // Phase 4: haul roads are zones too, and /api/zones returns them, but they are
+        // drawn from routes-source as 'Temp Haul Track' with their own colour, dash,
+        // toggle and popup. Without this they would be painted twice — once here as a
+        // grey advisory outline, once there as a haul road — and the grey one would win
+        // on any zoom where it sat on top.
+        const notHaul = ['!=', ['get', 'kind'], 'haul_road'];
+        let f = notHaul;
         if (month) {
             const [lo, hi] = monthSpan(month);
-            f = ['all', ['<=', ['get', 'start_n'], hi], ['>=', ['get', 'end_n'], lo]];
+            f = ['all', notHaul, ['<=', ['get', 'start_n'], hi], ['>=', ['get', 'end_n'], lo]];
         }
         ['zone-fill', 'zone-outline', 'zone-label'].forEach(l => {
             if (map.getLayer(l)) map.setFilter(l, f);
@@ -605,6 +645,44 @@
 
     function toggleZones(visible) {
         ['zone-fill', 'zone-outline', 'zone-label'].forEach(l => toggleLayer(l, visible));
+    }
+
+    // ---- Phase 4: temporary haul roads -------------------------------------------
+    // Read from the checkbox rather than a module variable so the layers come back with
+    // the right visibility after a basemap switch, which drops and re-adds every layer.
+    function tempHaulVisible() {
+        const cb = document.getElementById('layer-temp');
+        return !cb || cb.checked;
+    }
+
+    function toggleTempHaul(visible) {
+        ['temp-haul-lines', 'temp-haul-label'].forEach(l => toggleLayer(l, visible));
+    }
+
+    function tempHaulPopupHTML(p) {
+        const speed = (p.speed_kph === null || p.speed_kph === undefined || p.speed_kph === '')
+            ? null : Number(p.speed_kph);
+        const km = (p.length_km === null || p.length_km === undefined) ? null : Number(p.length_km);
+        const when = (p.starts_on || p.ends_on)
+            ? (p.starts_on || 'open') + ' → ' + (p.ends_on || 'open')
+            : 'no dates set';
+        let body = '<div style="font-size:11.5px;color:#6b7280;">Temporary haul road · ' + when + '</div>';
+        if (km !== null) body += '<div style="font-size:11.5px;margin-top:6px;"><b>' + km.toFixed(2) + ' km</b> as drawn</div>';
+        body += speed
+            ? '<div style="font-size:11.5px;margin-top:2px;">Assigned speed <b>' + speed + ' km/h</b>'
+              + (km !== null ? ' — ' + Math.round(km / speed * 60) + ' min each way' : '') + '</div>'
+              // the honest caveat: this is not a measured speed and the geometry is a drawing
+              + '<div style="font-size:10.5px;margin-top:4px;color:#92400e;">'
+              + 'Assigned, not measured — HERE will not accept a custom speed, so this timing is '
+              + 'substituted into the cycle afterwards and is only as good as the drawn line.</div>'
+            : '<div style="font-size:11.5px;margin-top:2px;color:#92400e;">No speed assigned — this '
+              + 'stretch adds distance but no time to any cycle.</div>';
+        body += '<div style="font-size:11.5px;margin-top:6px;color:#6b7280;">Used by '
+              + (Number(p.routes_attached) || 0) + ' route(s)</div>';
+        if (p.note) body += '<div style="font-size:11px;margin-top:6px;color:#374151;">' + p.note + '</div>';
+        return '<div style="min-width:220px;">'
+            + '<h4 style="margin:0 0 4px;color:' + CONFIG.COLORS.brandDark + ';font-size:13px;">'
+            + (p.name || p.zone_id) + '</h4>' + body + '</div>';
     }
 
     function zonePopupHTML(p) {
