@@ -242,14 +242,22 @@ ok("there is a per-route restriction panel", code.includes("function RouteRestri
 ok("it is rendered inside the route expansion, beside the haul roads",
   code.includes("<RouteRestrictions routeId={routeId} />"));
 ok("it reads the per-route endpoint", code.includes("/restrictions`"));
-ok("a weak bridge's load class is shown verbatim",
-  code.includes("{h.nominal_load}"));
-ok("and explicitly NOT compared to tonnes",
-  src.includes("a load class, not tonnes"));
-ok("no pass/fail verdict is rendered anywhere in the panel",
-  !/\b(exceeds|over limit|cannot cross|too heavy)\b/i.test(src.split("function RouteRestrictions")[1].split("function RouteAnalysis")[0]));
-ok("the vehicle's own laden weight is offered so a human can judge",
-  code.includes("h.vehicle_gross_t"));
+// ⚠️ These four were REVERSED, not deleted, once the real Tark Tee schema was read.
+// restriction_limit is a genuine number in tonnes or metres, so mass/height/width DO get
+// a verdict now. The original point — no invented verdict on a bridge LOAD CLASS — is
+// narrowed to exactly that case rather than dropped.
+ok("the restriction's actual value is shown, not just its existence",
+  code.includes("{h.limit}") && code.includes("h.unit"));
+ok("a real EXCEEDS verdict is given where two numbers share a unit",
+  code.includes('h.verdict === "exceeds"') && src.includes("EXCEEDS by"));
+ok("and the margin either way is quantified", code.includes("h.margin"));
+ok("but a bridge load class is still NOT converted to tonnes",
+  src.includes("load class is not a tonnage") || src.includes("a weak bridge's load class is not a tonnage"));
+ok("an uncomparable restriction says 'not comparable' rather than guessing",
+  src.includes("not comparable"));
+ok("and carries the reason it could not be compared", code.includes("h.note"));
+ok("the vehicle's own figure is shown beside the limit",
+  code.includes("h.vehicle_value"));
 ok("the panel says it is advisory and not fed to the router",
   src.includes("The router is never given this data"));
 ok("a partial fetch is declared rather than passing as a clean check",
@@ -257,7 +265,9 @@ ok("a partial fetch is declared rather than passing as a clean check",
 ok("an unreachable service degrades to a note, not an error banner",
   src.includes("Tark Tee could not be reached"));
 ok("a route with no hits says so explicitly rather than rendering nothing",
-  src.includes("No Tark Tee restrictions within"));
+  src.includes("No Tark Tee restrictions in force within"));
+ok("expired records are declared as excluded, not silently dropped",
+  code.includes("expired_or_future_excluded"));
 
 // ---- report ------------------------------------------------------------------
 console.log();

@@ -160,6 +160,20 @@ ok("restrictions survive a basemap switch from cached data, without re-requestin
   code.includes("if (RESTR.data) ensureRestrictionLayers(); else loadRestrictions();"));
 ok("a weak bridge's load class is shown verbatim and NOT converted to tonnes",
   src.includes("A load class, not tonnes"));
+ok("the popup LEADS with the restriction value, not just its existence",
+  code.includes("p._headline || p._label"));
+ok("colours come from the server catalogue, not constants in this file",
+  code.includes("RESTR.colour[l.key] = l.colour") && !code.includes("RESTR_NOTE_COLOR"));
+ok("legend dots use the same colour the layer paints with",
+  code.includes("background:' + l.colour"));
+ok("features carry their own colour so map and legend cannot drift",
+  code.includes("['coalesce', ['get', '_colour']"));
+ok("the value is labelled ON the map from zoom 11, not only in a popup",
+  code.includes("'restriction-labels'") && code.includes("['get','_limit']"));
+ok("closures and causes are shown in words", code.includes("p.effect") && code.includes("p.cause"));
+ok("the source's own free text is passed through", code.includes("p.extra_info"));
+ok("the date window is shown so a stale record is visible as stale",
+  code.includes("p._from") && code.includes("p._to"));
 ok("the overlay is declared advisory - the router is not given it",
   /router is not given this data|Advisory/i.test(src));
 ok("restrictions are off by default so they do not bury the haul routes",
@@ -179,6 +193,13 @@ ok("a large offset between the gate and the nearest panorama is disclosed",
 
 ok("the KPI cards actually exist in the page now",
   /id="kpi-routes"/.test(html) && /id="kpi-capacity"/.test(html));
+ok("⭐ the KPIs are ON THE MAP, not in the sidebar", /id="kpi-hud"/.test(html));
+ok("and are positioned over the map canvas", /#kpi-hud\{[^}]*position:absolute/.test(html));
+ok("clear of the Mapbox navigation control at top-right",
+  /#kpi-hud\{[^}]*top:112px[^}]*right:10px/.test(html));
+ok("the KPI block is outside the sidebar element",
+  html.indexOf('id="kpi-hud"') > html.indexOf('id="timeline-bar"') ||
+  html.indexOf('id="kpi-hud"') > html.lastIndexOf('class="control-group"'));
 ok("and calculateKPIs writes to ids that are really there",
   /id="kpi-routes-label"/.test(html) && code.includes("kpi-routes-label"));
 ok("KPIs follow the timeline, not just the filters",
@@ -193,6 +214,15 @@ ok("and the line goes solid when it stops", code.includes("DASH_SOLID"));
 ok("stopping playback cancels the rAF loop rather than letting it spin for ever",
   code.includes("cancelAnimationFrame(_flowRAF)"));
 ok("starting playback starts it", code.includes("startFlowAnimation();"));
+
+// z-order is add order: outbound must be added FIRST so inbound draws on top of it
+ok("⭐ inbound (laden) is added AFTER outbound, so it renders on top",
+  code.indexOf("'id': 'outbound-lines'") < code.indexOf("'id': 'inbound-lines'"));
+ok("and each casing still sits under its own core line",
+  code.indexOf("'id': 'outbound-lines-casing'") < code.indexOf("'id': 'outbound-lines'") &&
+  code.indexOf("'id': 'inbound-lines-casing'") < code.indexOf("'id': 'inbound-lines'"));
+ok("the reason is written down where the order is easy to reverse by accident",
+  /LAYER ADD ORDER IS Z-ORDER/.test(src));
 
 ok("the direction offset collapses at high zoom instead of holding 4px",
   /OFFSET_IN\s*=[^;]*17,\s*0\]/.test(code) && /OFFSET_OUT\s*=[^;]*17,\s*0\]/.test(code));

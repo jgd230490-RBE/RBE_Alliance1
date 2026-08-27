@@ -289,15 +289,17 @@ try:
     ok("with a distance in metres", h["distance_m"] < restrictions.MATCH_M)
     ok("it names the bridge", "Londi" in h["what"])
 
-    # THE decision this module refuses to make
+    # THE decision this module refuses to make — narrowed, not dropped, once the real
+    # schema showed that mass/height/width ARE comparable. A bridge load class is not.
     ok("the load CLASS is quoted verbatim", h["nominal_load"] == "N-8/NG-30")
-    ok("and flagged as needing a human", h["needs_interpretation"] is True)
-    ok("the note says a class is not tonnes",
-       "not tonnes" in (h["interpretation_note"] or ""))
-    ok("NO tonnage comparison is invented — there is no pass/fail verdict anywhere",
-       not any(k in h for k in ("exceeds", "permitted", "over_limit", "can_cross", "ok")))
+    ok("a weak bridge gets NO verdict", h["verdict"] == "unknown")
+    ok("and is flagged as needing a human", h["needs_interpretation"] is True)
+    ok("the note says a class is not tonnes", "not tonnes" in (h["note"] or ""))
+    ok("no invented numeric threshold appears on a bridge hit", h["margin"] is None)
     ok("but the vehicle's own weight is offered alongside so a human can judge",
-       "vehicle_gross_t" in h)
+       h["vehicle_gross_t"] is not None or "vehicle_gross_t" in h)
+    ok("the headline names it as a weak bridge with its class",
+       "load class" in (h["headline"] or ""), str(h.get("headline")))
 
     # a route nowhere near anything
     db.execute("INSERT INTO routes (id, origin_id, dest_id, origin_temp_km) "
@@ -349,6 +351,78 @@ finally:
     restrictions._get = _real_get
     restrictions.clear_cache()
 
+
+# =========================================================================== #
+#  2b. The restriction VALUE, its verdict, and expiry                          #
+# =========================================================================== #
+# Field names and value formats below are taken verbatim from the live service on
+# 2026-08-27. restriction_limit is a genuine NUMBER — 8 for eight tonnes, 3.2 for 3.2
+# metres — arriving as float32 widened to double (4.1500000953674316).
+H = restrictions._enrich(
+    {"objectid": 795, "road_nr": 24162, "road_name": "Loodi - Helme",
+     "restriction_limit": 3.2000000476837158, "km_from": 4.0,
+     "km_to": 7.3000001907348633, "date_from": None, "date_to": None,
+     "extra_info": "Kehtestatud on gabariidipiirang max laius 3 m."},
+    "restrictions_height", restrictions.LAYERS["restrictions_height"], "L")
+
+ok("the numeric limit is parsed and de-noised", H["_limit"] == 3.2, str(H["_limit"]))
+ok("with the unit from its layer", H["_unit"] == "m")
+ok("⭐ the headline STATES the restriction — this was the whole complaint",
+   H["_headline"] == "3.2 m height limit", H["_headline"])
+ok("the description carries road and chainage too",
+   "Loodi - Helme" in restrictions._describe(H) and "km 4" in restrictions._describe(H),
+   restrictions._describe(H))
+ok("float32 noise is not shown to anyone", "0000000" not in str(H["_limit"]))
+
+a = restrictions.assess(H, "Artic Tipper (44t)")
+ok("⭐ a 4.0 m vehicle under a 3.2 m limit EXCEEDS it", a["verdict"] == "exceeds")
+ok("and the shortfall is quantified", a["margin"] == -0.8, str(a["margin"]))
+ok("the vehicle's own height is reported", a["vehicle"] == 4.0)
+a2 = restrictions.assess(H, "Rigid 7.5t")
+ok("a 3.2 m vehicle under the same limit is within", a2["verdict"] == "within")
+ok("with the clearance stated", a2["margin"] == 0.0, str(a2["margin"]))
+
+M = restrictions._enrich(
+    {"objectid": 74, "road_nr": 13154, "road_name": "Iisaku - Varesmetsa",
+     "type": "GROSS_VEHICLE_WEIGHT_LIMIT", "restriction_limit": 8,
+     "km_from": 0, "km_to": 7.0999999046325684,
+     "date_from": 1497339300000, "date_to": 1497510000000},
+    "restrictions_mass", restrictions.LAYERS["restrictions_mass"], "L")
+ok("a mass limit reads in tonnes", M["_headline"] == "8 t mass limit", M["_headline"])
+ok("44 t against an 8 t limit exceeds",
+   restrictions.assess(M, "Artic Tipper (44t)")["verdict"] == "exceeds")
+ok("7.5 t against the same limit is within",
+   restrictions.assess(M, "Rigid 7.5t")["verdict"] == "within")
+
+# ⚠️ EXPIRY. Every record in the first live sample was from June-August 2017.
+ok("epoch-millisecond dates are parsed to ISO", M["_from"] == "2017-06-13", str(M["_from"]))
+ok("⭐ a 2017 restriction is NOT in force today", M["_in_force"] is False)
+ok("one with no dates at all is open-ended and always applies", H["_in_force"] is True)
+ok("a window around today applies",
+   restrictions.in_force({"date_from": 0, "date_to": 4102444800000}) is True)
+
+T = restrictions._enrich(
+    {"cause": "CULVERT_REPAIRS", "effect": "COMPLETE_CLOSURE",
+     "road_name": "Lelle - Vahastu", "extra_info": "Suletud koikidele soidukitele",
+     "date_from": 1496898000000, "date_to": 1496941200000},
+    "restrictions_traffic", restrictions.LAYERS["restrictions_traffic"], "L")
+ok("a closure reads in English, not as an enum",
+   T["_headline"] == "Road completely closed · Culvert repairs", T["_headline"])
+ok("a closure is not a dimension, so it gets no verdict",
+   restrictions.assess(T, "Artic Tipper (44t)")["verdict"] == "unknown")
+ok("and says why rather than leaving it blank",
+   "not a dimension" in (restrictions.assess(T, "Artic Tipper (44t)")["note"] or ""))
+
+# colours: served from the registry so the legend cannot drift from the layer
+ok("every layer declares a colour", all(v.get("colour") for v in restrictions.LAYERS.values()))
+ok("they are all distinct", len({v["colour"] for v in restrictions.LAYERS.values()})
+   == len(restrictions.LAYERS))
+ok("a traffic restriction is the stop colour, not a muddy note colour",
+   restrictions.LAYERS["restrictions_traffic"]["colour"] == "#DC2626")
+ok("and it is stamped onto every feature for the map to read", T["_colour"] == "#DC2626")
+ok("no restriction colour collides with the route palette",
+   not ({v["colour"].lower() for v in restrictions.LAYERS.values()}
+        & {"#039e86", "#f59e0b", "#c2790b", "#bf2e55"}))
 
 # =========================================================================== #
 #  3. Street View — the free call must come first                              #
