@@ -1469,26 +1469,35 @@ function RouteRestrictions({ routeId }){
   if(!data.baked) return null;
 
   const hits = data.hits || [];
+  const breaches = hits.filter(h => h.severity === "breach");
   const warns = hits.filter(h => h.severity === "warn");
   const fetchErr = data.fetch_errors && Object.keys(data.fetch_errors).length;
   const incomplete = fetchErr
     ? " ⚠️ Some layers could not be fetched, so this is not a complete check." : "";
+  const expired = data.expired_or_future_excluded
+    ? ` ${data.expired_or_future_excluded} record(s) outside their date window were excluded.` : "";
 
   if(!hits.length) return (
     <p className="text-[11px] text-slate-400 mb-3">
-      No Tark Tee restrictions within {data.match_m} m of this route.{incomplete}
+      No Tark Tee restrictions in force within {data.match_m} m of this route.{expired}{incomplete}
     </p>
   );
 
+  // a breach is a statement of fact — two numbers in the same unit — and outranks
+  // everything else in how loudly this reads
+  const tone = breaches.length ? { border: "border-red-300 bg-red-50/70", head: "#B91C1C" }
+             : warns.length    ? { border: "border-amber-300 bg-amber-50/60", head: "#92400E" }
+                               : { border: "border-slate-200 bg-white", head: "var(--navy)" };
+
   return (
-    <div className={"rounded-lg border p-2.5 mb-3 "
-      + (warns.length ? "border-amber-300 bg-amber-50/60" : "border-slate-200 bg-white")}>
+    <div className={"rounded-lg border p-2.5 mb-3 " + tone.border}>
       <button onClick={() => setOpen(o => !o)}
         className="w-full flex items-center justify-between gap-2 text-left">
-        <span className="text-[11px] uppercase tracking-wide"
-          style={{ color: warns.length ? "#92400E" : "var(--navy)" }}>
+        <span className="text-[11px] uppercase tracking-wide" style={{ color: tone.head }}>
           Road restrictions on this route
-          {warns.length ? ` · ${warns.length} to check` : ` · ${hits.length} note(s)`}
+          {breaches.length ? ` · ${breaches.length} EXCEEDED` : ""}
+          {warns.length ? ` · ${warns.length} to check` : ""}
+          {!breaches.length && !warns.length ? ` · ${hits.length} note(s)` : ""}
         </span>
         <span className="text-[10px] text-slate-400">{open ? "hide" : "show"}</span>
       </button>
@@ -1497,33 +1506,51 @@ function RouteRestrictions({ routeId }){
         <table className="text-[11px] w-full mt-2">
           <thead className="text-slate-400">
             <tr>
-              <th className="px-1 py-0.5 text-left font-semibold">What</th>
-              <th className="px-1 py-0.5 text-left font-semibold">Type</th>
-              <th className="px-1 py-0.5 text-left font-semibold">Detail</th>
+              <th className="px-1 py-0.5 text-left font-semibold">Restriction</th>
+              <th className="px-1 py-0.5 text-right font-semibold">Limit</th>
+              <th className="px-1 py-0.5 text-right font-semibold">Vehicle</th>
+              <th className="px-1 py-0.5 text-left font-semibold">Verdict</th>
               <th className="px-1 py-0.5 text-right font-semibold">From route</th>
-              <th className="px-1 py-0.5 text-left font-semibold">Leg · vehicle</th>
+              <th className="px-1 py-0.5 text-left font-semibold">Leg</th>
             </tr>
           </thead>
           <tbody>
             {hits.map((h, i) => (
               <tr key={i} className="border-t border-slate-100 align-top">
-                <td className="px-1 py-1 font-medium text-slate-700">
-                  {h.severity === "warn" && <span style={{ color: "#B4341C" }}>▲ </span>}
-                  {h.what}
+                <td className="px-1 py-1">
+                  <span className="font-medium" style={{ color: h.colour || "#334155" }}>
+                    {h.severity === "breach" ? "■ " : h.severity === "warn" ? "▲ " : "· "}
+                    {h.headline || h.what}
+                  </span>
+                  <span className="block text-[10px] text-slate-400">
+                    {h.road_name || (h.road_nr ? `road ${h.road_nr}` : "")}
+                    {h.from || h.to ? ` · ${h.from || "open"} → ${h.to || "open"}` : ""}
+                  </span>
+                  {h.extra_info && (
+                    <span className="block text-[10px] text-slate-500 mt-0.5">{h.extra_info}</span>
+                  )}
                 </td>
-                <td className="px-1 py-1 text-slate-500">{h.label}</td>
-                <td className="px-1 py-1 text-slate-600">
-                  {h.nominal_load
-                    ? <>
-                        <span className="font-mono">{h.nominal_load}</span>
-                        {h.vehicle_gross_t ? <span className="text-slate-400"> · vehicle {h.vehicle_gross_t} t laden</span> : null}
-                        <span className="block text-[10px]" style={{ color: "#92400E" }}>
-                          a load class, not tonnes — not a comparison this app can make
-                        </span>
-                      </>
-                    : (h.needs_interpretation
-                       ? <span className="text-slate-400">no load class recorded</span>
-                       : <span className="text-slate-300">—</span>)}
+                <td className="px-1 py-1 text-right tabular-nums whitespace-nowrap">
+                  {h.limit != null
+                    ? <b>{h.limit}{h.unit && h.unit !== "load class" ? ` ${h.unit}` : ""}</b>
+                    : <span className="text-slate-300">—</span>}
+                </td>
+                <td className="px-1 py-1 text-right tabular-nums whitespace-nowrap">
+                  {h.vehicle_value != null
+                    ? `${h.vehicle_value} ${h.unit && h.unit !== "load class" ? h.unit : "t"}`
+                    : <span className="text-slate-300">—</span>}
+                </td>
+                <td className="px-1 py-1 whitespace-nowrap">
+                  {h.verdict === "exceeds"
+                    ? <span className="font-semibold" style={{ color: "#B91C1C" }}>
+                        EXCEEDS by {Math.abs(h.margin)}{h.unit ? ` ${h.unit}` : ""}
+                      </span>
+                    : h.verdict === "within"
+                    ? <span style={{ color: "var(--green)" }}>within · {h.margin}{h.unit ? ` ${h.unit}` : ""} spare</span>
+                    : <span className="text-slate-400" title={h.note || ""}>not comparable</span>}
+                  {h.verdict === "unknown" && h.note && (
+                    <span className="block text-[10px] text-slate-400 whitespace-normal">{h.note}</span>
+                  )}
                 </td>
                 <td className="px-1 py-1 text-right tabular-nums">{h.distance_m} m</td>
                 <td className="px-1 py-1 text-slate-500 whitespace-nowrap">
@@ -1537,8 +1564,10 @@ function RouteRestrictions({ routeId }){
 
       <p className="text-[10px] text-slate-400 mt-1.5">
         Advisory only. The router is never given this data, and a match means the
-        restriction sits within {data.match_m} m of the baked line — not that it applies to
-        your vehicle. Source: Estonian Transport Administration (Tark Tee).{incomplete}
+        restriction sits within {data.match_m} m of the baked line — not that it is
+        necessarily on your carriageway. Mass, height and width are compared for real;
+        a weak bridge's load class is not a tonnage and is left for a human.
+        Source: Estonian Transport Administration (Tark Tee).{expired}{incomplete}
       </p>
     </div>
   );
