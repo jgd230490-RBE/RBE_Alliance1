@@ -67,12 +67,31 @@ ok("init waits for the map to load", code.includes("map.once('load', initNetwork
 ok("a failed fetch is surfaced, not swallowed", /Could not load the route network/.test(src));
 ok("an empty network tells the user to bake", /Bake the network/.test(src));
 
-// ---- temp haul layer is gone -------------------------------------------------
-ok("the temp-lines layer is gone", !code.includes("temp-lines"));
-ok("no Temp Haul Track filter survives", !code.includes("Temp Haul Track"));
-ok("its toggle is disabled rather than silently removed",
-  /id="layer-temp"[^>]*disabled/.test(html));
-ok("the toggle says where it went", /Phase 4/.test(html));
+// ---- temp haul layer is BACK (Phase 4) ---------------------------------------
+// Phase 2 asserted this layer was gone and its toggle disabled, because the network held
+// no geometry for it. Phase 4 gives it real drawn polylines, so those assertions are
+// reversed rather than deleted — the point they were making (never draw a line the data
+// does not support) is now enforced from the other side.
+ok("the old placeholder layer id is still gone", !code.includes("temp-lines'"));
+ok("a temp-haul layer is drawn from the API's own features",
+  code.includes("'temp-haul-lines'") && code.includes("'Temp Haul Track'"));
+ok("it reads from routes-source, not a static file",
+  /id: 'temp-haul-lines', type: 'line', source: 'routes-source'/.test(code));
+ok("its toggle is enabled again", !/id="layer-temp"[^>]*disabled/.test(html));
+ok("and wired to a handler", /id="layer-temp"[^>]*onchange="toggleTempHaul/.test(html));
+ok("the '(Phase 4)' placeholder label is gone from the toggle",
+  !/Temporary haul <span[^>]*>\(Phase 4\)/.test(html));
+ok("temporary haul is dashed — it is not the surveyed network",
+  /'line-dasharray': \[2, 1\.4\]/.test(code));
+ok("haul roads are excluded from the zone overlay so they are not drawn twice",
+  code.includes("['!=', ['get', 'kind'], 'haul_road']"));
+ok("clicking one opens its own popup", code.includes("map.on('click', 'temp-haul-lines'"));
+ok("the popup says the speed is assigned, not measured",
+  /Assigned, not measured/.test(src));
+ok("and calls out a haul road with no speed set",
+  /No speed assigned/.test(src));
+ok("visibility survives a basemap switch by reading the checkbox, not a variable",
+  code.includes("function tempHaulVisible()") && code.includes("tempHaulVisible() ? 'visible' : 'none'"));
 
 // ---- leg filter replaced by discipline ---------------------------------------
 ok("the legacy leg filter is gone", !/id="filter-leg"/.test(html));
