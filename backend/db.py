@@ -252,7 +252,21 @@ def init_network_db():
         # "baked before zones existed, provenance unknown" — zones.invalidate() treats
         # those rows differently and less precisely, so the distinction has to survive.
         # Plain ADD COLUMN on both backends: no key change, so SQLite needs no rebuild.
-        for col, typ in (("zones_applied", "TEXT"),):
+        # Phase 4: what a haul road did to this leg. Recorded rather than recomputed,
+        # because once the assigned haul speed has been substituted into duration_hr it
+        # cannot be backed out of that number alone.
+        #   haul_zones       comma-separated haul-road zone ids threaded into this leg.
+        #                    '' = baked with none, NULL = baked before Phase 4. Same
+        #                    three-state convention as zones_applied, same reason: the
+        #                    difference between "none applied" and "we don't know".
+        #   haul_km          how much of this leg runs on drawn haul road
+        #   duration_hr_here HERE's own duration for the leg BEFORE substitution.
+        #                    duration_hr holds the ADJUSTED figure, because that is what
+        #                    route_analysis() reads and the point of assigning a speed is
+        #                    that cycle time moves. Keeping the raw figure is what makes
+        #                    the adjustment auditable rather than a number that appeared.
+        for col, typ in (("zones_applied", "TEXT"), ("haul_zones", "TEXT"),
+                         ("haul_km", "REAL"), ("duration_hr_here", "REAL")):
             try:
                 if IS_PG:
                     cur.execute(f"ALTER TABLE route_geometry ADD COLUMN IF NOT EXISTS {col} {typ}")
@@ -492,9 +506,54 @@ def init_zones_db():
             """
         )
         conn.commit()
+        # Phase 4: two columns that only mean anything for kind = 'haul_road'.
+        #   speed_kph   the assigned running speed on this road. HERE will not accept a
+        #               custom speed, so it is applied afterwards by substitution — see
+        #               haul.py. NULL means "no assigned speed", and a haul road with
+        #               NULL is routed through but its duration is left as HERE gave it.
+        #   haul_mode   'splice' or 'via'. Which of the two ways of making a route use
+        #               this road applies. See haul.MODES — the choice depends on
+        #               whether HERE's map knows the road exists, which is a fact about
+        #               the world, not a preference.
+        for col, typ in (("speed_kph", "REAL"), ("haul_mode", "TEXT")):
+            try:
+                if IS_PG:
+                    cur.execute(f"ALTER TABLE zones ADD COLUMN IF NOT EXISTS {col} {typ}")
+                else:
+                    cur.execute(f"ALTER TABLE zones ADD COLUMN {col} {typ}")
+                conn.commit()
+            except Exception:
+                conn.rollback()  # column already present — fine
+        # Phase 4: which routes use which haul road.
+        #
+        # Deliberately NOT inferred from proximity. A haul road near a route is not the
+        # same as a haul road that route uses, and getting that wrong is expensive in
+        # exactly the way this codebase is trying to avoid: every wrong guess re-bakes a
+        # leg and spends a HERE call. It is also what the user asked for — a haul road is
+        # attached ON the route, not drawn and left to find its own traffic.
+        #
+        # `seq` orders multiple haul roads along one route, because a route that uses two
+        # of them must enter them in the right order or the splice produces a line that
+        # doubles back. The return leg walks the same list in reverse.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS route_haul_roads (
+                route_id   TEXT NOT NULL,
+                zone_id    TEXT NOT NULL,
+                seq        INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT,
+                PRIMARY KEY (route_id, zone_id)
+            )
+            """
+        )
+        conn.commit()
     finally:
         conn.close()
 
 
 def count_zones():
     return query("SELECT COUNT(*) AS n FROM zones")[0]["n"]
+
+
+def count_haul_links():
+    return query("SELECT COUNT(*) AS n FROM route_haul_roads")[0]["n"]

@@ -13,6 +13,7 @@ import db
 import conversions
 import here_routing
 import zones          # Phase 3 — supplies the avoid[areas] the bake path sends to HERE
+import haul           # Phase 4 — threads temporary haul roads into the bake path
 
 DEFAULT_PROFILE = "Artic Tipper (44t)"
 _SEED = os.path.join(os.path.dirname(__file__), "seed_data", "v2_network.json")
@@ -258,7 +259,7 @@ def _waypoint(loc):
 
 
 def _upsert_geom(route_id, profile, geometry, dist, dur, error, leg="loaded", alt_index=0,
-                 zones_applied=None):
+                 zones_applied=None, haul_zones=None, haul_km=None, duration_hr_here=None):
     """
     Cache one baked geometry.
 
@@ -268,23 +269,34 @@ def _upsert_geom(route_id, profile, geometry, dist, dur, error, leg="loaded", al
     around zone Z" instead of guessing from proximity. Written on every upsert,
     including the error rows, so a failed bake does not leave a stale attribution
     behind from the run before it.
+
+    Phase 4 adds the same idea for haul roads: haul_zones names the roads threaded into
+    this leg, and duration_hr_here keeps HERE's own timing next to the adjusted figure in
+    duration_hr. Without the raw column an assigned speed would be indistinguishable from
+    a road that is genuinely quick, which is exactly the kind of number this codebase has
+    been burned by before.
     """
     now = datetime.now(timezone.utc).isoformat()
     db.execute(
         """
         INSERT INTO route_geometry
             (route_id, vehicle_profile, leg, alt_index, geometry, distance_km,
-             duration_hr, computed_at, error, zones_applied)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             duration_hr, computed_at, error, zones_applied, haul_zones, haul_km,
+             duration_hr_here)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (route_id, vehicle_profile, leg, alt_index) DO UPDATE SET
-            geometry      = EXCLUDED.geometry,
-            distance_km   = EXCLUDED.distance_km,
-            duration_hr   = EXCLUDED.duration_hr,
-            computed_at   = EXCLUDED.computed_at,
-            error         = EXCLUDED.error,
-            zones_applied = EXCLUDED.zones_applied
+            geometry = EXCLUDED.geometry,
+            distance_km = EXCLUDED.distance_km,
+            duration_hr = EXCLUDED.duration_hr,
+            computed_at = EXCLUDED.computed_at,
+            error = EXCLUDED.error,
+            zones_applied = EXCLUDED.zones_applied,
+            haul_zones = EXCLUDED.haul_zones,
+            haul_km = EXCLUDED.haul_km,
+            duration_hr_here = EXCLUDED.duration_hr_here
         """,
-        (route_id, profile, leg, alt_index, geometry, dist, dur, now, error, zones_applied),
+        (route_id, profile, leg, alt_index, geometry, dist, dur, now, error,
+         zones_applied, haul_zones, haul_km, duration_hr_here),
     )
 
 
@@ -346,13 +358,24 @@ def _bake_leg(r, o, d, profile, leg, factors, alternatives=ALTERNATIVES,
     a, b = (o, d) if leg == "loaded" else (d, o)
     a_lat, a_lon = _waypoint(a)
     b_lat, b_lon = _waypoint(b)
+
+    # Phase 4: which haul roads this leg runs through, in traversal order. Empty for
+    # every route nobody has attached one to, and route_with_haul() then reduces to the
+    # plain here_routing.routes() call this used to be — so a network with no haul roads
+    # behaves exactly as it did before, same call, same cost.
     try:
-        opts = here_routing.routes(a_lat, a_lon, b_lat, b_lon, profile, factors,
-                                   avoid_areas=(avoid or None),
-                                   alternatives=alternatives, laden=(leg == "loaded"))
+        steps = haul.plan_leg(r["id"], [a_lon, a_lat], [b_lon, b_lat], leg)
+    except Exception:
+        steps = []          # route_haul_roads may not exist yet on a cold database
+    haul_tag = ",".join([s["zone_id"] for s in steps])
+
+    try:
+        opts = haul.route_with_haul(a_lat, a_lon, b_lat, b_lon, profile, steps,
+                                    factors=factors, avoid_areas=(avoid or None),
+                                    laden=(leg == "loaded"), alternatives=alternatives)
     except Exception as e:
         _upsert_geom(r["id"], profile, None, None, None, str(e)[:300], leg=leg, alt_index=0,
-                     zones_applied=zone_tag)
+                     zones_applied=zone_tag, haul_zones=haul_tag)
         return 0, str(e)
     db.execute(
         "DELETE FROM route_geometry WHERE route_id = ? AND vehicle_profile = ? "
@@ -362,7 +385,11 @@ def _bake_leg(r, o, d, profile, leg, factors, alternatives=ALTERNATIVES,
     for i, res in enumerate(opts):
         _upsert_geom(r["id"], profile, json.dumps(res["geometry"]),
                      res["distance_km"], res["duration_hr"], None, leg=leg, alt_index=i,
-                     zones_applied=zone_tag)
+                     zones_applied=zone_tag, haul_zones=haul_tag,
+                     haul_km=res.get("haul_km"),
+                     # None on a leg with no haul road: there was no substitution, so
+                     # there is no separate 'before' figure and duration_hr is HERE's own
+                     duration_hr_here=res.get("duration_hr_here"))
     return len(opts), None
 
 
@@ -372,8 +399,11 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
     the geometry. Idempotent — call repeatedly until 'remaining' is 0. To recompute
     existing routes, clear_geometry() first.
 
-    `limit` counts legs, not routes, because each leg is one HERE call: a full network
-    of 107 routes over both legs is 214 calls, not 107.
+    `limit` counts legs, not routes. A full network of 107 routes over both legs is 214
+    legs. ⚠️ Since Phase 4 a leg is no longer necessarily ONE HERE call: a leg spliced
+    through N haul roads costs N+1, because each drawn stretch breaks the HERE request in
+    two. The batch reports `here_calls` alongside `baked` for that reason — on a network
+    with no haul roads the two still match, as they always did.
 
     Every leg in one call is baked against the same set of zone avoid-areas, resolved
     once at the top. Across repeated calls it can change — someone can draw a zone
@@ -393,6 +423,7 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
     factors = conversions.load_factors()
     avoid, zone_tag = active_avoid()
     baked = errors = 0
+    haul_legs = here_calls = 0
     samples = []
     for r, leg in todo[:limit]:
         o = locs.get(r["origin_id"]); d = locs.get(r["dest_id"])
@@ -402,6 +433,7 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
                          zones_applied=zone_tag)
             errors += 1
             continue
+        here_calls += haul._here_calls_for([(r["id"], profile, leg)])
         n, err = _bake_leg(r, o, d, profile, leg, factors, alternatives,
                            avoid=avoid, zone_tag=zone_tag)
         if err:
@@ -410,11 +442,22 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
                 samples.append(f"{r['id']}/{leg}: {err[:100]}")
         else:
             baked += 1
+            row = db.query("SELECT haul_zones FROM route_geometry WHERE route_id = ? AND "
+                           "vehicle_profile = ? AND leg = ? AND alt_index = 0",
+                           (r["id"], profile, leg))
+            if row and (row[0].get("haul_zones") or ""):
+                haul_legs += 1
     remaining = max(0, len(todo) - min(limit, len(todo)))
     return {"profile": profile, "baked": baked, "errors": errors,
             "remaining": remaining, "legs": list(legs), "error_samples": samples,
             "zones_applied": [z for z in zone_tag.split(",") if z],
-            "avoid_areas": avoid}
+            "avoid_areas": avoid,
+            # Phase 4: `limit` still counts LEGS, but a leg is no longer one HERE call.
+            # A spliced haul road costs one extra call per road on that leg, so this
+            # batch may have spent more requests than it baked legs. Reported rather
+            # than left for someone to discover in the HERE bill.
+            "haul_legs": haul_legs,
+            "here_calls": here_calls}
 
 
 def routes_geojson(profile=DEFAULT_PROFILE, leg="loaded", alt_index=0):
@@ -485,11 +528,14 @@ def public_map_data(profile=None):
     Both legs are emitted. The map's layer ids and toggles are older than the network's
     loaded/return naming, so they are mapped to 'Inbound Highway' / 'Outbound Highway'.
 
-    There is no Temp Haul Track output. The legacy file carried 97 such segments; the
-    network holds only a scalar origin_temp_km per route and no geometry, and drawing a
-    straight line of that length would be a fabricated shape on an otherwise surveyed
-    map. Phase 4 (temporary haul roads) is where these come back, as real drawn polylines
-    editable on the route itself.
+    Temp Haul Track output returned in Phase 4 and is a real drawn polyline: the haul
+    road as somebody clicked it onto the map, not a straight line of origin_temp_km
+    length. It is emitted as type 'Temp Haul Track' features carrying the assigned speed,
+    the drawn length and the routes attached, which is what re-enables the map sidebar
+    toggle that has been disabled and labelled '(Phase 4)' since Phase 2 step 2.
+
+    The 97 legacy haul segments went with a1_data.js and are not recoverable — these are
+    only the roads drawn since.
     """
     factors = conversions.load_factors()
     plan = factors.get("planning", {}) or {}
@@ -559,6 +605,32 @@ def public_map_data(profile=None):
                 "geometry": {"type": "LineString",
                              "coordinates": json.loads(g["geometry"])},
             })
+
+    # Phase 4: temporary haul roads, drawn as themselves. Only those in force and
+    # affecting routing — a haul road that is inactive, out of date range or flagged
+    # advisory is not carrying trucks, and a public map that drew it anyway would say a
+    # road is open when it is not.
+    try:
+        counts = haul.link_counts()
+        for z in zones.haul_roads():
+            line = zones.as_line(z["geometry"])
+            if not line:
+                continue
+            feats.append({
+                "type": "Feature",
+                "properties": {
+                    "type": "Temp Haul Track",
+                    "zone_id": z["id"], "name": z["name"],
+                    "speed_kph": z["speed_kph"],
+                    "length_km": z["length_km"],
+                    "routes_attached": counts.get(z["id"], 0),
+                    "starts_on": z["starts_on"], "ends_on": z["ends_on"],
+                    "note": z["note"] or "",
+                },
+                "geometry": {"type": "LineString", "coordinates": line},
+            })
+    except Exception:
+        pass   # zones/route_haul_roads may not exist yet on a cold database
 
     # location markers. aux_info keeps the shape the map's popup already expects, and is
     # now built from the vendor/detail salvaged out of a1_data.js before it was retired.
@@ -878,12 +950,29 @@ def routes_status():
             "alt_index": g["alt_index"], "baked": bool(g["geometry"]),
             "distance_km": g["distance_km"], "duration_hr": g["duration_hr"],
             "error": g["error"],
+            # Phase 4. haul_zones is '' for a leg baked with no haul road and NULL for
+            # one baked before Phase 4 existed; the UI needs to tell those apart to know
+            # whether "no haul road" is a fact or an absence of record.
+            "haul_zones": [z for z in (g.get("haul_zones") or "").split(",") if z],
+            "haul_recorded": g.get("haul_zones") is not None,
+            "haul_km": g.get("haul_km"),
+            "duration_hr_here": g.get("duration_hr_here"),
         })
         if g["leg"] == "loaded" and g["alt_index"] == 0:
             prof["baked"] = bool(g["geometry"])
             prof["distance_km"] = g["distance_km"]
             prof["duration_hr"] = g["duration_hr"]
             prof["error"] = g["error"]
+            prof["haul_km"] = g.get("haul_km")
+            prof["duration_hr_here"] = g.get("duration_hr_here")
+
+    # one query for every route's haul-road links rather than one per route
+    haul_links = {}
+    try:
+        for l in db.query("SELECT * FROM route_haul_roads ORDER BY route_id, seq, zone_id"):
+            haul_links.setdefault(l["route_id"], []).append(l)
+    except Exception:
+        pass          # table not created yet on a database that predates Phase 4
 
     out = []
     for r in db.query("SELECT * FROM routes ORDER BY id"):
@@ -899,7 +988,13 @@ def routes_status():
             # location without matching on (non-unique) names
             "origin_id": r["origin_id"], "dest_id": r["dest_id"],
             "material_category": r["material_category"], "ipt": r["ipt"],
-            "origin_temp_km": r["origin_temp_km"], "profiles": profs,
+            # Phase 4 made this derived. It was seeded from V2 and computed with nowhere;
+            # it now means "km of this route's loaded leg on drawn temporary haul road",
+            # refreshed by haul.refresh_origin_temp_km() whenever the links or the
+            # drawings change. On a route with no haul road attached it is 0.
+            "origin_temp_km": r["origin_temp_km"],
+            "haul_roads": [l["zone_id"] for l in haul_links.get(r["id"], [])],
+            "profiles": profs,
         })
     return out
 
@@ -1060,6 +1155,23 @@ def promote_alternative(route_id, profile, alt_index, leg="loaded"):
         "AND leg = ?", (route_id, profile, leg))
     have = {r["alt_index"] for r in rows}
     if alt_index not in have:
+        # Phase 4 regression, and worth naming rather than reporting as a bare miss: a
+        # leg routed through a haul road comes back with ONE option, so there is never
+        # an alternative 1 or 2 to promote on it. The generic message would read as a
+        # cache miss and send someone re-baking to fix something that is working as
+        # designed. See haul.route_with_haul().
+        primary = db.query(
+            "SELECT haul_zones FROM route_geometry WHERE route_id = ? AND "
+            "vehicle_profile = ? AND leg = ? AND alt_index = 0",
+            (route_id, profile, leg))
+        tag = (primary[0].get("haul_zones") if primary else None) or ""
+        on_haul = [z.strip() for z in tag.split(",") if z.strip()]
+        if on_haul:
+            return {"error": f"no alternative {alt_index}: this leg runs through haul "
+                             f"road(s) {', '.join(on_haul)}, and a leg with a haul road "
+                             f"is routed as a single option. Detach the haul road to get "
+                             f"alternatives back.",
+                    "haul_zones": on_haul, "alternatives_available": sorted(have)}
         return {"error": f"no alternative {alt_index} cached for {profile} / {leg}"}
 
     TMP = -1
@@ -1424,6 +1536,23 @@ def route_analysis(route_id, profiles=None):
                 "load_minutes": load_m, "unload_minutes": unload_m,
                 "turnaround_hr": round(turnaround_hr, 3),
                 "return_estimated": rg is None,
+                # Phase 4: how much of this cycle is drawn haul road, and what the cycle
+                # would have been on HERE's own timing. Surfaced rather than folded in
+                # silently — an assigned speed is a planning assumption, and a cycle time
+                # that moved because someone typed 25 km/h into a form should say so.
+                "haul_km": round((lg.get("haul_km") or 0)
+                                 + ((rg.get("haul_km") or 0) if rg else 0), 3),
+                "haul_zones": sorted(set(
+                    [z for z in (lg.get("haul_zones") or "").split(",") if z]
+                    + ([z for z in (rg.get("haul_zones") or "").split(",") if z] if rg else []))),
+                "cycle_hr_here": (
+                    round((lg.get("duration_hr_here") or l_hr)
+                          + ((rg.get("duration_hr_here") or r_hr) if rg else
+                             (lg.get("duration_hr_here") or l_hr))
+                          + turnaround_hr, 3)),
+                "haul_speed_applied": bool(lg.get("duration_hr_here") is not None
+                                           or (rg is not None
+                                               and rg.get("duration_hr_here") is not None)),
             })
     return {
         "route_id": route_id,

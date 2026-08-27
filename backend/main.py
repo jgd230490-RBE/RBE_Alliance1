@@ -28,6 +28,7 @@ import network
 import here_routing
 import taxonomy
 import zones
+import haul          # Phase 4 — temporary haul roads
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -782,6 +783,11 @@ class ZoneIn(BaseModel):
     ends_on: Optional[str] = None
     note: Optional[str] = None
     active: bool = True
+    # Phase 4, haul roads only. speed_kph null means "no assigned speed" and leaves
+    # HERE's own timing alone — it is NOT a default speed. haul_mode null means the
+    # module default, which is 'splice'; see haul.py for why that is the safe one.
+    speed_kph: Optional[float] = None
+    haul_mode: Optional[str] = None
 
 
 def _zone_write_result(zone, inval):
@@ -803,7 +809,13 @@ def list_zones(on: Optional[str] = None, include_inactive: bool = True):
     """
     return {"zones": zones.list_zones(include_inactive=include_inactive, on=on),
             "summary": zones.summary(),
-            "kinds": list(zones.KINDS)}
+            "kinds": list(zones.KINDS),
+            # Phase 4: the zone table needs to show which routes use each haul road, and
+            # a haul road attached to nothing is the commonest reason one "does nothing"
+            "haul_modes": list(haul.MODES),
+            "haul_default_mode": haul.DEFAULT_MODE,
+            "haul_kind": zones.HAUL_KIND,
+            "haul_links": haul.link_counts()}
 
 
 @app.get("/api/zones/{zone_id}")
@@ -828,9 +840,16 @@ def create_zone(body: ZoneIn, token: Optional[str] = None):
     _check_admin(token)
     z = zones.create_zone(
         body.name, body.geometry, kind=body.kind, affects_routing=body.affects_routing,
-        starts_on=body.starts_on, ends_on=body.ends_on, note=body.note, active=body.active)
+        starts_on=body.starts_on, ends_on=body.ends_on, note=body.note, active=body.active,
+        speed_kph=body.speed_kph, haul_mode=body.haul_mode)
     if z.get("error"):
         raise HTTPException(400, z["error"])
+    if z["kind"] == zones.HAUL_KIND:
+        # A brand-new haul road is attached to nothing, so it invalidates nothing — it
+        # cannot change a route until someone puts it on one. That is the whole reason
+        # attachment is explicit: drawing a road near a route does not silently re-bake
+        # it. Routing zones invalidate on creation; haul roads invalidate on attach.
+        return _zone_write_result(z, haul.invalidate_for_zone(z["id"]))
     # a zone that does not affect routing invalidates nothing — it is drawn, not routed
     inval = (zones.invalidate(new_geometry=z["geometry"])
              if (z["affects_routing"] and z["active"] and zones.applies_on(z))
@@ -857,10 +876,19 @@ def update_zone(zone_id: str, body: ZoneIn, token: Optional[str] = None):
     sent = set(_fields_set(body))
     fields = {k: getattr(body, k) for k in
               ("name", "geometry", "kind", "affects_routing", "starts_on", "ends_on",
-               "note", "active") if k in sent}
+               "note", "active", "speed_kph", "haul_mode") if k in sent}
     z = zones.update_zone(zone_id, **fields)
     if z.get("error"):
         raise HTTPException(400, z["error"])
+
+    # A haul road edit is exact — see haul.invalidate_for_zone(). It covers the case
+    # where a zone was a haul road and has just stopped being one, because the legs baked
+    # through it still carry its id in haul_zones and are cleared on that record, not on
+    # what the zone happens to be now.
+    if z["kind"] == zones.HAUL_KIND or before["kind"] == zones.HAUL_KIND:
+        inval = haul.invalidate_for_zone(zone_id)
+        haul.refresh_origin_temp_km()
+        return _zone_write_result(z, inval)
 
     now_routes = z["affects_routing"] and z["active"] and zones.applies_on(z)
     was_routes = (before["affects_routing"] and before["active"]
@@ -887,6 +915,21 @@ def delete_zone(zone_id: str, token: Optional[str] = None):
     before = zones.get_zone(zone_id)
     if not before:
         raise HTTPException(404, "zone not found")
+
+    if before["kind"] == zones.HAUL_KIND:
+        # Order matters: work out what to clear while the links still exist, then drop
+        # them, then delete the zone. Deleting first would leave invalidate_for_zone()
+        # with nothing to find and the affected legs baked through a road that is gone.
+        inval = haul.invalidate_for_zone(zone_id)
+        detached = haul.clear_links_for_zone(zone_id)
+        res = zones.delete_zone(zone_id)
+        if res.get("error"):
+            raise HTTPException(404, res["error"])
+        haul.refresh_origin_temp_km()
+        out = _zone_write_result({"deleted": zone_id, "was": before}, inval)
+        out["detached_from_routes"] = detached
+        return out
+
     was_routes = (before["affects_routing"] and before["active"]
                   and zones.applies_on(before))
     res = zones.delete_zone(zone_id)
@@ -909,10 +952,155 @@ def zone_impact(zone_id: str, token: Optional[str] = None):
     z = zones.get_zone(zone_id)
     if not z:
         raise HTTPException(404, "zone not found")
+    if z["kind"] == zones.HAUL_KIND:
+        return {"zone": z,
+                "routes_attached": haul.routes_for_zone(zone_id),
+                "would_invalidate": haul.invalidate_for_zone(zone_id, dry_run=True)}
     return {"zone": z,
             "would_invalidate": zones.invalidate(
                 zone_id=zone_id, new_geometry=z["geometry"],
                 old_geometry=z["geometry"], dry_run=True)}
+
+
+# ------------------------------------------------------- haul roads (Phase 4)
+class HaulLinkIn(BaseModel):
+    """Attach a haul road to a route. seq null appends to the end of the order."""
+    zone_id: str
+    seq: Optional[int] = None
+
+
+class HaulOrderIn(BaseModel):
+    """The full traversal order for one route's haul roads, loaded-leg direction."""
+    zone_ids: List[str]
+
+
+def _haul_write_result(route_id, inval, extra=None):
+    """
+    Same shape the zone writes return, so the frontend's existing re-bake loop drives
+    this too. The one difference worth reading is here_calls: a spliced leg is more than
+    one HERE request, and this counts the splices — see haul._here_calls_for().
+    """
+    out = {"route_id": route_id, "invalidated": inval,
+           "rebake_required": inval.get("leg_count", 0) > 0,
+           "here_calls": inval.get("here_calls", 0),
+           "haul_roads": haul.links_for_route(route_id)}
+    out.update(extra or {})
+    return out
+
+
+@app.get("/api/haul-roads")
+def list_haul_roads(on: Optional[str] = None):
+    """
+    Haul roads and their route links, for the admin table and the public map.
+
+    Not under /api/admin for the same reason /api/zones is not: the public map draws
+    these, has no token, and a drawn road with a speed on it is not sensitive.
+    """
+    return {"haul_roads": zones.haul_roads(on=on, include_inactive=True,
+                                           require_geometry=False),
+            "links": db.query("SELECT * FROM route_haul_roads ORDER BY route_id, seq"),
+            "summary": haul.summary()}
+
+
+@app.get("/api/routes/{route_id}/haul-roads")
+def route_haul_roads(route_id: str):
+    """
+    The haul roads on one route, plus the plan for each leg — entry and exit points,
+    traversal direction, drawn length and the duration the assigned speed implies.
+
+    No HERE calls. This is what the route panel shows before anything is baked, so a
+    planner can see that the loaded leg enters a road at one end and the return leg at
+    the other without spending a request to find out.
+    """
+    if not db.query("SELECT id FROM routes WHERE id = ?", (route_id,)):
+        raise HTTPException(404, "route not found")
+    return haul.diagnostics(route_id=route_id, probe=False)
+
+
+@app.post("/api/admin/routes/{route_id}/haul-roads")
+def attach_haul_road(route_id: str, body: HaulLinkIn, token: Optional[str] = None):
+    """
+    Put a haul road on a route — the Phase 4 requirement that this is edited ON the
+    route, not as a free-floating drawing.
+
+    Clears the route's baked geometry, because every leg of it now routes differently.
+    Does NOT call HERE: the client drives /api/admin/bake-routes afterwards, the same
+    loop the zone writes use.
+    """
+    _check_admin(token)
+    res = haul.attach(route_id, body.zone_id, seq=body.seq)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    inval = haul.invalidate_for_route(route_id)
+    haul.refresh_origin_temp_km(route_id)
+    return _haul_write_result(route_id, inval, {"attached": res["attached"]})
+
+
+@app.delete("/api/admin/routes/{route_id}/haul-roads/{zone_id}")
+def detach_haul_road(route_id: str, zone_id: str, token: Optional[str] = None):
+    """Take a haul road off a route and clear the geometry baked through it."""
+    _check_admin(token)
+    res = haul.detach(route_id, zone_id)
+    if res.get("error"):
+        raise HTTPException(404, res["error"])
+    inval = haul.invalidate_for_route(route_id)
+    haul.refresh_origin_temp_km(route_id)
+    return _haul_write_result(route_id, inval, {"detached": res["detached"]})
+
+
+@app.put("/api/admin/routes/{route_id}/haul-roads/order")
+def order_haul_roads(route_id: str, body: HaulOrderIn, token: Optional[str] = None):
+    """
+    Set the order a route enters its haul roads in, going out. The return leg reverses
+    it. Order changes the spliced geometry, so this clears and re-bakes like any other
+    haul change.
+    """
+    _check_admin(token)
+    res = haul.reorder(route_id, body.zone_ids)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    inval = haul.invalidate_for_route(route_id)
+    haul.refresh_origin_temp_km(route_id)
+    return _haul_write_result(route_id, inval, {"order": res["order"]})
+
+
+@app.post("/api/admin/haul-roads/refresh-temp-km")
+def refresh_temp_km(route_id: Optional[str] = None, token: Optional[str] = None):
+    """
+    Recompute routes.origin_temp_km from the drawn haul roads.
+
+    Phase 4 made that column derived — it was seeded from V2 and computed with nowhere.
+    Every attach, detach, reorder and haul-road edit refreshes it already; this is the
+    manual backstop for a database whose links predate the change.
+    """
+    _check_admin(token)
+    return haul.refresh_origin_temp_km(route_id)
+
+
+@app.get("/api/admin/diagnostics/haul-roads")
+def diagnostics_haul_roads(route_id: Optional[str] = None,
+                           zone_id: Optional[str] = None,
+                           profile: Optional[str] = None,
+                           probe: bool = False, token: Optional[str] = None):
+    """
+    What Phase 4 would send HERE, and with probe=true what HERE does with it.
+
+    ⚠️ Read this before believing either of the two claims Phase 4 was designed around.
+    Both are inherited from a code comment and neither has been checked against the live
+    service from this codebase:
+
+      * that HERE ignores 'alternatives' when via-waypoints are present
+      * that a stopover via splits the response into per-leg sections
+
+    The second is load-bearing: 'via' mode's assigned-speed substitution only works if
+    HERE isolates the haul stretch as its own section. If it does not, via mode silently
+    falls back to HERE's own timing and says so in the response.
+
+    probe=true needs route_id and spends up to three HERE calls on one route.
+    """
+    _check_admin(token)
+    return haul.diagnostics(zone_id=zone_id, route_id=route_id,
+                            profile=profile, probe=probe)
 
 
 # ------------------------------------------------------------------ static

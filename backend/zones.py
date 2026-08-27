@@ -45,6 +45,16 @@ DETOUR_PAD_KM = 3.0
 
 KINDS = ("closure", "weight_limit", "works", "haul_road", "other")
 
+# A haul road is the one kind that is not an obstacle. Every other kind, with
+# affects_routing on, becomes an avoid[areas] box: "route around this". A haul road with
+# affects_routing on means the opposite — "route THROUGH this" — and handing its bbox to
+# HERE as an avoid area would tell the router to steer clear of the very road it is
+# supposed to use, silently, and only visible as a route that inexplicably got longer.
+#
+# So haul roads are excluded from avoid_areas() by kind, not by a flag someone has to
+# remember to unset. Phase 4 reads them through haul.py instead.
+HAUL_KIND = "haul_road"
+
 # Shapes a zone may be drawn as. A Point is rejected: it has no extent, so its bbox is
 # degenerate and HERE would be handed a zero-area rectangle. If a single-point hazard
 # ever needs recording it wants a small drawn box, not a marker.
@@ -229,6 +239,76 @@ def line_hits_geometry(line, geom):
     return False
 
 
+EARTH_R_KM = 6371.0088
+
+
+def haversine_km(a, b):
+    """Great-circle distance between two [lon, lat] points, in km."""
+    lon1, lat1 = math.radians(float(a[0])), math.radians(float(a[1]))
+    lon2, lat2 = math.radians(float(b[0])), math.radians(float(b[1]))
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * EARTH_R_KM * math.asin(min(1.0, math.sqrt(h)))
+
+
+def line_length_km(line):
+    """
+    Length of a polyline of [lon, lat] points, summed great-circle segment by segment.
+
+    This is the drawn length of a haul road, and Phase 4 divides it by the assigned speed
+    to get a duration. It is the length of the line as drawn on a sphere — it does not
+    know about gradient, and it is only as accurate as the drawing. A road sketched with
+    four clicks along a curve reads short. Said here because the number it produces looks
+    precise and the drawing behind it may not be.
+    """
+    if not line or len(line) < 2:
+        return 0.0
+    return sum(haversine_km(line[i], line[i + 1]) for i in range(len(line) - 1))
+
+
+def as_line(geom):
+    """
+    A zone geometry as a single ordered list of [lon, lat], or None.
+
+    A haul road has to be a line with a direction — it is traversed, not enclosed. A
+    LineString is taken as drawn. A MultiLineString takes its first part rather than
+    guessing how disjoint parts join. A Polygon is refused: a closed ring has no
+    unambiguous entry and exit, and silently taking its boundary would produce a haul
+    road that runs the long way round.
+    """
+    if not isinstance(geom, dict):
+        return None
+    t = geom.get("type")
+    c = geom.get("coordinates") or []
+    if t == "LineString" and len(c) >= 2:
+        return [list(p) for p in c]
+    if t == "MultiLineString":
+        parts = [p for p in c if isinstance(p, list) and len(p) >= 2]
+        return [list(p) for p in parts[0]] if parts else None
+    return None
+
+
+def oriented_line(geom, from_point):
+    """
+    A haul road's line, ordered so the end nearest `from_point` comes first.
+
+    Which end of a drawn line a truck enters depends on where it is coming from, and the
+    drawing order carries no such information — a planner clicking a road left to right
+    has said nothing about traffic direction. So entry is decided per leg by proximity,
+    which is why the return leg can traverse the same drawn line in the opposite order.
+
+    Returns (line, reversed_flag) or (None, False).
+    """
+    line = as_line(geom)
+    if not line:
+        return None, False
+    if not from_point:
+        return line, False
+    if haversine_km(line[-1], from_point) < haversine_km(line[0], from_point):
+        return list(reversed(line)), True
+    return line, False
+
+
 def line_in_bbox(line, bbox):
     """True if any vertex of the polyline falls inside bbox. Used for the padded test."""
     if not line or not bbox:
@@ -317,6 +397,13 @@ def _row(z):
         "active": _truthy(z.get("active")),
         "created_at": z.get("created_at"),
         "updated_at": z.get("updated_at"),
+        # Phase 4 — meaningful only for kind = 'haul_road', and null everywhere else
+        # rather than defaulted, so a zone that has never been given a speed is
+        # distinguishable from one deliberately set to HERE's own timing.
+        "speed_kph": (float(z["speed_kph"]) if z.get("speed_kph") not in (None, "") else None),
+        "haul_mode": (z.get("haul_mode") or None),
+        "length_km": (round(line_length_km(as_line(geom)), 3)
+                      if geom and as_line(geom) else None),
         # what the router would actually receive, exposed so the difference between the
         # drawn shape and the avoided rectangle is visible in the UI rather than a
         # surprise after a re-bake
@@ -339,23 +426,49 @@ def get_zone(zone_id):
     return _row(r[0]) if r else None
 
 
+def _clean_speed(v):
+    """
+    An assigned haul speed, or None. Zero and negative are rejected rather than stored:
+    a division by them is what turns an assigned speed into an infinite cycle time, and
+    the sensible reading of "0 km/h" is "I have not set this", which is None.
+    """
+    if v in (None, ""):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
+
+
+def _clean_mode(v):
+    v = (v or "").strip().lower()
+    return v if v in ("splice", "via") else None
+
+
 def create_zone(name, geometry, kind=None, affects_routing=True,
-                starts_on=None, ends_on=None, note=None, active=True, zone_id=None):
+                starts_on=None, ends_on=None, note=None, active=True, zone_id=None,
+                speed_kph=None, haul_mode=None):
     if not (name or "").strip():
         return {"error": "name is required"}
     if not _valid_geometry(geometry):
         return {"error": "geometry must be a GeoJSON Polygon or LineString with coordinates"}
+    kind = kind or "other"
+    if kind == HAUL_KIND and not as_line(geometry):
+        return {"error": "a haul road must be drawn as a LineString — it is travelled "
+                         "along, and a closed shape has no entry or exit"}
     zid = (zone_id or "").strip() or _next_zone_id()
     if db.query("SELECT id FROM zones WHERE id = ?", (zid,)):
         return {"error": f"zone {zid} already exists"}
     now = _now()
     db.execute(
         "INSERT INTO zones (id, name, kind, geometry, affects_routing, starts_on, "
-        "ends_on, note, active, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (zid, name.strip(), (kind or "other"), json.dumps(geometry),
+        "ends_on, note, active, created_at, updated_at, speed_kph, haul_mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (zid, name.strip(), kind, json.dumps(geometry),
          bool(affects_routing), _clean_date(starts_on), _clean_date(ends_on),
-         (note or None), bool(active), now, now),
+         (note or None), bool(active), now, now,
+         _clean_speed(speed_kph), _clean_mode(haul_mode)),
     )
     return get_zone(zid)
 
@@ -380,6 +493,19 @@ def update_zone(zone_id, **fields):
         if not _valid_geometry(fields["geometry"]):
             return {"error": "geometry must be a GeoJSON Polygon or LineString with coordinates"}
         sets.append("geometry = ?"); params.append(json.dumps(fields["geometry"]))
+    # a haul road must still be a line after the edit, whichever of kind or geometry
+    # moved. Checked against the resulting pair, not the one field that was sent —
+    # switching an existing polygon's kind to haul_road is the case a per-field check
+    # would wave through.
+    new_kind = fields.get("kind", cur[0].get("kind")) or "other"
+    new_geom = fields["geometry"] if "geometry" in fields else _row(cur[0])["geometry"]
+    if new_kind == HAUL_KIND and not as_line(new_geom):
+        return {"error": "a haul road must be drawn as a LineString — it is travelled "
+                         "along, and a closed shape has no entry or exit"}
+    if "speed_kph" in fields:
+        sets.append("speed_kph = ?"); params.append(_clean_speed(fields["speed_kph"]))
+    if "haul_mode" in fields:
+        sets.append("haul_mode = ?"); params.append(_clean_mode(fields["haul_mode"]))
     if "affects_routing" in fields:
         sets.append("affects_routing = ?"); params.append(bool(fields["affects_routing"]))
     if "starts_on" in fields:
@@ -414,9 +540,31 @@ def _avoid_str(bbox):
 
 
 def routing_zones(on=None):
-    """Active, routing-affecting zones in force on a date (default today)."""
+    """
+    Active, routing-affecting zones in force on a date (default today) — the ones whose
+    bounding boxes go to HERE as avoid[areas].
+
+    ⚠️ Haul roads are excluded, by kind. See HAUL_KIND: for every other kind
+    affects_routing means "steer around this", and for a haul road it means the reverse.
+    Before Phase 4 that distinction did not exist, because 'haul_road' was in KINDS but
+    nothing read it; any haul road drawn against the Phase 3 build with affects_routing
+    left on would have been sent to HERE as a box to avoid.
+    """
     return [z for z in list_zones(include_inactive=False)
-            if z["affects_routing"] and z["geometry"] and applies_on(z, on)]
+            if z["affects_routing"] and z["geometry"] and z["kind"] != HAUL_KIND
+            and applies_on(z, on)]
+
+
+def haul_roads(on=None, include_inactive=False, require_geometry=True):
+    """
+    Haul-road zones in force on a date. `affects_routing` gates them here exactly as it
+    gates the avoid list: off means drawn on the map but never threaded into a route.
+    """
+    out = [z for z in list_zones(include_inactive=include_inactive)
+           if z["kind"] == HAUL_KIND and applies_on(z, on)]
+    if require_geometry:
+        out = [z for z in out if z["geometry"]]
+    return out
 
 
 def avoid_areas(on=None):
@@ -606,4 +754,8 @@ def summary():
         "routing": len([z for z in active if z["affects_routing"]]),
         "in_force_today": len(routing_zones()),
         "kinds": sorted({z["kind"] for z in zs}),
+        # counted separately from `routing` because haul roads are the one kind that is
+        # never in the avoid list — see HAUL_KIND
+        "haul_roads": len([z for z in zs if z["kind"] == HAUL_KIND]),
+        "haul_roads_in_force": len(haul_roads()),
     }
