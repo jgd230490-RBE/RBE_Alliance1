@@ -1435,6 +1435,115 @@ function HaulRoads({ routeId, haulRoads, token, onChanged }){
   );
 }
 
+// Phase 2.5a — Tark Tee restrictions on one route.
+//
+// Advisory, never a block: the router is not given this data. HERE has its own
+// restriction model and returns its own notices, and two systems arguing about the same
+// road is worse than one. This says "your route passes a weak bridge"; a human reads it.
+//
+// ⚠️ It deliberately makes NO tonnage judgement about a weak bridge. nominal_load comes
+// back as a class like "N-13/NG-60", not tonnes, and the mapping has never been
+// established here. The class and the vehicle's laden weight are shown side by side and
+// the reader draws the conclusion — see backend/restrictions.check_route().
+function RouteRestrictions({ routeId }){
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setData(null); setErr("");
+    fetch(`${API}/routes/${encodeURIComponent(routeId)}/restrictions`)
+      .then(r => r.json())
+      .then(j => { if(!live) return; j.error ? setErr(j.error) : setData(j); })
+      .catch(e => { if(live) setErr(e.message); });
+    return () => { live = false; };
+  }, [routeId]);
+
+  if(err) return (
+    <p className="text-[11px] text-slate-400 mb-3">
+      Road restrictions unavailable — Tark Tee could not be reached ({err}).
+    </p>
+  );
+  if(!data) return <p className="text-[11px] text-slate-400 mb-3">Checking road restrictions…</p>;
+  if(!data.baked) return null;
+
+  const hits = data.hits || [];
+  const warns = hits.filter(h => h.severity === "warn");
+  const fetchErr = data.fetch_errors && Object.keys(data.fetch_errors).length;
+  const incomplete = fetchErr
+    ? " ⚠️ Some layers could not be fetched, so this is not a complete check." : "";
+
+  if(!hits.length) return (
+    <p className="text-[11px] text-slate-400 mb-3">
+      No Tark Tee restrictions within {data.match_m} m of this route.{incomplete}
+    </p>
+  );
+
+  return (
+    <div className={"rounded-lg border p-2.5 mb-3 "
+      + (warns.length ? "border-amber-300 bg-amber-50/60" : "border-slate-200 bg-white")}>
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-2 text-left">
+        <span className="text-[11px] uppercase tracking-wide"
+          style={{ color: warns.length ? "#92400E" : "var(--navy)" }}>
+          Road restrictions on this route
+          {warns.length ? ` · ${warns.length} to check` : ` · ${hits.length} note(s)`}
+        </span>
+        <span className="text-[10px] text-slate-400">{open ? "hide" : "show"}</span>
+      </button>
+
+      {open && (
+        <table className="text-[11px] w-full mt-2">
+          <thead className="text-slate-400">
+            <tr>
+              <th className="px-1 py-0.5 text-left font-semibold">What</th>
+              <th className="px-1 py-0.5 text-left font-semibold">Type</th>
+              <th className="px-1 py-0.5 text-left font-semibold">Detail</th>
+              <th className="px-1 py-0.5 text-right font-semibold">From route</th>
+              <th className="px-1 py-0.5 text-left font-semibold">Leg · vehicle</th>
+            </tr>
+          </thead>
+          <tbody>
+            {hits.map((h, i) => (
+              <tr key={i} className="border-t border-slate-100 align-top">
+                <td className="px-1 py-1 font-medium text-slate-700">
+                  {h.severity === "warn" && <span style={{ color: "#B4341C" }}>▲ </span>}
+                  {h.what}
+                </td>
+                <td className="px-1 py-1 text-slate-500">{h.label}</td>
+                <td className="px-1 py-1 text-slate-600">
+                  {h.nominal_load
+                    ? <>
+                        <span className="font-mono">{h.nominal_load}</span>
+                        {h.vehicle_gross_t ? <span className="text-slate-400"> · vehicle {h.vehicle_gross_t} t laden</span> : null}
+                        <span className="block text-[10px]" style={{ color: "#92400E" }}>
+                          a load class, not tonnes — not a comparison this app can make
+                        </span>
+                      </>
+                    : (h.needs_interpretation
+                       ? <span className="text-slate-400">no load class recorded</span>
+                       : <span className="text-slate-300">—</span>)}
+                </td>
+                <td className="px-1 py-1 text-right tabular-nums">{h.distance_m} m</td>
+                <td className="px-1 py-1 text-slate-500 whitespace-nowrap">
+                  {h.leg === "loaded" ? "laden" : "return"} · {vehShort(h.vehicle_profile)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <p className="text-[10px] text-slate-400 mt-1.5">
+        Advisory only. The router is never given this data, and a match means the
+        restriction sits within {data.match_m} m of the baked line — not that it applies to
+        your vehicle. Source: Estonian Transport Administration (Tark Tee).{incomplete}
+      </p>
+    </div>
+  );
+}
+
 function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting, leg,
                         haulRoads, token, onHaulChanged }){
   const [data, setData] = useState(null);
@@ -1457,6 +1566,7 @@ function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting
     <tr className="bg-slate-50/70">
       <td colSpan={colSpan} className="px-4 py-3">
         <HaulRoads routeId={routeId} haulRoads={haulRoads} token={token} onChanged={onHaulChanged} />
+        <RouteRestrictions routeId={routeId} />
         {err && <p className="text-xs" style={{ color: "var(--red)" }}>Couldn't load analysis: {err}</p>}
         {!data && !err && <p className="text-xs text-slate-400">Loading analysis…</p>}
         {data && !data.rows.length && (
