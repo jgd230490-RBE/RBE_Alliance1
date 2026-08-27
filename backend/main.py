@@ -29,6 +29,8 @@ import here_routing
 import taxonomy
 import zones
 import haul          # Phase 4 — temporary haul roads
+import restrictions  # Phase 2.5a — Tark Tee restriction layers (proxied, reprojected)
+import streetview    # Phase 2.5a — Google Street View proxy (key stays server-side)
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -1101,6 +1103,124 @@ def diagnostics_haul_roads(route_id: Optional[str] = None,
     _check_admin(token)
     return haul.diagnostics(zone_id=zone_id, route_id=route_id,
                             profile=profile, probe=probe)
+
+
+# ------------------------------------- Tark Tee restrictions (Phase 2.5a)
+@app.get("/api/restrictions")
+def get_restrictions(layers: Optional[str] = None):
+    """
+    Estonian Transport Administration restriction layers as WGS84 GeoJSON.
+
+    Proxied rather than fetched from the browser for three reasons, in order: it is
+    somebody else's public service and this caches it to one request per layer per half
+    hour however many people are looking; **the coordinates have to be corrected before
+    anything can draw them** (the service declares WKID 4326 and returns L-EST97 metres);
+    and CORS then never matters.
+
+    Not under /api/admin — the public map draws these and has no token, and a bridge
+    weight limit is not sensitive.
+    """
+    keys = [k.strip() for k in (layers or "").split(",") if k.strip()] or None
+    return restrictions.fetch_all(keys)
+
+
+@app.get("/api/restrictions/layers")
+def restriction_layers():
+    """The layer catalogue, so the map builds its toggles from the server not a copy."""
+    return {"layers": [dict(v, key=k) for k, v in restrictions.LAYERS.items()],
+            "match_m": restrictions.MATCH_M,
+            "attribution": "Estonian Transport Administration — Tark Tee (tarktee.ee)"}
+
+
+@app.get("/api/routes/{route_id}/restrictions")
+def route_restrictions(route_id: str, profile: Optional[str] = None):
+    """
+    Which restrictions the baked geometry of one route passes through.
+
+    ⚠️ Reports, never blocks, and makes **no tonnage judgement** about a weak bridge:
+    `nominal_load` is a class like 'N-13/NG-60', not tonnes, and the mapping has never
+    been established here. The class and the vehicle's gross weight are both returned and
+    `needs_interpretation` is set. See restrictions.check_route().
+    """
+    if not db.query("SELECT id FROM routes WHERE id = ?", (route_id,)):
+        raise HTTPException(404, "route not found")
+    return restrictions.check_route(route_id, profile=profile)
+
+
+@app.get("/api/routes/restrictions")
+def all_route_restrictions(profile: Optional[str] = None):
+    """
+    Every baked route checked in one pass, sharing a single fetch. Only routes with a hit
+    are returned — a clean route is the normal case and listing all 107 buries the ones
+    that matter.
+    """
+    return restrictions.check_all(profile=profile)
+
+
+@app.get("/api/admin/diagnostics/restrictions")
+def diagnostics_restrictions(layer: Optional[str] = None, probe: bool = False,
+                             token: Optional[str] = None):
+    """
+    What this asks Tark Tee for, and with probe=true what comes back — including the raw
+    coordinate next to the converted one, so the WKID mislabelling is visible rather than
+    taken on trust. Spends no HERE calls and no Google quota.
+    """
+    _check_admin(token)
+    return restrictions.diagnostics(layer=layer, probe=probe)
+
+
+@app.post("/api/admin/restrictions/refresh")
+def refresh_restrictions(token: Optional[str] = None):
+    """Drop the cache so the next request re-fetches from Tark Tee."""
+    _check_admin(token)
+    return restrictions.clear_cache()
+
+
+# ------------------------------------------ Street View (Phase 2.5a)
+@app.get("/api/streetview/meta")
+def streetview_meta(lat: float, lon: float, radius: int = streetview.DEFAULT_RADIUS_M):
+    """
+    Does Google have street-level imagery near this point? **Free** — Google consumes no
+    quota for metadata, only for images. The UI calls this first and asks for a picture
+    only when the answer is yes, so a quarry down a private track costs nothing and shows
+    nothing instead of spending a billable request on a grey tile.
+
+    Also returns `offset_m`: how far Google had to move to find a panorama. A large offset
+    means the picture is of somewhere else, which matters for a gate on a long approach.
+    """
+    return streetview.metadata(lat, lon, radius)
+
+
+@app.get("/api/streetview")
+def streetview_image(lat: float, lon: float, size: str = "480x300",
+                     heading: Optional[int] = None, pitch: int = 0, fov: int = 80,
+                     radius: int = streetview.DEFAULT_RADIUS_M):
+    """
+    A Street View still, proxied so the Google key never reaches the browser.
+
+    ⚠️ **This costs a billable Google request.** It checks the free metadata endpoint
+    first and returns 404 rather than spending one when there is no imagery. Nothing is
+    written to disk or to the database — Google's terms restrict storing Maps content.
+    """
+    from fastapi.responses import Response
+    data, ctype = streetview.fetch_image(lat, lon, size=size, heading=heading,
+                                         pitch=pitch, fov=fov, radius=radius)
+    if data is None:
+        raise HTTPException(404, ctype)
+    # short cache only: enough to stop a re-render costing a second request, not storage
+    return Response(content=data, media_type=ctype,
+                    headers={"Cache-Control": "private, max-age=900"})
+
+
+@app.get("/api/admin/diagnostics/streetview")
+def diagnostics_streetview(lat: Optional[float] = None, lon: Optional[float] = None,
+                           probe: bool = False, token: Optional[str] = None):
+    """
+    Whether Street View is wired up and how many billable requests this process has made.
+    probe=true calls metadata only, which is free.
+    """
+    _check_admin(token)
+    return streetview.diagnostics(lat=lat, lon=lon, probe=probe)
 
 
 # ------------------------------------------------------------------ static
