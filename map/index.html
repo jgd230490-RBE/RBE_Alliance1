@@ -44,6 +44,13 @@
         .control-item label { display:flex; align-items:center; gap:9px; cursor:pointer; width:100%; font-weight:500; color:var(--ink); }
         .control-item input[type=checkbox]{ accent-color:var(--navy); width:14px; height:14px; }
         .color-dot { width:11px; height:11px; border-radius:50%; display:inline-block; margin-left:auto; }
+        /* Phase 2.5a KPI cards */
+        .kpi-row{ display:flex; gap:8px; }
+        .kpi-card{ flex:1; background:#f6f8fb; border:1px solid var(--line); border-radius:8px; padding:9px 10px; }
+        .kpi-value{ font-size:19px; font-weight:700; letter-spacing:-.02em; color:var(--navy-deep); line-height:1.1; }
+        .kpi-label{ font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin-top:3px; }
+        .kpi-note{ font-size:10.5px; color:var(--muted); margin-top:7px; line-height:1.45; }
+        .restr-warn{ font-size:11px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:7px; padding:7px 9px; margin-top:8px; line-height:1.45; }
 
         .fc-box h3{ border:none; }
         .fc-row{ display:flex; gap:10px; margin-bottom:10px; }
@@ -140,6 +147,38 @@
              drawn polylines edited on the route itself. -->
         <div class="control-item"><label><input type="checkbox" id="layer-temp" checked onchange="toggleTempHaul(this.checked)"> Temporary haul</label><span class="color-dot" style="background:#C2790B;"></span></div>
     </div>
+
+    <!-- Phase 2.5a — Estonian Transport Administration restriction layers, proxied and
+         reprojected by the backend. See backend/restrictions.py: the source declares
+         WKID 4326 and returns L-EST97 metres, so nothing here may draw a raw coordinate.
+         Toggles are built from /api/restrictions/layers so the catalogue lives in one
+         place rather than being copied into this file. -->
+    <div class="control-group">
+        <h3>Road restrictions <small style="font-weight:500;text-transform:none;letter-spacing:0;color:#8a9099;">Tark Tee</small></h3>
+        <div id="restriction-toggles"><div class="control-item"><span style="font-size:11px;color:#8a9099;">Loading…</span></div></div>
+        <div class="control-item" style="padding-left:2px;margin-top:-2px;">
+            <span style="font-size:10px;color:#8a9099;">Source: Estonian Transport Administration (tarktee.ee). Advisory — the router is not given this data.</span>
+        </div>
+    </div>
+
+    <!-- Phase 2.5a — these cards previously existed only in calculateKPIs(), which wrote
+         to element ids that had been deleted from the page. The function ran on every
+         filter change and updated nothing. Rebuilt here, and now driven by the timeline
+         as well as the filters. -->
+    <div class="control-group">
+        <h3>At a glance</h3>
+        <div class="kpi-row">
+            <div class="kpi-card">
+                <div class="kpi-value" id="kpi-routes">—</div>
+                <div class="kpi-label" id="kpi-routes-label">Active routes</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-value" id="kpi-capacity">—</div>
+                <div class="kpi-label">Trips / day</div>
+            </div>
+        </div>
+        <div class="kpi-note" id="kpi-note"></div>
+    </div>
 </div>
 
 <div id="timeline-bar">
@@ -229,11 +268,20 @@
     // file, with no provenance and no equivalent in the routing network. It now sums what
     // the baked geometry actually supports: shift hours divided by the real HERE cycle
     // time, the same figure the forecasting dashboard uses. Reads 0 until routes are baked.
+    // Phase 2.5a: the cards now follow the TIMELINE as well as the filters.
+    //
+    // With the timeline open they count only the routes carrying forecast volume in the
+    // month on screen — which is what the map is drawing — instead of every baked route in
+    // the network. renderMonthFrame() has already stamped is_forecast on each feature by
+    // the time this runs, and a1_data is the same object the source holds, so the flag is
+    // simply read rather than recomputed.
     function calculateKPIs(oFilter, dFilter, discFilter, iFilter) {
-        let routesCount = 0; let totalTrips = 0;
+        const monthMode = (typeof TL !== 'undefined' && TL.on && TL.matrix);
+        let routesCount = 0, totalTrips = 0;
         a1_data.features.forEach(f => {
             if (f.geometry.type === 'LineString' && f.properties.type === 'Inbound Highway') {
                 const props = f.properties;
+                if (monthMode && !props.is_forecast) return;
                 if ((oFilter === 'ALL' || props.origin === oFilter) &&
                     (dFilter === 'ALL' || props.dest === dFilter) &&
                     (discFilter === 'ALL' || (props.disciplines || []).includes(discFilter)) &&
@@ -242,9 +290,18 @@
                 }
             }
         });
-        const er = document.getElementById('kpi-routes'); if (er) er.innerText = routesCount;
+        const er = document.getElementById('kpi-routes');
+        if (er) er.innerText = routesCount;
         const ec = document.getElementById('kpi-capacity');
         if (ec) ec.innerText = Math.round(totalTrips).toLocaleString();
+        // say WHICH question the numbers are answering, or a month figure reads as a
+        // network figure that has mysteriously dropped
+        const lb = document.getElementById('kpi-routes-label');
+        if (lb) lb.innerText = monthMode ? ('Routes in ' + monthLabel(TL.month)) : 'Active routes';
+        const nt = document.getElementById('kpi-note');
+        if (nt) nt.innerText = monthMode
+            ? 'Forecast routes carrying volume this month. Trips/day is the baked HERE cycle time, not the forecast quantity.'
+            : 'Every baked route matching the filters. Unbaked routes are not counted — they are not drawn either.';
     }
 
     function applyFilters() {
@@ -294,7 +351,24 @@
         if (!map.getSource('chainage-source')) map.addSource('chainage-source', { type: 'geojson', data: chainage_global_data });
 
         // --- PROFESSIONAL MAPBOX STYLING (Corporate Palette + Highway Offsets) ---
-        
+
+        // Phase 2.5a — the direction offset now COLLAPSES at high zoom.
+        //
+        // The offset exists so laden-out and empty-back read as two flows instead of one
+        // line. That is worth 4 px at zoom 12, where the two carriageways are a single
+        // pixel apart. Past about zoom 14 the road itself is wider than the offset, so the
+        // same 4 px stops separating anything and starts drawing the route in the verge —
+        // which is what "1 m accuracy" was really complaining about. So it ramps up to
+        // zoom 12 and back to zero by zoom 17, where what you want is the line on the road.
+        //
+        // Width keeps growing instead: at zoom 16 a 2.5 px line on a 40 px-wide road looks
+        // like a scratch.
+        const OFFSET_IN  = ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4, 14, -3, 17, 0];
+        const OFFSET_OUT = ['interpolate', ['linear'], ['zoom'], 7,  1, 12,  4, 14,  3, 17, 0];
+        const WIDTH_CORE   = ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 6, 16, 10];
+        const WIDTH_CASING = ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 7, 16, 12];
+
+
         // 1. INBOUND ROUTES (Deep Sapphire Blue)
         // Casing (Halo)
         map.addLayer({
@@ -304,9 +378,9 @@
             'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
             'paint': { 
                 'line-color': '#ffffff', 
-                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 7], 
+                'line-width': WIDTH_CASING, 
                 'line-opacity': 0.8,
-                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4]
+                'line-offset': OFFSET_IN
             }
         });
         // Core Line
@@ -317,9 +391,9 @@
             'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
             'paint': { 
                 'line-color': '#039E86', 
-                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 6], 
+                'line-width': WIDTH_CORE, 
                 'line-opacity': 1,
-                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4]
+                'line-offset': OFFSET_IN
             }
         });
 
@@ -332,9 +406,9 @@
             'filter': ['==', ['get', 'type'], 'Outbound Highway'], 
             'paint': { 
                 'line-color': '#ffffff', 
-                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 8], 
+                'line-width': WIDTH_CASING,
                 'line-opacity': 0.8,
-                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, 1, 12, 4]
+                'line-offset': OFFSET_OUT
             }
         });
         // Core Line
@@ -345,9 +419,9 @@
             'filter': ['==', ['get', 'type'], 'Outbound Highway'], 
             'paint': { 
                 'line-color': '#f59e0b', 
-                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 6], 
+                'line-width': WIDTH_CORE, 
                 'line-opacity': 1,
-                'line-offset': ['interpolate', ['linear'], ['zoom'], 7, 1, 12, 4]
+                'line-offset': OFFSET_OUT
             }
         });
 
@@ -419,6 +493,10 @@
         setupHoverEvents();
         // zones ride on style.load like everything else, so a basemap switch re-adds them
         if (ZONES.loaded) ensureZoneLayers(); else loadZones();
+        // and so do the Tark Tee restriction layers. Already-fetched data is re-added
+        // from the cached FeatureCollection rather than re-requested — a basemap switch
+        // must not cost another round trip to a government service.
+        if (RESTR.data) ensureRestrictionLayers(); else loadRestrictions();
     });
 
     function setupHoverEvents() {
@@ -445,6 +523,15 @@
             new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat)
                 .setHTML(tempHaulPopupHTML(e.features[0].properties)).addTo(map);
         });
+        ['restriction-points', 'restriction-lines'].forEach(lId => {
+            map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
+            map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
+            map.on('click', lId, (e) => {
+                if (!e.features || !e.features.length) return;
+                new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat)
+                    .setHTML(restrictionPopupHTML(e.features[0].properties)).addTo(map);
+            });
+        });
     }
 
     function buildNodeMarkers() {
@@ -470,10 +557,22 @@
                 if (props.node_type === 'Compound') popupMarkup += `<p style='margin:4px 0;'><b>Sector IPT:</b> ${props.ipt}</p>`;
                 else if (props.node_type === 'Quarry') popupMarkup += `<p style='margin:4px 0;'><b>Material:</b> ${props.material}</p>`;
                 if (props.aux_info) popupMarkup += props.aux_info;
+                // Phase 2.5a — a slot the Street View thumbnail drops into once the free
+                // metadata check has said there is imagery. Empty until then, and it
+                // stays empty for a location Google has never driven past, which is most
+                // quarry gates. See svIntoPopup().
+                const svId = 'sv-' + Math.random().toString(36).slice(2, 9);
+                popupMarkup += `<div id="${svId}" style="margin-top:8px;"></div>`;
                 popupMarkup += `<button onclick="filterByNode('${props.name}', '${props.node_type}')" style="margin-top:10px; width:100%; background:#003787; color:#fff; border:none; padding:8px; border-radius:4px; font-weight:bold; cursor:pointer;">Filter Routes to this Location</button></div>`;
 
+                const pop = new mapboxgl.Popup({ offset: 12 }).setHTML(popupMarkup);
+                // Only look when the popup is actually opened. Checking imagery for 27
+                // locations on page load would be 27 round trips nobody asked for, and
+                // the image request that may follow one of them is billable.
+                const c = f.geometry.coordinates;
+                pop.on('open', () => svIntoPopup(svId, c[1], c[0], props.name));
                 const mk = new mapboxgl.Marker(el).setLngLat(f.geometry.coordinates)
-                    .setPopup(new mapboxgl.Popup({ offset: 12 }).setHTML(popupMarkup)).addTo(map);
+                    .setPopup(pop).addTo(map);
                 el._marker = mk;
                 nodeMarkersArray.push(el);
             }
@@ -645,6 +744,161 @@
 
     function toggleZones(visible) {
         ['zone-fill', 'zone-outline', 'zone-label'].forEach(l => toggleLayer(l, visible));
+    }
+
+    // ===== Phase 2.5a: Google Street View =========================================
+    // Mapbox has no street-level imagery, so this is Google Maps Platform — a separate
+    // product with separate billing. The key is held by the backend and never appears
+    // here; both calls below go to our own API, not to Google.
+    //
+    // THE ORDER MATTERS AND IS THE WHOLE COST STORY: /api/streetview/meta is FREE and
+    // consumes no Google quota, /api/streetview costs a billable request. So metadata is
+    // asked first, every time, and the image is only requested for a point Google
+    // actually has. A gate down a private haul track — most of this network — costs
+    // nothing and simply shows nothing.
+    const SV_SEEN = {};      // lat,lon -> metadata, so reopening a popup is free twice over
+
+    async function svIntoPopup(elId, lat, lon, name){
+        const box = document.getElementById(elId);
+        if(!box || box.dataset.done) return;
+        box.dataset.done = '1';
+        const key = lat.toFixed(5) + ',' + lon.toFixed(5);
+        try{
+            let meta = SV_SEEN[key];
+            if(!meta){
+                meta = await fetch(CONFIG.API_BASE + '/streetview/meta?lat=' + lat + '&lon=' + lon)
+                    .then(r => r.json());
+                SV_SEEN[key] = meta;
+            }
+            if(!meta || !meta.available) return;   // no imagery, or no key configured: show nothing
+            const src = CONFIG.API_BASE + '/streetview?lat=' + lat + '&lon=' + lon + '&size=260x150';
+            // how far Google had to move to find a panorama. On a long approach road that
+            // can be a picture of somewhere else entirely, so it is stated rather than
+            // letting the image imply it is the gate.
+            const off = (meta.offset_m != null && meta.offset_m > 25)
+                ? '<div style="font-size:10px;color:#92400e;">nearest imagery is ' + Math.round(meta.offset_m) + ' m away</div>' : '';
+            const when = meta.date ? '<div style="font-size:10px;color:#8a9099;">Google Street View · ' + meta.date + '</div>' : '';
+            box.innerHTML = '<img src="' + src + '" alt="Street View near ' + (name || '') +
+                '" style="width:100%;border-radius:6px;display:block;" loading="lazy">' + off + when;
+        }catch(e){ /* imagery is a nicety — a failure leaves the popup as it was */ }
+    }
+
+    // ===== Phase 2.5a: Tark Tee road restrictions =================================
+    // Fetched through the backend, never straight from tarktee.ee — the service is
+    // somebody else's, its coordinates are mislabelled at source (it declares WKID 4326
+    // and returns L-EST97 metres) and the proxy caches it. See backend/restrictions.py.
+    //
+    // ADVISORY ONLY. This is not fed to the router: HERE has its own restriction model
+    // and returns its own notices, and two systems arguing about the same road would be
+    // worse than one. It is drawn so a planner can see what a route runs past.
+    const RESTR = { data:null, loading:false, layers:[] };
+    const RESTR_COLOR = '#B4341C';
+    const RESTR_NOTE_COLOR = '#8a6d3b';
+
+    async function loadRestrictions(){
+        if(RESTR.loading) return;
+        RESTR.loading = true;
+        try{
+            const cat = await fetch(CONFIG.API_BASE + '/restrictions/layers').then(r=>r.json());
+            RESTR.layers = cat.layers || [];
+            buildRestrictionToggles();
+            const fc = await fetch(CONFIG.API_BASE + '/restrictions').then(r=>r.json());
+            RESTR.data = fc;
+            ensureRestrictionLayers();
+        }catch(e){
+            // a map with no restriction overlay is degraded, not broken — say so quietly
+            // in the panel rather than throwing a banner over a working map
+            const box = document.getElementById('restriction-toggles');
+            if(box) box.innerHTML = '<div class="control-item"><span style="font-size:11px;color:#8a9099;">Restrictions unavailable</span></div>';
+            console.warn('restrictions unavailable', e);
+        }
+        RESTR.loading = false;
+    }
+
+    function buildRestrictionToggles(){
+        const box = document.getElementById('restriction-toggles');
+        if(!box) return;
+        if(!RESTR.layers.length){ box.innerHTML=''; return; }
+        box.innerHTML = RESTR.layers.map(l =>
+            '<div class="control-item"><label><input type="checkbox" id="restr-' + l.key +
+            '" onchange="toggleRestriction(\'' + l.key + '\', this.checked)"> ' + l.label +
+            '</label><span class="color-dot" style="background:' +
+            (l.severity === 'warn' ? RESTR_COLOR : RESTR_NOTE_COLOR) + ';"></span></div>'
+        ).join('');
+        // all off by default: this is a busy overlay on a map whose job is haul routes,
+        // and a planner turns on the one they are asking about
+    }
+
+    function restrictionVisible(key){
+        const cb = document.getElementById('restr-' + key);
+        return !!(cb && cb.checked);
+    }
+
+    function ensureRestrictionLayers(){
+        if(!map.isStyleLoaded()){ map.once('style.load', ensureRestrictionLayers); return; }
+        if(!RESTR.data) return;
+        if(!map.getSource('restrictions-source')) map.addSource('restrictions-source', { type:'geojson', data: RESTR.data });
+        else map.getSource('restrictions-source').setData(RESTR.data);
+
+        // one pair of layers for everything, filtered by _kind, so adding a layer to
+        // backend/restrictions.py needs no change here
+        if(!map.getLayer('restriction-lines')) map.addLayer({
+            id:'restriction-lines', type:'line', source:'restrictions-source',
+            filter:['in', ['geometry-type'], ['literal', ['LineString','MultiLineString']]],
+            layout:{ visibility:'none' },
+            paint:{ 'line-color':['case',['==',['get','_severity'],'warn'],RESTR_COLOR,RESTR_NOTE_COLOR],
+                    'line-width':['interpolate',['linear'],['zoom'],7,2,14,5],
+                    'line-dasharray':[1,1.2], 'line-opacity':0.9 },
+        });
+        if(!map.getLayer('restriction-points')) map.addLayer({
+            id:'restriction-points', type:'circle', source:'restrictions-source',
+            filter:['in', ['geometry-type'], ['literal', ['Point','MultiPoint']]],
+            layout:{ visibility:'none' },
+            paint:{ 'circle-radius':['interpolate',['linear'],['zoom'],7,3.5,14,7],
+                    'circle-color':['case',['==',['get','_severity'],'warn'],RESTR_COLOR,RESTR_NOTE_COLOR],
+                    'circle-stroke-width':1.5, 'circle-stroke-color':'#ffffff' },
+        });
+        applyRestrictionFilter();
+    }
+
+    // Visibility is per KIND, but there is one layer pair, so "which kinds are ticked"
+    // becomes a filter rather than a visibility flag per layer.
+    function applyRestrictionFilter(){
+        const on = RESTR.layers.filter(l => restrictionVisible(l.key)).map(l => l.key);
+        const vis = on.length ? 'visible' : 'none';
+        [['restriction-lines', ['LineString','MultiLineString']],
+         ['restriction-points', ['Point','MultiPoint']]].forEach(([id, types]) => {
+            if(!map.getLayer(id)) return;
+            map.setLayoutProperty(id, 'visibility', vis);
+            map.setFilter(id, ['all',
+                ['in', ['geometry-type'], ['literal', types]],
+                ['in', ['get','_kind'], ['literal', on]]]);
+        });
+    }
+
+    function toggleRestriction(key, on){
+        if(!RESTR.data){ loadRestrictions(); return; }
+        applyRestrictionFilter();
+    }
+
+    function restrictionPopupHTML(p){
+        const title = p.bridge_name || p.name || p.road_name || p._label || 'Restriction';
+        let body = '<div style="font-size:11.5px;color:#6b7280;">' + (p._label || '') +
+                   (p.road_nr ? ' · road ' + p.road_nr : '') + '</div>';
+        if(p.nominal_load){
+            // quoted verbatim and NOT converted: this is an Estonian bridge load class,
+            // not a tonnage, and nobody has established the mapping. See
+            // backend/restrictions.check_route().
+            body += '<div style="font-size:12px;margin-top:6px;">Nominal load <b>' + p.nominal_load + '</b></div>' +
+                    '<div style="font-size:10.5px;color:#92400e;margin-top:3px;">A load class, not tonnes — read it against your vehicle, it is not a number this app can compare.</div>';
+        }
+        ['restriction','piirang','value','height','width','mass','description'].forEach(k=>{
+            if(p[k] && k !== 'description') body += '<div style="font-size:12px;margin-top:4px;">' + k + ': <b>' + p[k] + '</b></div>';
+        });
+        if(p.construction_year) body += '<div style="font-size:11px;color:#6b7280;margin-top:4px;">Built ' + p.construction_year + '</div>';
+        body += '<div style="font-size:10px;color:#8a9099;margin-top:7px;">Estonian Transport Administration · Tark Tee</div>';
+        return '<div style="min-width:210px;"><h4 style="margin:0 0 4px;color:' +
+               CONFIG.COLORS.brandDark + ';font-size:13px;">' + title + '</h4>' + body + '</div>';
     }
 
     // ---- Phase 4: temporary haul roads -------------------------------------------
@@ -1152,18 +1406,35 @@
         if(map.getLayer('forecast-flow') || !map.getSource('routes-source')) return;
         map.addLayer({id:'forecast-flow',type:'line',source:'routes-source',filter:['==','is_forecast',true],paint:{'line-color':'#ffffff','line-width':2,'line-opacity':0.85,'line-dasharray':[0,4,3]}});
     }
-    // animated "ant-march" dashes convey haul direction (origin -> destination, in geometry order)
+    // Animated "ant-march" dashes convey haul direction (origin -> destination, in
+    // geometry order).
+    //
+    // Phase 2.5a: this now runs ONLY while the timeline is playing, and the line is solid
+    // otherwise. Two reasons. It was moving on a static map, where there is nothing to
+    // convey and it just fought the eye for attention; and the rAF loop was scheduling
+    // itself forever whether or not there was a forecast layer to animate, which on a
+    // phone is a wakeup every frame for the whole time the tab is open. Scheduling stops
+    // dead when playback stops.
     const DASH_SEQ=[[0,4,3],[1,4,2],[2,4,1],[3,4,0],[0,1,3,3],[0,2,3,2],[0,3,3,1]];
-    let _dashIx=0,_dashT=0;
+    const DASH_SOLID=[1,0];
+    let _dashIx=0,_dashT=0,_flowRAF=null;
+    function setFlowDash(seq){
+        try{ if(map.getLayer('forecast-flow')) map.setPaintProperty('forecast-flow','line-dasharray',seq); }catch(e){}
+    }
     function animateFlow(ts){
+        if(!TL.playing){ _flowRAF=null; setFlowDash(DASH_SOLID); return; }
         if(map.getLayer && map.getLayer('forecast-flow') && (ts-_dashT>65)){
             _dashIx=(_dashIx+1)%DASH_SEQ.length;
-            try{ map.setPaintProperty('forecast-flow','line-dasharray',DASH_SEQ[_dashIx]); }catch(e){}
+            setFlowDash(DASH_SEQ[_dashIx]);
             _dashT=ts;
         }
-        requestAnimationFrame(animateFlow);
+        _flowRAF=requestAnimationFrame(animateFlow);
     }
-    requestAnimationFrame(animateFlow);
+    function startFlowAnimation(){ if(_flowRAF==null) _flowRAF=requestAnimationFrame(animateFlow); }
+    function stopFlowAnimation(){
+        if(_flowRAF!=null){ cancelAnimationFrame(_flowRAF); _flowRAF=null; }
+        setFlowDash(DASH_SOLID);
+    }
 
     const TL = { on:false, playing:false, month:1, timer:null, matrix:null };
     async function ensureTimelineMatrix(){
@@ -1210,15 +1481,24 @@
         if(!TL.matrix){ ensureTimelineMatrix().then(()=>startTimeline()).catch(()=>{}); return; }
         if(!TL.on) openTimeline();
         TL.playing=true; const b=document.getElementById('tl-play'); if(b) b.textContent='\u23F8';
+        startFlowAnimation();          // dashes march only while playing
         TL.timer=setInterval(()=>{ TL.month = TL.month>=CONFIG.MONTH_COUNT ? 1 : TL.month+1; setTimelineMonth(TL.month); }, 750);
     }
-    function stopTimeline(){ TL.playing=false; const b=document.getElementById('tl-play'); if(b) b.textContent='\u25B6'; if(TL.timer){ clearInterval(TL.timer); TL.timer=null; } }
+    function stopTimeline(){
+        TL.playing=false; const b=document.getElementById('tl-play'); if(b) b.textContent='\u25B6';
+        if(TL.timer){ clearInterval(TL.timer); TL.timer=null; }
+        stopFlowAnimation();           // and go solid the moment it stops
+    }
     function setTimelineMonth(m){
         TL.month=m; const r=document.getElementById('tl-range'); if(r) r.value=m;
         renderMonthFrame(m);
         // the zone overlay follows the month too: a closure that ended in March must not
         // still be sitting over the map in April while the routes beneath it have moved on
         applyZoneMonth(m);
+        // and so do the KPI cards. They used to recalculate on filter but not on scrub, so
+        // dragging through a year left "Active routes: 43" frozen above a map that was
+        // visibly changing \u2014 the one number on screen that was wrong.
+        applyFilters();
     }
     function onTimelineScrub(v){ stopTimeline(); setTimelineMonth(parseInt(v)); }
     // step one month at a time — scrubbing a 60-wide slider by hand cannot reliably
