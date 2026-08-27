@@ -149,6 +149,57 @@ for (const keep of [
   ok(keep[1], code.includes(keep[0]));
 }
 
+// ---- Phase 2.5a: restrictions, Street View, KPI cards, animation, zoom ------
+ok("Tark Tee layers are fetched through OUR backend, never straight from tarktee.ee",
+  code.includes("CONFIG.API_BASE + '/restrictions'") && !code.includes("tarktee.ee/tarktee/rest"));
+ok("the layer catalogue comes from the server, not a copy in this file",
+  code.includes("'/restrictions/layers'"));
+ok("restriction toggles are built from that catalogue",
+  code.includes("function buildRestrictionToggles"));
+ok("restrictions survive a basemap switch from cached data, without re-requesting",
+  code.includes("if (RESTR.data) ensureRestrictionLayers(); else loadRestrictions();"));
+ok("a weak bridge's load class is shown verbatim and NOT converted to tonnes",
+  src.includes("A load class, not tonnes"));
+ok("the overlay is declared advisory - the router is not given it",
+  /router is not given this data|Advisory/i.test(src));
+ok("restrictions are off by default so they do not bury the haul routes",
+  !/id="restr-[a-z_]+" checked/.test(html));
+
+ok("street view goes through our proxy so the Google key stays server-side",
+  code.includes("CONFIG.API_BASE + '/streetview") && !code.includes("maps.googleapis.com"));
+ok("the FREE metadata call is made before any billable image request",
+  code.indexOf("/streetview/meta") > -1 &&
+  code.indexOf("/streetview/meta") < code.indexOf("/streetview?lat="));
+ok("no imagery means no <img> at all, not a grey placeholder",
+  code.includes("if(!meta || !meta.available) return;"));
+ok("imagery is only looked up when a popup is actually opened",
+  code.includes("pop.on('open'"));
+ok("a large offset between the gate and the nearest panorama is disclosed",
+  src.includes("nearest imagery is"));
+
+ok("the KPI cards actually exist in the page now",
+  /id="kpi-routes"/.test(html) && /id="kpi-capacity"/.test(html));
+ok("and calculateKPIs writes to ids that are really there",
+  /id="kpi-routes-label"/.test(html) && code.includes("kpi-routes-label"));
+ok("KPIs follow the timeline, not just the filters",
+  code.includes("TL.on && TL.matrix"));
+ok("scrubbing the timeline recalculates them",
+  /applyZoneMonth\(m\);[\s\S]{0,500}applyFilters\(\);/.test(code));
+ok("the card label says which question it is answering", code.includes("'Routes in '"));
+
+ok("the ant-march animation runs only while the timeline is playing",
+  code.includes("if(!TL.playing)"));
+ok("and the line goes solid when it stops", code.includes("DASH_SOLID"));
+ok("stopping playback cancels the rAF loop rather than letting it spin for ever",
+  code.includes("cancelAnimationFrame(_flowRAF)"));
+ok("starting playback starts it", code.includes("startFlowAnimation();"));
+
+ok("the direction offset collapses at high zoom instead of holding 4px",
+  /OFFSET_IN\s*=[^;]*17,\s*0\]/.test(code) && /OFFSET_OUT\s*=[^;]*17,\s*0\]/.test(code));
+ok("line width keeps scaling with zoom", /WIDTH_CORE\s*=[^;]*16,\s*10\]/.test(code));
+ok("no hard-coded offset ramp survives inside a layer definition",
+  !/'line-offset': \['interpolate'/.test(code));
+
 console.log();
 for (const f of fail) console.log("  FAIL:", f);
 console.log(`\n${pass} passed, ${fail.length} failed`);

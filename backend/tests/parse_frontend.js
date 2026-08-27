@@ -237,6 +237,28 @@ ok("the haul kind is a constant, not a string literal scattered about",
 ok("the Phase 4 placeholder label is gone from the kind list",
   !src.includes("Haul road (Phase 4)"));
 
+// ---- Phase 2.5a: road restrictions on a route --------------------------------
+ok("there is a per-route restriction panel", code.includes("function RouteRestrictions("));
+ok("it is rendered inside the route expansion, beside the haul roads",
+  code.includes("<RouteRestrictions routeId={routeId} />"));
+ok("it reads the per-route endpoint", code.includes("/restrictions`"));
+ok("a weak bridge's load class is shown verbatim",
+  code.includes("{h.nominal_load}"));
+ok("and explicitly NOT compared to tonnes",
+  src.includes("a load class, not tonnes"));
+ok("no pass/fail verdict is rendered anywhere in the panel",
+  !/\b(exceeds|over limit|cannot cross|too heavy)\b/i.test(src.split("function RouteRestrictions")[1].split("function RouteAnalysis")[0]));
+ok("the vehicle's own laden weight is offered so a human can judge",
+  code.includes("h.vehicle_gross_t"));
+ok("the panel says it is advisory and not fed to the router",
+  src.includes("The router is never given this data"));
+ok("a partial fetch is declared rather than passing as a clean check",
+  code.includes("fetch_errors") && src.includes("not a complete check"));
+ok("an unreachable service degrades to a note, not an error banner",
+  src.includes("Tark Tee could not be reached"));
+ok("a route with no hits says so explicitly rather than rendering nothing",
+  src.includes("No Tark Tee restrictions within"));
+
 // ---- report ------------------------------------------------------------------
 console.log();
 for (const f of fail) console.log("  FAIL:", f);
