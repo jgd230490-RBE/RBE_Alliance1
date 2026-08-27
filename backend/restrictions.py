@@ -56,6 +56,7 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
+from datetime import datetime, timezone
 
 import db
 import projection
@@ -71,17 +72,61 @@ SERVICE_TTL_S = 86400          # layer metadata changes far less often than the 
 
 TIMEOUT_S = 20
 
-#: Services exposed, in the order the map lists them. `severity` drives whether a hit on
-#: a route is a warning or a note: a weak bridge or a mass limit can stop a laden truck,
-#: a diversion is information. Nothing here is a hard block — this is advice on a route a
-#: planner already chose, not a router input.
+#: Services exposed, in the order the map lists them.
+#:
+#: `dimension` is what makes a hit actionable. Every restriction layer carries a numeric
+#: `restriction_limit` — metres for height and width, tonnes for mass — and every vehicle
+#: in factors.json carries the matching figure. So for those three a REAL comparison is
+#: possible and is made: "4.0 m limit, this vehicle is 4.0 m" is a verdict, not a hint.
+#: Weak bridges are the exception and stay unjudged; see check_route().
+#:
+#: `colour` lives here rather than in the map so the legend cannot drift from the layer —
+#: that has already been fixed once on this map. Chosen to be readable against the
+#: existing palette (inbound #039E86, outbound #f59e0b, haul #C2790B, zones #BF2E55):
+#:   deep maroon   structural failure          (weak bridges)
+#:   bronze        weight                      (mass)
+#:   violet/magenta  a dimension your vehicle either fits or does not
+#:   strong red    the road is shut or ordered (traffic restriction) — the stop colour
+#:   orange        diversion, the universal colour for one
 LAYERS = {
-    "bridges_weak":       {"service": "bridges_weak",       "label": "Weak bridges",        "severity": "warn"},
-    "restrictions_mass":  {"service": "restrictions_mass",  "label": "Mass restrictions",   "severity": "warn"},
-    "restrictions_height": {"service": "restrictions_height", "label": "Height restrictions", "severity": "warn"},
-    "restrictions_width": {"service": "restrictions_width",  "label": "Width restrictions",  "severity": "warn"},
-    "restrictions_traffic": {"service": "restrictions_traffic", "label": "Traffic restrictions", "severity": "note"},
-    "detours":            {"service": "detours",            "label": "Diversions",          "severity": "note"},
+    "bridges_weak": {
+        "service": "bridges_weak", "label": "Weak bridges", "severity": "warn",
+        "dimension": None, "unit": None, "colour": "#7F1D1D"},
+    "restrictions_mass": {
+        "service": "restrictions_mass", "label": "Mass limits", "severity": "warn",
+        "dimension": "mass_t", "unit": "t", "colour": "#92400E"},
+    "restrictions_height": {
+        "service": "restrictions_height", "label": "Height limits", "severity": "warn",
+        "dimension": "height_m", "unit": "m", "colour": "#7C3AED"},
+    "restrictions_width": {
+        "service": "restrictions_width", "label": "Width limits", "severity": "warn",
+        "dimension": "width_m", "unit": "m", "colour": "#DB2777"},
+    "restrictions_traffic": {
+        "service": "restrictions_traffic", "label": "Traffic restrictions", "severity": "warn",
+        "dimension": None, "unit": None, "colour": "#DC2626"},
+    "detours": {
+        "service": "detours", "label": "Diversions", "severity": "note",
+        "dimension": None, "unit": None, "colour": "#EA580C"},
+}
+
+#: Estonian enum values that appear in `cause` and `effect` on the traffic layer, so the
+#: UI shows "Complete closure" rather than "COMPLETE_CLOSURE". Anything not listed is
+#: title-cased rather than hidden — an unknown cause is still worth reading.
+_EFFECTS = {
+    "COMPLETE_CLOSURE": "Road completely closed",
+    "PARTIAL_CLOSURE": "Road partially closed",
+    "LANE_CLOSURE": "Lane closed",
+    "SPEED_LIMIT": "Speed limit in force",
+    "DIVERSION": "Traffic diverted",
+}
+_CAUSES = {
+    "CONSTRUCTION": "Construction",
+    "CULVERT_REPAIRS": "Culvert repairs",
+    "BRIDGE_REPAIRS": "Bridge repairs",
+    "ROAD_REPAIRS": "Road repairs",
+    "SIDEWALK_CONSTRUCTION": "Footway construction",
+    "EVENT": "Event",
+    "MAINTENANCE": "Maintenance",
 }
 
 #: How close a restriction has to be to a baked route before it is called a hit. HERE
@@ -92,6 +137,55 @@ LAYERS = {
 MATCH_M = 30.0
 
 _cache = {}          # key -> (fetched_at, payload)
+
+
+# --------------------------------------------------------------------------- #
+#  Dates — the thing that stops this feature lying                             #
+# --------------------------------------------------------------------------- #
+# ⚠️ THE LAYERS CONTAIN EXPIRED RECORDS. Every record in the first sample taken from the
+# live service (2026-08-27) carried date_from / date_to in June–August **2017** — nine
+# years stale. A roadworks closure from 2017 drawn as if it were live, or warned about on
+# a route, would be worse than not having the layer at all: it is the kind of confidently
+# wrong number that destroys trust in everything next to it.
+#
+# So dates are parsed and CURRENT-ONLY is the default everywhere. The counts of what was
+# dropped are reported rather than hidden, because "312 records, 4 in force" is useful and
+# an unexplained near-empty layer looks broken.
+def _epoch_ms(v):
+    """Tark Tee dates are epoch milliseconds. Returns a date, or None."""
+    if v in (None, ""):
+        return None
+    try:
+        return datetime.fromtimestamp(float(v) / 1000.0, tz=timezone.utc).date()
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _iso(v):
+    d = _epoch_ms(v)
+    return d.isoformat() if d else None
+
+
+def in_force(props, on=None):
+    """
+    Is this restriction in force on `on` (default today)?
+
+    A NULL at either end is open-ended, matching how zones.applies_on() treats the same
+    question — so a restriction with no dates at all always applies. Both bounds
+    inclusive.
+    """
+    today = on or datetime.now(timezone.utc).date()
+    if isinstance(today, str):
+        try:
+            today = datetime.fromisoformat(today).date()
+        except ValueError:
+            today = datetime.now(timezone.utc).date()
+    a, b = _epoch_ms(props.get("date_from")), _epoch_ms(props.get("date_to"))
+    if a and today < a:
+        return False
+    if b and today > b:
+        return False
+    return True
 
 
 def _get(url):
@@ -162,13 +256,85 @@ def _fix_geometry(geom):
     return {"type": geom.get("type"), "coordinates": fixed}
 
 
-def fetch_layer(key):
+def _limit(props):
+    """
+    The numeric restriction value and its unit, or (None, None).
+
+    `restriction_limit` is a genuine number on the mass, height and width layers — 8 for
+    eight tonnes, 4.9 for 4.9 metres — and the unit comes from which layer it arrived on.
+    ArcGIS hands back float32 widened to double, so 4.15 arrives as 4.150000095367432;
+    rounded here once rather than in three display paths.
+    """
+    spec = LAYERS.get(props.get("_kind")) or {}
+    if not spec.get("dimension"):
+        return None, None
+    v = props.get("restriction_limit")
+    if v in (None, ""):
+        return None, None
+    try:
+        return round(float(v), 2), spec["unit"]
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _headline(props):
+    """
+    The single line that says what the restriction actually IS.
+
+    This is the fix for "it does state the restriction, i.e. 4 m height restriction" —
+    the first version showed that a height restriction was near a route without ever
+    showing the number, which is the only part anyone needs.
+    """
+    kind = props.get("_kind")
+    val, unit = _limit(props)
+    if val is not None:
+        return f"{val:g} {unit} {LAYERS[kind]['label'].replace(' limits', '').lower()} limit"
+    if kind == "bridges_weak":
+        nl = props.get("nominal_load")
+        return f"Weak bridge · load class {nl}" if nl else "Weak bridge · no load class recorded"
+    if kind in ("restrictions_traffic", "detours"):
+        eff = props.get("effect")
+        cause = props.get("cause")
+        bits = [_EFFECTS.get(eff, (eff or "").replace("_", " ").capitalize() or None),
+                _CAUSES.get(cause, (cause or "").replace("_", " ").capitalize() or None)]
+        bits = [b for b in bits if b]
+        return " · ".join(bits) if bits else (LAYERS[kind]["label"])
+    return LAYERS.get(kind, {}).get("label") or "Restriction"
+
+
+def _enrich(props, key, spec, layer_name):
+    """Stamp everything the UI needs so no display path has to know Tark Tee's schema."""
+    props["_layer"] = layer_name
+    props["_kind"] = key
+    props["_label"] = spec["label"]
+    props["_severity"] = spec["severity"]
+    props["_colour"] = spec["colour"]
+    val, unit = _limit(props)
+    props["_limit"] = val
+    props["_unit"] = unit
+    props["_headline"] = _headline(props)
+    props["_from"] = _iso(props.get("date_from"))
+    props["_to"] = _iso(props.get("date_to"))
+    props["_in_force"] = in_force(props)
+    # km_from/km_to are chainage along the numbered road, and they arrive as float32 noise
+    for k in ("km_from", "km_to"):
+        if isinstance(props.get(k), (int, float)):
+            props[k] = round(float(props[k]), 2)
+    return props
+
+
+def fetch_layer(key, current_only=True):
     """
     One restriction layer as a WGS84 GeoJSON FeatureCollection.
 
     Every layer in the service is queried and the results concatenated, with the source
     layer name carried on each feature so a points hit and a lines hit stay
     distinguishable downstream.
+
+    ⚠️ `current_only` defaults True and drops records whose date window has passed. See
+    the note above in_force(): the live layers carry records from 2017. The full and
+    filtered counts are both reported so a near-empty layer reads as "nothing in force
+    today", not as a broken fetch.
     """
     spec = LAYERS.get(key)
     if not spec:
@@ -195,38 +361,50 @@ def fetch_layer(key):
                 geom = _fix_geometry(f.get("geometry"))
                 if not geom:
                     continue
-                props = dict(f.get("properties") or {})
-                props["_layer"] = lyr["name"]
-                props["_kind"] = key
-                props["_label"] = spec["label"]
-                props["_severity"] = spec["severity"]
+                props = _enrich(dict(f.get("properties") or {}), key, spec, lyr["name"])
                 feats.append({"type": "Feature", "properties": props, "geometry": geom})
         return {"type": "FeatureCollection", "features": feats,
-                "layer": key, "label": spec["label"],
-                "severity": spec["severity"],
+                "layer": key, "label": spec["label"], "severity": spec["severity"],
+                "colour": spec["colour"],
                 "source": "Estonian Transport Administration — Tark Tee",
                 "fetched_layers": len(_service_layers(service)),
                 "errors": errors}
 
-    return _cached(f"lyr:{key}", CACHE_TTL_S, build)
+    fc = _cached(f"lyr:{key}", CACHE_TTL_S, build)
+    if fc.get("error") or not current_only:
+        return fc
+    live = [f for f in fc["features"] if f["properties"].get("_in_force")]
+    out = dict(fc)
+    out["features"] = live
+    out["total_records"] = len(fc["features"])
+    out["expired_or_future"] = len(fc["features"]) - len(live)
+    return out
 
 
-def fetch_all(keys=None):
+def fetch_all(keys=None, current_only=True):
     keys = [k for k in (keys or list(LAYERS)) if k in LAYERS]
-    out, errors = [], {}
+    out, errors, counts = [], {}, {}
+    total, dropped = 0, 0
     for k in keys:
         try:
-            fc = fetch_layer(k)
+            fc = fetch_layer(k, current_only=current_only)
             if fc.get("error"):
                 errors[k] = fc["error"]
                 continue
             out.extend(fc["features"])
+            counts[k] = len(fc["features"])
+            total += fc.get("total_records", len(fc["features"]))
+            dropped += fc.get("expired_or_future", 0)
             if fc.get("errors"):
                 errors[k] = fc["errors"]
         except Exception as e:
             errors[k] = str(e)[:200]
     return {"type": "FeatureCollection", "features": out,
-            "layers": keys, "errors": errors,
+            "layers": keys, "errors": errors, "counts": counts,
+            "current_only": current_only,
+            "total_records": total,
+            # surfaced, not swallowed: the layers carry a lot of 2017
+            "expired_or_future": dropped,
             "attribution": "Estonian Transport Administration — Tark Tee (tarktee.ee)"}
 
 
@@ -290,28 +468,103 @@ def _min_distance_km(feature_geom, line):
     return best
 
 
-def _vehicle_gross_t(profile):
-    """Laden gross weight in tonnes for a profile, or None."""
+def vehicle_dimensions(profile):
+    """
+    The vehicle figures a Tark Tee limit can actually be compared against.
+
+    mass_t / height_m / width_m, keyed to match LAYERS[...]["dimension"], so adding a
+    layer needs no change here. Height and width are the same laden or unladen; mass is
+    the laden gross weight, which is the case a limit bites on.
+    """
     try:
         import conversions
         v = (conversions.load_factors().get("vehicles", {}) or {}).get(profile, {}) or {}
-        g = (v.get("routing", {}) or {}).get("gross_weight_kg")
-        return round(float(g) / 1000.0, 1) if g else (float(v["gvw_t"]) if v.get("gvw_t") else None)
+        r = v.get("routing", {}) or {}
     except Exception:
-        return None
+        return {}
+    out = {}
+    if r.get("gross_weight_kg"):
+        out["mass_t"] = round(float(r["gross_weight_kg"]) / 1000.0, 1)
+    elif v.get("gvw_t"):
+        out["mass_t"] = float(v["gvw_t"])
+    if r.get("height_cm"):
+        out["height_m"] = round(float(r["height_cm"]) / 100.0, 2)
+    if r.get("width_cm"):
+        out["width_m"] = round(float(r["width_cm"]) / 100.0, 2)
+    return out
+
+
+def assess(props, profile):
+    """
+    Does this vehicle breach this restriction? A real verdict where one is possible.
+
+    Returns {"verdict", "limit", "unit", "vehicle", "dimension", "note"} where verdict is:
+
+        "exceeds"    the vehicle is over the posted limit. A real comparison of two
+                     numbers in the same unit — 44 t against an 8 t limit, 4.0 m against
+                     a 3.2 m headroom.
+        "within"     under the limit, with the margin available in `margin`.
+        "unknown"    ⚠️ no comparison was possible, and the reason is in `note`. This is
+                     what a weak bridge always returns: `nominal_load` is an Estonian
+                     load CLASS ("N-13/NG-60"), not tonnes, and nobody has established
+                     what it permits. It is also what a closure returns, because a
+                     closure is not a dimension.
+
+    The distinction matters more than the convenience of a single answer. Mass, height and
+    width are two numbers in the same unit and deserve a verdict; a bridge load class is a
+    domain question and inventing a threshold for it would produce a confident green tick
+    on a bridge a 44 t artic cannot cross.
+    """
+    kind = props.get("_kind")
+    spec = LAYERS.get(kind) or {}
+    dim = spec.get("dimension")
+    limit, unit = _limit(props)
+    dims = vehicle_dimensions(profile)
+    have = dims.get(dim) if dim else None
+
+    if dim and limit is not None and have is not None:
+        return {"verdict": "exceeds" if have > limit else "within",
+                "dimension": dim, "limit": limit, "unit": unit, "vehicle": have,
+                "margin": round(limit - have, 2), "note": None}
+
+    if kind == "bridges_weak":
+        return {"verdict": "unknown", "dimension": None,
+                "limit": props.get("nominal_load") or None, "unit": "load class",
+                "vehicle": dims.get("mass_t"), "margin": None,
+                "note": "nominal_load is an Estonian bridge load class, not tonnes. No "
+                        "comparison against the vehicle's gross weight has been made "
+                        "because the mapping has never been established — read the class."}
+
+    if dim and limit is None:
+        return {"verdict": "unknown", "dimension": dim, "limit": None, "unit": unit,
+                "vehicle": have, "margin": None,
+                "note": "the source record carries no restriction_limit value"}
+    if dim and have is None:
+        return {"verdict": "unknown", "dimension": dim, "limit": limit, "unit": unit,
+                "vehicle": None, "margin": None,
+                "note": f"factors.json has no {dim} for this vehicle profile"}
+
+    return {"verdict": "unknown", "dimension": None, "limit": None, "unit": None,
+            "vehicle": None, "margin": None,
+            "note": "not a dimension limit — read the description"}
 
 
 def _describe(props):
-    """A one-line human description of a restriction feature, from whatever fields it has."""
-    for k in ("bridge_name", "name", "nimi", "road_name", "description"):
-        if props.get(k):
-            base = str(props[k])
-            break
-    else:
-        base = props.get("_label") or "restriction"
-    road = props.get("road_name") or props.get("road_nr")
+    """
+    One human line for a restriction: what it is, and where.
+
+    Leads with the VALUE — "4 m height limit" — because that is the only part anybody
+    needs at a glance, and the first version of this buried it entirely.
+    """
+    base = props.get("_headline") or props.get("_label") or "Restriction"
+    if props.get("_kind") == "bridges_weak" and props.get("bridge_name"):
+        base = f"{props['bridge_name']} · {base}"
+    road = props.get("road_name") or (f"road {props['road_nr']}" if props.get("road_nr") else None)
     if road and str(road) not in base:
-        base = f"{base} ({road})"
+        base = f"{base} — {road}"
+    a, b = props.get("km_from"), props.get("km_to")
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and (a or b):
+        base += f" (km {a:g}–{b:g})"
     return base
 
 
@@ -347,7 +600,7 @@ def check_route(route_id, profile=None, layers=None, _fc=None):
             line = json.loads(g["geometry"])
         except Exception:
             continue
-        gross_t = _vehicle_gross_t(g["vehicle_profile"])
+        gross_t = vehicle_dimensions(g["vehicle_profile"]).get("mass_t")
         for f in feats:
             d = _min_distance_km(f.get("geometry"), line)
             if d is None or d * 1000.0 > MATCH_M:
@@ -358,34 +611,59 @@ def check_route(route_id, profile=None, layers=None, _fc=None):
             if key in seen:
                 continue
             seen.add(key)
+            a = assess(p, g["vehicle_profile"])
             hit = {
                 "vehicle_profile": g["vehicle_profile"], "leg": g["leg"],
                 "kind": p.get("_kind"), "label": p.get("_label"),
-                "severity": p.get("_severity"),
+                "colour": p.get("_colour"),
                 "what": _describe(p),
+                "headline": p.get("_headline"),
                 "distance_m": round(d * 1000.0, 1),
+                "road_name": p.get("road_name"), "road_nr": p.get("road_nr"),
+                "extra_info": p.get("extra_info") or None,
+                "from": p.get("_from"), "to": p.get("_to"),
+                "links": p.get("links") or None,
+                # the actual numbers, and the verdict where one is possible
+                "limit": a["limit"], "unit": a["unit"],
+                "vehicle_value": a["vehicle"], "dimension": a["dimension"],
+                "verdict": a["verdict"], "margin": a["margin"],
+                "note": a["note"],
+                "needs_interpretation": a["verdict"] == "unknown",
                 "vehicle_gross_t": gross_t,
             }
+            # a breach outranks the layer's own severity: a 3.2 m headroom on a 4.0 m
+            # vehicle is not a "note" whatever kind of layer it arrived on
+            hit["severity"] = ("breach" if a["verdict"] == "exceeds"
+                               else p.get("_severity") or "note")
             if p.get("_kind") == "bridges_weak":
                 hit["nominal_load"] = p.get("nominal_load") or None
                 hit["construction_year"] = p.get("construction_year")
-                # the honest flag: we have a class and a weight and no mapping between them
-                hit["needs_interpretation"] = True
-                hit["interpretation_note"] = (
-                    "nominal_load is an Estonian bridge load class, not tonnes. No "
-                    "comparison against the vehicle's gross weight has been made because "
-                    "the mapping has never been established — read the class.")
+            if p.get("_kind") in ("restrictions_traffic", "detours"):
+                hit["cause"] = _CAUSES.get(p.get("cause"), p.get("cause"))
+                hit["effect"] = _EFFECTS.get(p.get("effect"), p.get("effect"))
+                hit["detour_comment"] = p.get("detour_comment") or None
+                hit["contact"] = (p.get("traffic_ctrl_organization")
+                                  or p.get("contractor_organization") or None)
+                hit["contact_phone"] = (p.get("traffic_ctrl_contact_phone")
+                                        or p.get("contractor_contact_phone") or None)
             hits.append(hit)
 
-    hits.sort(key=lambda h: (h["severity"] != "warn", h["distance_m"]))
+    _order = {"breach": 0, "warn": 1, "note": 2}
+    hits.sort(key=lambda h: (_order.get(h["severity"], 3), h["distance_m"]))
     return {
         "route_id": route_id,
         "baked": True,
         "hits": hits,
+        # breaches are counted separately because they are the only ones that are a
+        # statement of fact rather than something to go and read
+        "breach_count": len([h for h in hits if h["severity"] == "breach"]),
         "warn_count": len([h for h in hits if h["severity"] == "warn"]),
-        "note_count": len([h for h in hits if h["severity"] != "warn"]),
+        "note_count": len([h for h in hits if h["severity"] == "note"]),
+        "unjudged_count": len([h for h in hits if h["verdict"] == "unknown"]),
         "match_m": MATCH_M,
         "layers_checked": fc.get("layers"),
+        "current_only": fc.get("current_only", True),
+        "expired_or_future_excluded": fc.get("expired_or_future", 0),
         "fetch_errors": fc.get("errors") or {},
         "attribution": fc.get("attribution"),
     }

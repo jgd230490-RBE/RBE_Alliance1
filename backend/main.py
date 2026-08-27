@@ -1107,7 +1107,7 @@ def diagnostics_haul_roads(route_id: Optional[str] = None,
 
 # ------------------------------------- Tark Tee restrictions (Phase 2.5a)
 @app.get("/api/restrictions")
-def get_restrictions(layers: Optional[str] = None):
+def get_restrictions(layers: Optional[str] = None, include_expired: bool = False):
     """
     Estonian Transport Administration restriction layers as WGS84 GeoJSON.
 
@@ -1119,14 +1119,25 @@ def get_restrictions(layers: Optional[str] = None):
 
     Not under /api/admin — the public map draws these and has no token, and a bridge
     weight limit is not sensitive.
+
+    ⚠️ Expired records are excluded by default. The live layers carry roadworks from 2017,
+    and drawing those as current would be worse than not having the layer. Pass
+    include_expired=true to see everything; the response always reports how many were
+    dropped.
     """
     keys = [k.strip() for k in (layers or "").split(",") if k.strip()] or None
-    return restrictions.fetch_all(keys)
+    return restrictions.fetch_all(keys, current_only=not include_expired)
 
 
 @app.get("/api/restrictions/layers")
 def restriction_layers():
-    """The layer catalogue, so the map builds its toggles from the server not a copy."""
+    """
+    The layer catalogue — label, severity, colour and which vehicle dimension (if any) a
+    limit on that layer can be compared against.
+
+    The COLOUR is served from here so the map's legend and its layers cannot drift apart.
+    That has already had to be fixed once on this map.
+    """
     return {"layers": [dict(v, key=k) for k, v in restrictions.LAYERS.items()],
             "match_m": restrictions.MATCH_M,
             "attribution": "Estonian Transport Administration — Tark Tee (tarktee.ee)"}
