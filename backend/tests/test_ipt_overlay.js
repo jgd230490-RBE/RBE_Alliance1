@@ -184,6 +184,15 @@ for (const f of srcFeatures) {
   for (const p of parts) srcLen += lengthOf(p);
 }
 const outLen = feats.reduce((a, f) => a + lengthOf(f.geometry.coordinates), 0);
+// The 2026-08-28 polish pass keeps every cut edge as a BRIDGE feature — solid, 30%
+// opacity, same band colour — so the corridor reads continuous while the missing
+// stretches stay visibly weaker. The geometry cut is unchanged; what changed is that
+// the removed length is now also present, flagged, on its own layer. So the totals
+// have to be measured separately or "kept" silently means "everything".
+const solid = feats.filter(f => f.properties.is_bridge !== true);
+const bridges = feats.filter(f => f.properties.is_bridge === true);
+const solidLen = solid.reduce((a, f) => a + lengthOf(f.geometry.coordinates), 0);
+const bridgeLen = bridges.reduce((a, f) => a + lengthOf(f.geometry.coordinates), 0);
 
 ok("the gap split ran", stats.gap_split === true && stats.gap_edges_cut === 272,
   `cut ${stats.gap_edges_cut}`);
@@ -191,16 +200,57 @@ ok("⭐ it removed the phantom straights the file has always drawn",
   near(stats.gap_km_removed, 239.5, 0.5), `removed ${stats.gap_km_removed} km`);
 ok("the source really does draw ~647 km today", near(srcLen / 1000, 646.7, 0.5),
   `${(srcLen / 1000).toFixed(1)} km`);
-ok("⭐ and 407 km survives, which is a ~205 km double-track corridor",
-  near(outLen / 1000, 407.2, 0.5), `${(outLen / 1000).toFixed(1)} km`);
-ok("removed + kept accounts for the whole file",
-  near((outLen / 1000) + stats.gap_km_removed, srcLen / 1000, 0.5));
+ok("⭐ and 407 km of SOLID track survives, a ~205 km double-track corridor",
+  near(solidLen / 1000, 407.2, 0.5), `${(solidLen / 1000).toFixed(1)} km`);
+ok("⭐ the removed 239.5 km comes back as bridges, not as solid track",
+  near(bridgeLen / 1000, 239.5, 0.5), `${(bridgeLen / 1000).toFixed(1)} km`);
+ok("⭐ solid + bridge accounts for the whole file exactly — nothing invented, "
+   + "nothing lost",
+  near((solidLen + bridgeLen) / 1000, srcLen / 1000, 0.2),
+  `${((solidLen + bridgeLen) / 1000).toFixed(1)} vs ${(srcLen / 1000).toFixed(1)}`);
+ok("and the bridge length equals what the splitter reported removing",
+  near(bridgeLen / 1000, stats.gap_km_removed, 0.2));
+ok("the build reports both counts", stats.solid_features + stats.bridge_features === feats.length);
+ok("every feature is one or the other, never both",
+  feats.every(f => f.properties.is_bridge === true || f.properties.is_bridge === false));
+
+// ⭐ A bridge can be 45 km long — longer than five of the seven bands. Drawn as one
+// straight it would need ONE colour, which is the midpoint-stamping mistake this
+// whole file exists to reject, just at 30% opacity. So bridges are densified and
+// band-split like everything else.
+const bridgeSpans = bridges.map(f => f.properties.chain_to_m - f.properties.chain_from_m);
+ok("⭐ no bridge spans more chainage than its own band is wide",
+  bridges.every(f => {
+    const a = f.properties.chain_from_m, b = f.properties.chain_to_m;
+    if (a == null || b == null) return true;
+    return (b - a) <= bandWidthFor(f) + 500;
+  }));
+ok("⭐ the 45 km straight is split, not stamped — the longest bridge is under 8 km",
+  Math.max(...bridges.map(f => lengthOf(f.geometry.coordinates))) < 8000,
+  `longest ${Math.round(Math.max(...bridges.map(f => lengthOf(f.geometry.coordinates))))} m`);
+ok("splitting produced MORE bridge features than edges cut, because some cross bands",
+  bridges.length > stats.gap_edges_cut,
+  `${bridges.length} bridges from ${stats.gap_edges_cut} cut edges`);
+ok("every bridge carries a real band colour, not the fallback grey",
+  bridges.every(f => SEGS.some(s => s.colour === f.properties.ipt_colour)));
+
+// ⭐ The point of the bridges, stated as an assertion: IPT 2 has only ~4 km of solid
+// Main Track because 5.6 km of its band has no surveyed geometry at all. Without a
+// bridge the band is nearly invisible on the map — which is the failure the whole
+// overlay was built to avoid, arriving by a different route.
+const ipt2Solid = solid.filter(f => f.properties.ipt === "IPT 2" && f.properties.align_type === "Main Track");
+const ipt2Bridge = bridges.filter(f => f.properties.ipt === "IPT 2" && f.properties.align_type === "Main Track");
+ok("⭐ IPT 2 is thinly covered by solid track", ipt2Solid.length > 0);
+ok("⭐ and its bridge is what makes the band legible at corridor zoom",
+  ipt2Bridge.length > 0 &&
+  ipt2Bridge.reduce((a, f) => a + lengthOf(f.geometry.coordinates), 0) >
+  ipt2Solid.reduce((a, f) => a + lengthOf(f.geometry.coordinates), 0));
 // The invariant is about what the splitter left behind, not raw edge length: no
 // edge may survive that is both over GAP_MIN_M and far longer than the rest of its
 // own part. A two-vertex feature has a ratio of exactly 1 and is never a gap.
 function medianOf(a) { const s = a.slice().sort((x, y) => x - y); const h = s.length >> 1; return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2; }
-ok("⭐ no gap-shaped edge survives into the output",
-  feats.every(f => {
+ok("⭐ no gap-shaped edge survives into the solid output",
+  solid.every(f => {
     const c = f.geometry.coordinates;
     const steps = []; for (let i = 0; i < c.length - 1; i++) steps.push(metres(c[i], c[i + 1]));
     const med = medianOf(steps);
@@ -213,10 +263,15 @@ ok("the split is a ratio test, so genuine two-vertex straight tracks survive",
 // Ratio 1.0x means they are not gaps this splitter opened — that is how the file
 // holds them. They may be schematic placeholders for undesigned stretches.
 const longStraights = feats.filter(f => maxEdge(f.geometry.coordinates) > 600);
-ok("DATA FACT: 10 features are single straight edges over 600 m",
-  longStraights.length === 10, `got ${longStraights.length}`);
+ok("DATA FACT: 10 SOLID features are single straight edges over 600 m",
+  longStraights.filter(f => f.properties.is_bridge !== true).length === 10,
+  `got ${longStraights.filter(f => f.properties.is_bridge !== true).length}`);
+ok("⭐ and no bridge is one — densifying every 200 m is what lets them be band-split",
+  bridges.every(f => maxEdge(f.geometry.coordinates) < 250),
+  `worst ${Math.round(Math.max(...bridges.map(f => maxEdge(f.geometry.coordinates))))} m`);
 ok("DATA FACT: and the longest of them is ~2.2 km",
-  near(Math.max(...longStraights.map(f => maxEdge(f.geometry.coordinates))), 2226, 5));
+  near(Math.max(...longStraights.filter(f => f.properties.is_bridge !== true)
+       .map(f => maxEdge(f.geometry.coordinates))), 2226, 5));
 ok("the config is exposed so the cut can be turned off without editing logic",
   window.IPT_GAP_CONFIG && window.IPT_GAP_CONFIG.split === true &&
   window.IPT_GAP_CONFIG.min_m === 150 && window.IPT_GAP_CONFIG.ratio === 20);
@@ -226,7 +281,8 @@ ok("the config is exposed so the cut can be turned off without editing logic",
 // =============================================================================
 // If one of these fails, the alignment file has been refreshed. That is good
 // news, not a bug: update the numbers here and in claude/ipt-overlay-decisions.md.
-const mtFeats = feats.filter(f => f.properties.align_type === "Main Track");
+const mtFeats = feats.filter(f => f.properties.align_type === "Main Track" &&
+                                 f.properties.is_bridge !== true);
 const covered = new Set();
 for (const f of mtFeats) {
   const a = f.properties.chain_from_m, b = f.properties.chain_to_m;
@@ -256,7 +312,40 @@ ok("Outside A1 is present but marked muted rather than dropped",
 ok("no in-scope IPT is muted", rows.every(r => r.muted === (r.ipt === "Outside A1")));
 
 // =============================================================================
-// 8. Degenerate inputs
+// 8. Chainage marker tiering — the 2026-08-28 noise fix
+// =============================================================================
+const stepped = window.buildChainageSteps(window.chainage_global_data);
+const tiers = window.CHAINAGE_STEP_COUNTS;
+
+ok("every chainage point gets a step tier",
+  stepped.features.every(f => window.CHAINAGE_STEPS.includes(f.properties.step_m)));
+ok("the tier is the COARSEST interval the chainage falls on, not the finest",
+  stepped.features.every(f => {
+    const m = Math.round(parseFloat(String(f.properties.chain).replace(/,/g, "")));
+    if (isNaN(m)) return f.properties.step_m === 100;
+    const coarsest = window.CHAINAGE_STEPS.find(s => m % s === 0) || 100;
+    return f.properties.step_m === coarsest;
+  }));
+ok("the source is not mutated",
+  window.chainage_global_data.features.every(f => f.properties.step_m === undefined));
+ok("nothing is dropped", stepped.features.length === window.chainage_global_data.features.length);
+ok("the original properties survive",
+  stepped.features.every(f => f.properties.chaintxt !== undefined));
+
+// ⭐ The whole point: 2,180 markers every ~94 m was a grey smear at corridor zoom.
+ok("⭐ only 24 markers show at corridor zoom, not 2,180",
+  tiers[10000] === 24, `got ${tiers[10000]}`);
+ok("45 by zoom 10", tiers[10000] + tiers[5000] === 45, `got ${tiers[10000] + tiers[5000]}`);
+ok("218 by zoom 12", tiers[10000] + tiers[5000] + tiers[1000] === 218);
+ok("and all 2,180 by zoom 13.5",
+  Object.values(tiers).reduce((a, b) => a + b, 0) === 2180);
+ok("⭐ that is a 99% reduction in what the corridor view draws",
+  tiers[10000] / 2180 < 0.02);
+ok("the tiers are disjoint — no marker is drawn twice",
+  Object.values(tiers).reduce((a, b) => a + b, 0) === stepped.features.length);
+
+// =============================================================================
+// 9. Degenerate inputs
 // =============================================================================
 const empty = window.buildIptAlignment({ type: "FeatureCollection", features: [] }, window.chainage_global_data);
 ok("an empty alignment builds to an empty collection", empty.features.length === 0);
@@ -264,6 +353,12 @@ const noChain = window.buildIptAlignment(window.alignment_data, { type: "Feature
 ok("⭐ with no chainage markers it returns the alignment UNCHANGED rather than a grey map",
   noChain === window.alignment_data);
 ok("a null alignment is handled", window.buildIptAlignment(null, window.chainage_global_data) === null);
+ok("a null chainage collection is handled by the step builder",
+  window.buildChainageSteps(null) === null);
+ok("a chainage point with no chain value falls to the finest tier rather than throwing",
+  window.buildChainageSteps({ type: "FeatureCollection", features: [
+    { type: "Feature", geometry: { type: "Point", coordinates: [24, 58] }, properties: {} }] }
+  ).features[0].properties.step_m === 100);
 
 console.log();
 for (const f of fail) console.log("  FAIL:", f);

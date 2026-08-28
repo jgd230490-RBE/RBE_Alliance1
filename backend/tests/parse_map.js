@@ -253,8 +253,109 @@ ok("with a fallback colour if ipt_segments.js failed to load",
   /\['get',\s*'ipt_colour'\],\s*'#64748B'\]/.test(code));
 ok("the fixed black alignment colour is gone",
   !/'id': 'rail-alignment'[\s\S]{0,400}'line-color':\s*'#000000'/.test(code));
-ok("⭐ Main Track is drawn wider than the other track types",
-  /\['==',\s*\['get',\s*'align_type'\],\s*'Main Track'\],\s*2\.5/.test(code));
+// --- the 2026-08-28 polish pass ------------------------------------------------
+// The first cut used one layer at two widths (Main Track 2.5, everything else 1.2).
+// The polish spec replaced that: ONE width, Main Track only, side tracks moved off
+// the package view entirely. Both halves are asserted, because dropping the filter
+// and keeping the width would look right in a diff and wrong on the map.
+ok("⭐ the IPT layer is Main Track only",
+  /'id': 'rail-alignment',[\s\S]{0,700}'filter':[\s\S]{0,200}\['==',\s*\['get',\s*'align_type'\],\s*'Main Track'\]/.test(code));
+ok("⭐ and it excludes the gap bridges, which have their own layer",
+  /'id': 'rail-alignment',[\s\S]{0,700}'filter':[\s\S]{0,200}\['!=',\s*\['get',\s*'is_bridge'\],\s*true\]/.test(code));
+ok("it draws at ONE width, not two",
+  /'id': 'rail-alignment',[\s\S]{0,900}'line-width':\s*2\.5,/.test(code));
+ok("the old two-width case expression is gone",
+  !/\['case',\s*\['==',\s*\['get',\s*'align_type'\],\s*'Main Track'\],\s*2\.5,\s*1\.2\]/.test(code));
+
+// Gap bridges
+ok("there is a bridge layer", code.includes("'id': 'rail-alignment-bridge'"));
+ok("it carries only bridges",
+  /'id': 'rail-alignment-bridge'[\s\S]{0,400}\['==',\s*\['get',\s*'is_bridge'\],\s*true\]/.test(code));
+ok("⭐ drawn at 30% opacity",
+  /'id': 'rail-alignment-bridge'[\s\S]{0,700}'line-opacity':\s*0\.3/.test(code));
+ok("⭐ SOLID, not dashed — a dash reads as a style, a fade reads as less certain",
+  !/'id': 'rail-alignment-bridge'[\s\S]{0,700}line-dasharray/.test(code));
+ok("in the band's own colour, not a neutral grey",
+  /'id': 'rail-alignment-bridge'[\s\S]{0,600}\['get',\s*'ipt_colour'\]/.test(code));
+ok("at the same width as the solid track, so the corridor reads continuous",
+  /'id': 'rail-alignment-bridge'[\s\S]{0,700}'line-width':\s*2\.5/.test(code));
+
+// Survey layer
+ok("the original continuous alignment survives as its own layer",
+  code.includes("'id': 'rail-alignment-survey'"));
+ok("⭐ fed from the RAW alignment data, so the IPT cuts cannot reach it",
+  /addSource\('alignment-survey-source',\s*\{\s*type:\s*'geojson',\s*data:\s*alignment_data\s*\}/.test(code));
+ok("styled as it was before the overlay — black, 1.5 px",
+  /'id': 'rail-alignment-survey'[\s\S]{0,400}'line-color':\s*'#000000'[\s\S]{0,120}'line-width':\s*1\.5/.test(code));
+ok("with its own independent checkbox", /id="layer-alignment-survey"/.test(html) &&
+  /onchange="toggleLayer\('rail-alignment-survey', this\.checked\)"/.test(html));
+// ⚠️ inline handlers have to come out first: `onchange="...this.checked)"` contains
+// the literal word `checked`, so a naive test for the ATTRIBUTE matches every
+// wired checkbox and this assertion would fail on a correctly-unchecked box.
+const htmlNoHandlers = html.replace(/\son\w+="[^"]*"/g, "");
+ok("and it is OFF by default, so the IPT view is what opens",
+  !/id="layer-alignment-survey"[^>]*\schecked[\s>]/.test(htmlNoHandlers));
+ok("while the IPT layer IS on by default",
+  /id="layer-alignment"[^>]*\schecked[\s>]/.test(htmlNoHandlers));
+
+// ⭐ add order is z-order in this file: survey under bridges under solid track
+ok("⭐ the survey layer is added first, so it sits under both IPT layers",
+  code.indexOf("'id': 'rail-alignment-survey'") < code.indexOf("'id': 'rail-alignment-bridge'"));
+ok("⭐ and bridges are added before solid track, so a faint connector never "
+   + "washes over real geometry",
+  code.indexOf("'id': 'rail-alignment-bridge'") < code.indexOf("'id': 'rail-alignment',"));
+ok("the reason for that order is written down next to it",
+  /ADD ORDER IS THE Z-ORDER/.test(src));
+
+// the three parts of the IPT view move together
+ok("toggling the IPT view hides the bridges too",
+  /function toggleAlignment[\s\S]{0,400}toggleLayer\('rail-alignment-bridge',\s*visible\)/.test(code));
+ok("and both legend blocks", /function toggleAlignment[\s\S]{0,500}'ipt-legend-note'/.test(code));
+ok("the legend explains what a fainter segment means",
+  /id="ipt-legend-note"/.test(html) && /no surveyed Main Track in the alignment file/.test(html));
+
+// clicking a bridge must explain itself
+ok("⭐ the popup answers on the bridge layer too",
+  /\['rail-alignment', 'rail-alignment-bridge'\]\.forEach/.test(code));
+ok("and a bridge popup says there is no surveyed track there",
+  code.includes("No surveyed track here."));
+ok("and that it is not measured or routed on",
+  /not measured or routed on/.test(code));
+
+// --- chainage, zoom-synced -----------------------------------------------------
+ok("the chainage source carries the step tiers",
+  /addSource\('chainage-source',\s*\{\s*type:\s*'geojson',\s*data:\s*chainageStepData\(\)/.test(code));
+ok("which is memoised like the alignment build",
+  /CHAINAGE_STEPPED\s*=\s*null/.test(code) && /if\s*\(CHAINAGE_STEPPED\)\s*return CHAINAGE_STEPPED/.test(code));
+ok("⭐ marker density is driven by zoom", /'circle-radius':\s*\['step',\s*\['zoom'\]/.test(code));
+ok("⭐ starting with the 10 km ticks alone at corridor zoom",
+  /CH_TIER\(10000\)/.test(code));
+ok("then 5 km, then 1 km, then everything",
+  /10,\s*CH_TIER\(5000\)[\s\S]{0,120}12,\s*CH_TIER\(1000\)[\s\S]{0,120}13\.5,\s*3/.test(code));
+ok("the old flat radius of 3 is gone",
+  !/'id': 'chainage-global'[\s\S]{0,400}'circle-radius':\s*3,/.test(code));
+ok("⭐ labels are off entirely at corridor zoom",
+  /'text-field':\s*\['step',\s*\['zoom'\],\s*''/.test(code));
+ok("⭐ and hidden with an EMPTY text-field, not opacity — opacity 0 still takes up "
+   + "collision space and would push real labels off the map",
+  !/'id': 'chainage-labels'[\s\S]{0,900}'text-opacity'/.test(code));
+ok("labels declutter rather than overlap",
+  /'id': 'chainage-labels'[\s\S]{0,900}'text-allow-overlap':\s*false/.test(code));
+ok("and keep their halo so they stay readable over the basemap",
+  /'id': 'chainage-labels'[\s\S]{0,1100}'text-halo-width':\s*2/.test(code));
+ok("the reason ['zoom'] is not used in a filter is recorded, since it is the "
+   + "obvious thing to reach for",
+  /cannot use \['zoom'\] inside a layer `filter`/.test(src));
+ok("the sidebar says what the marker behaviour is",
+  /10 km ticks at corridor zoom/.test(html));
+
+// what must NOT have changed
+ok("the band splitter is untouched — midpoint stamping stays rejected",
+  /45\.2 km/.test(iptSrc) && /midpoint/i.test(iptSrc));
+ok("GAP_SPLIT still cuts the geometry; bridges are paint, not a reinstated straight",
+  /var GAP_SPLIT = true/.test(iptSrc));
+ok("Outside A1 is still shown, muted rather than hidden",
+  /Outside A1/.test(iptSrc) && /muted/.test(iptSrc));
 
 ok("the layer id is unchanged, so the toggle still targets it",
   code.includes("'id': 'rail-alignment'"));
