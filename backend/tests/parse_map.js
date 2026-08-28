@@ -230,6 +230,78 @@ ok("line width keeps scaling with zoom", /WIDTH_CORE\s*=[^;]*16,\s*10\]/.test(co
 ok("no hard-coded offset ramp survives inside a layer definition",
   !/'line-offset': \['interpolate'/.test(code));
 
+// =============================================================================
+// IPT / Work Section alignment overlay
+// =============================================================================
+// Source-level only. The behaviour of the band splitter is asserted against the
+// real 8.8 MB alignment file in backend/tests/test_ipt_overlay.js.
+
+const IPTF = path.join(ROOT, "map", "ipt_segments.js");
+ok("map/ipt_segments.js exists", fs.existsSync(IPTF));
+const iptSrc = fs.existsSync(IPTF) ? fs.readFileSync(IPTF, "utf8") : "";
+
+ok("index.html loads it", /src=["']ipt_segments\.js["']/.test(html));
+ok("and loads it AFTER chainage.js, which it reads",
+  html.indexOf('data/chainage.js') < html.indexOf('ipt_segments.js'));
+ok("it is a plain script tag, not a new CDN dependency",
+  !/ipt_segments\.js/.test(html.replace(/src=["']ipt_segments\.js["']/g, "")) ||
+  !/https?:\/\/[^"']*ipt_segments/.test(html));
+
+ok("the alignment layer is coloured from ipt_colour",
+  /'line-color':\s*\['coalesce',\s*\['get',\s*'ipt_colour'\]/.test(code));
+ok("with a fallback colour if ipt_segments.js failed to load",
+  /\['get',\s*'ipt_colour'\],\s*'#64748B'\]/.test(code));
+ok("the fixed black alignment colour is gone",
+  !/'id': 'rail-alignment'[\s\S]{0,400}'line-color':\s*'#000000'/.test(code));
+ok("⭐ Main Track is drawn wider than the other track types",
+  /\['==',\s*\['get',\s*'align_type'\],\s*'Main Track'\],\s*2\.5/.test(code));
+
+ok("the layer id is unchanged, so the toggle still targets it",
+  code.includes("'id': 'rail-alignment'"));
+ok("the alignment checkbox still exists", /id="layer-alignment"/.test(html));
+ok("and still shows/hides the same layer",
+  /function toggleAlignment[\s\S]{0,200}toggleLayer\('rail-alignment',\s*visible\)/.test(code));
+ok("the checkbox is wired to it", /onchange="toggleAlignment\(this\.checked\)"/.test(html));
+
+ok("there is a legend container in the sidebar", /id="ipt-legend"/.test(html));
+ok("the legend is generated from IPT_SEGMENTS, not hand-typed",
+  code.includes("window.iptLegendRows()") && !/IPT 6[\s\S]{0,80}IPT 1[\s\S]{0,80}IPT 2/.test(html.replace(iptSrc, "")));
+ok("and it is rendered on load", code.includes("renderIptLegend()"));
+ok("hiding the alignment hides its legend too",
+  /function toggleAlignment[\s\S]{0,300}ipt-legend[\s\S]{0,120}display/.test(code));
+
+ok("⭐ the built collection is memoised, so a basemap switch does not rebuild it",
+  /IPT_ALIGNMENT\s*=\s*null/.test(code) && /if\s*\(IPT_ALIGNMENT\)\s*return IPT_ALIGNMENT/.test(code));
+ok("and the source is fed the built collection, not the raw file",
+  /addSource\('alignment-source',\s*\{\s*type:\s*'geojson',\s*data:\s*iptAlignmentData\(\)/.test(code));
+ok("the raw alignment_data is no longer handed to the source directly",
+  !/addSource\('alignment-source'[\s\S]{0,80}data:\s*alignment_data\s*\}/.test(code));
+
+ok("⭐ the alignment popup is wired exactly once, not once per basemap switch",
+  code.includes("ALIGNMENT_POPUP_WIRED") &&
+  /function setupAlignmentPopup\(\)\s*\{\s*if\s*\(ALIGNMENT_POPUP_WIRED\)\s*return;/.test(code));
+ok("the popup names the IPT and the work sections",
+  code.includes("Work sections:") && code.includes("p.ipt_label"));
+ok("and says the WS2/WS3 bound is provisional rather than implying it is surveyed",
+  /provisional/i.test(code));
+
+// The band table itself
+ok("IPT_SEGMENTS is defined", /window\.IPT_SEGMENTS\s*=\s*\[/.test(iptSrc));
+ok("iptForChainage is defined", /window\.iptForChainage\s*=/.test(iptSrc));
+ok("buildIptAlignment is defined", /window\.buildIptAlignment\s*=/.test(iptSrc));
+ok("the gap split is documented as a change beyond the handoff spec",
+  /PRE-EXISTING map defect/.test(iptSrc) && /GAP_SPLIT\s*=\s*false/.test(iptSrc));
+ok("the ipt/routes naming collision is written down where it will be read",
+  /NAMING COLLISION/.test(iptSrc) && /filter-ipt/.test(iptSrc));
+ok("the reason midpoint stamping was rejected is recorded with its numbers",
+  /45\.2 km/.test(iptSrc) && /midpoint/i.test(iptSrc));
+
+// The route filter must not be pointed at the alignment layer
+ok("⭐ the sector-IPT route filter still applies to route layers only",
+  /filterArr\.push\(\['==',\s*\['get',\s*'ipt'\],\s*i\]\)/.test(code));
+ok("and rail-alignment is never given a filter",
+  !/setFilter\('rail-alignment'/.test(code));
+
 console.log();
 for (const f of fail) console.log("  FAIL:", f);
 console.log(`\n${pass} passed, ${fail.length} failed`);
