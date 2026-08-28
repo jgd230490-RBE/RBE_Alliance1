@@ -11,6 +11,9 @@
     <script src="config.js"></script>
     <script src="data/alignment.js"></script>
     <script src="data/chainage.js"></script>
+    <!-- IPT / Work Section bands for the alignment. Reference geometry only:
+         reads nothing from the API and changes no routing behaviour. -->
+    <script src="ipt_segments.js"></script>
     <style>
         :root{
             --navy:#003787; --navy-deep:#0A1446; --ink:#1f2937; --muted:#6b7280;
@@ -140,7 +143,12 @@
 
     <div class="control-group">
         <h3>Overlays</h3>
-        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleLayer('rail-alignment', this.checked)"> Rail alignment</label><span class="color-dot" style="background:#334155; border-radius:0; width:13px; height:2px;"></span></div>
+        <!-- The alignment is now coloured by the IPT / Work Section band it falls in,
+             so the swatch is a gradient rather than one colour. The legend below is
+             generated from IPT_SEGMENTS so the band table stays the only place the
+             colours are defined. -->
+        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" style="background:linear-gradient(90deg,#039E86,#003787,#0E7490,#C6841D,#BF2E55); border-radius:0; width:13px; height:3px;"></span></div>
+        <div id="ipt-legend" style="padding-left:23px;margin:-2px 0 4px;"></div>
         <div class="control-item"><label><input type="checkbox" id="layer-chainage" onchange="toggleLayer('chainage-global', this.checked); toggleLayer('chainage-labels', this.checked);"> Chainage markers</label><span class="color-dot" style="background:#94a3b8;"></span></div>
         <div class="control-item"><label><input type="checkbox" id="layer-nodes" checked onchange="toggleNodes(this.checked)"> Sites &amp; assets</label><span class="color-dot" style="background:#003787;"></span></div>
         <!-- Phase 3. Two colours, one meaning each: red = the router is steered around
@@ -229,6 +237,42 @@
     let a1_data = { type: 'FeatureCollection', features: [] };
     const alignment_data = window.alignment_data;
     const chainage_global_data = window.chainage_global_data;
+
+    // IPT / Work Section colouring. The alignment file carries no chainage of its
+    // own, so every vertex is matched to the nearest chainage marker and the line
+    // is CUT where the IPT band changes — a single stamp per feature would have
+    // painted 26 km in one colour and hidden IPT 2, 3 and most of 4. See the long
+    // comment at the top of ipt_segments.js.
+    //
+    // Memoised: the result is built once and the same object is re-used when a
+    // basemap switch re-adds the source, so the properties survive the switch
+    // without re-stamping and without a second 300 ms of work.
+    let IPT_ALIGNMENT = null;
+    function iptAlignmentData() {
+        if (IPT_ALIGNMENT) return IPT_ALIGNMENT;
+        IPT_ALIGNMENT = (window.buildIptAlignment && chainage_global_data)
+            ? window.buildIptAlignment(alignment_data, chainage_global_data)
+            : alignment_data;
+        return IPT_ALIGNMENT;
+    }
+
+    // One row per unique IPT, from IPT_SEGMENTS. 'Outside A1' is shown muted rather
+    // than hidden — an unexplained grey line on the map reads as a bug.
+    function renderIptLegend() {
+        const el = document.getElementById('ipt-legend');
+        if (!el || !window.iptLegendRows) return;
+        el.innerHTML = window.iptLegendRows().map(r =>
+            `<div style="display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:1.5;${r.muted ? 'opacity:.65;' : ''}" title="${r.labels.join(' · ').replace(/"/g, '&quot;')}">`
+            + `<span style="flex:0 0 13px;height:3px;background:${r.colour};border-radius:0;"></span>`
+            + `<span style="color:#8a9099;"><b style="color:#5b6270;">${r.ipt}</b>${r.ws.length ? ' · ' + r.ws.join(', ') : ''}</span></div>`
+        ).join('');
+    }
+
+    function toggleAlignment(visible) {
+        toggleLayer('rail-alignment', visible);
+        const el = document.getElementById('ipt-legend');
+        if (el) el.style.display = visible ? 'block' : 'none';
+    }
 
     // Which vehicle's roads are drawn. The network bakes per profile and different
     // vehicles legitimately route differently, so the backend picks the default profile
@@ -362,7 +406,7 @@
 
     map.on('style.load', () => {
         if (!map.getSource('routes-source')) map.addSource('routes-source', { type: 'geojson', data: a1_data });
-        if (!map.getSource('alignment-source')) map.addSource('alignment-source', { type: 'geojson', data: alignment_data });
+        if (!map.getSource('alignment-source')) map.addSource('alignment-source', { type: 'geojson', data: iptAlignmentData() });
         if (!map.getSource('chainage-source')) map.addSource('chainage-source', { type: 'geojson', data: chainage_global_data });
 
         // --- PROFESSIONAL MAPBOX STYLING (Corporate Palette + Highway Offsets) ---
@@ -505,13 +549,26 @@
             });
         });
 
-        // Alignment thinner (1.5)
-        map.addLayer({ 'id': 'rail-alignment', 'type': 'line', 'source': 'alignment-source', 'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' }, 'paint': { 'line-color': '#000000', 'line-width': 1.5 } });
+        // Alignment, coloured by IPT / Work Section band. `coalesce` keeps the layer
+        // drawable if ipt_segments.js failed to load — it falls back to the neutral
+        // slate rather than to nothing. Main Track is 2.5 px so the civil packages
+        // read at corridor zoom; side tracks, crossovers and 1520 mm stay hairlines
+        // so they do not compete with the thing the colours are about.
+        map.addLayer({
+            'id': 'rail-alignment', 'type': 'line', 'source': 'alignment-source',
+            'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' },
+            'paint': {
+                'line-color': ['coalesce', ['get', 'ipt_colour'], '#64748B'],
+                'line-width': ['case', ['==', ['get', 'align_type'], 'Main Track'], 2.5, 1.2],
+            },
+        });
         map.addLayer({ 'id': 'chainage-global', 'type': 'circle', 'source': 'chainage-source', 'layout': { 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none' }, 'paint': { 'circle-color': '#ffffff', 'circle-radius': 3, 'circle-stroke-width': 1, 'circle-stroke-color': '#333' } });
         map.addLayer({ 'id': 'chainage-labels', 'type': 'symbol', 'source': 'chainage-source', 'minzoom': 11, 'layout': { 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none', 'text-field': ['get', 'chaintxt'], 'text-size': 10, 'text-offset': [0, 1.2] }, 'paint': { 'text-color': '#333333', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
 
         applyFilters();
         setupHoverEvents();
+        renderIptLegend();
+        setupAlignmentPopup();
         // zones ride on style.load like everything else, so a basemap switch re-adds them
         if (ZONES.loaded) ensureZoneLayers(); else loadZones();
         // and so do the Tark Tee restriction layers. Already-fetched data is re-added
@@ -519,6 +576,38 @@
         // must not cost another round trip to a government service.
         if (RESTR.data) ensureRestrictionLayers(); else loadRestrictions();
     });
+
+    // Click an alignment segment for its IPT, work sections and chainage extent.
+    // ⚠️ style.load fires again on every basemap switch, so this is registered ONCE
+    // — a layer-scoped handler added per switch fires once per switch and would open
+    // a stack of popups on the fourth basemap change.
+    let ALIGNMENT_POPUP_WIRED = false;
+    function setupAlignmentPopup() {
+        if (ALIGNMENT_POPUP_WIRED) return;
+        ALIGNMENT_POPUP_WIRED = true;
+        map.on('mouseenter', 'rail-alignment', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'rail-alignment', () => { map.getCanvas().style.cursor = ''; });
+        map.on('click', 'rail-alignment', (e) => {
+            const p = (e.features && e.features[0] && e.features[0].properties) || {};
+            const km = (v) => (v == null || v === '') ? '–' : (Number(v) / 1000).toFixed(3).replace(/\.?0+$/, '') + ' km';
+            const ws = p.ws ? String(p.ws).split(',').filter(Boolean) : [];
+            new mapboxgl.Popup({ closeButton: true })
+                .setLngLat(e.lngLat)
+                .setHTML(
+                    `<div style="font:13px/1.45 system-ui,sans-serif;min-width:190px;">`
+                    + `<div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;">`
+                    + `<span style="flex:0 0 14px;height:4px;background:${p.ipt_colour || '#64748B'};"></span>`
+                    + `<b>${p.ipt || 'Unknown'}</b></div>`
+                    + `<div style="color:#475569;margin-bottom:5px;">${p.ipt_label || 'Unassigned'}</div>`
+                    + (ws.length ? `<div><b>Work sections:</b> ${ws.join(', ')}</div>` : '')
+                    + `<div><b>Track:</b> ${p.align_type || '–'}</div>`
+                    + `<div><b>Chainage:</b> ${km(p.chain_from_m)} – ${km(p.chain_to_m)}</div>`
+                    + `<div style="margin-top:6px;font-size:10.5px;color:#8a9099;">Reference geometry. Band boundaries from the scope diagram; WS2/WS3 at 125 km is provisional.</div>`
+                    + `</div>`
+                )
+                .addTo(map);
+        });
+    }
 
     function setupHoverEvents() {
         ['inbound-lines', 'outbound-lines'].forEach(lId => {
