@@ -584,9 +584,11 @@ def check_route(route_id, profile=None, layers=None, _fc=None):
     with nothing behind it.
     """
     rows = db.query(
-        "SELECT * FROM route_geometry WHERE route_id = ? AND alt_index = 0 "
+        "SELECT * FROM route_geometry WHERE tenant_id = ? AND route_id = ? AND alt_index = 0 "
         "AND geometry IS NOT NULL" + (" AND vehicle_profile = ?" if profile else ""),
-        (route_id, profile) if profile else (route_id,))
+        # tenant is the first placeholder in both branches, so it leads the tuple
+        (db.current_tenant(), route_id, profile) if profile
+        else (db.current_tenant(), route_id))
     if not rows:
         return {"route_id": route_id, "baked": False, "hits": [],
                 "note": "not baked — nothing to check against"}
@@ -679,7 +681,8 @@ def check_all(profile=None, layers=None):
     if not fc.get("features") and fc.get("errors"):
         return {"error": "no restriction data could be fetched", "detail": fc["errors"]}
     out = {}
-    for r in db.query("SELECT id FROM routes ORDER BY id"):
+    for r in db.query("SELECT id FROM routes WHERE tenant_id = ? ORDER BY id",
+                      (db.current_tenant(),)):
         res = check_route(r["id"], profile=profile, _fc=fc)
         if res.get("hits"):
             out[r["id"]] = res

@@ -111,16 +111,20 @@ def seed_network():
         role = _role_for(l.get("loc_type"))
         mats = [_cat(l.get("material"))] if (role in ("origin", "both") and _cat(l.get("material"))) else []
         db.execute(
-            "INSERT INTO locations (id, name, loc_type, role, materials, lat, lon, material) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
-            (l["id"], l["name"], l.get("loc_type"), role, json.dumps(mats),
+            # ON CONFLICT names (tenant_id, id) because that is the primary key since
+            # Phase 4.5 — 'C01' is only unique within a tenant, and naming (id) alone
+            # would no longer match any constraint.
+            "INSERT INTO locations (tenant_id, id, name, loc_type, role, materials, lat, lon, material) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (tenant_id, id) DO NOTHING",
+            (db.current_tenant(), l["id"], l["name"], l.get("loc_type"), role, json.dumps(mats),
              l["lat"], l["lon"], l.get("material")),
         )
     for r in net["routes"]:
         db.execute(
-            "INSERT INTO routes (id, origin_id, dest_id, long_route_id, material_category, ipt, origin_temp_km) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
-            (r["id"], r["origin_id"], r["dest_id"], r.get("long_route_id"),
+            # same reasoning as locations above: the key is (tenant_id, id)
+            "INSERT INTO routes (tenant_id, id, origin_id, dest_id, long_route_id, material_category, ipt, origin_temp_km) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (tenant_id, id) DO NOTHING",
+            (db.current_tenant(), r["id"], r["origin_id"], r["dest_id"], r.get("long_route_id"),
              r.get("material_category"), r.get("ipt"), r.get("origin_temp_km", 0)),
         )
     return True
@@ -128,13 +132,13 @@ def seed_network():
 
 def backfill_location_roles():
     """Give any location still missing a role one derived from its type/material."""
-    for l in db.query("SELECT * FROM locations"):
+    for l in db.query("SELECT * FROM locations WHERE tenant_id = ?", (db.current_tenant(),)):
         if l.get("role"):
             continue
         role = _role_for(l.get("loc_type"))
         mats = [_cat(l.get("material"))] if (role in ("origin", "both") and _cat(l.get("material"))) else []
-        db.execute("UPDATE locations SET role = ?, materials = ? WHERE id = ?",
-                   (role, json.dumps(mats), l["id"]))
+        db.execute("UPDATE locations SET role = ?, materials = ? WHERE tenant_id = ? AND id = ?",
+                   (role, json.dumps(mats), db.current_tenant(), l["id"]))
 
 
 def backfill_supplies_receives():
@@ -153,7 +157,7 @@ def backfill_supplies_receives():
     Locations panel is never clobbered — including a deliberate empty list.
     """
     _ensure_location_columns()
-    locs = db.query("SELECT * FROM locations")
+    locs = db.query("SELECT * FROM locations WHERE tenant_id = ?", (db.current_tenant(),))
     if not locs:
         return {"filled": 0}
 
@@ -162,7 +166,8 @@ def backfill_supplies_receives():
         c = _to_cat(l.get("material"))
         if c:
             sup.setdefault(l["id"], set()).add(c)
-    for r in db.query("SELECT origin_id, dest_id, material_category FROM routes"):
+    for r in db.query("SELECT origin_id, dest_id, material_category FROM routes "
+                      "WHERE tenant_id = ?", (db.current_tenant(),)):
         c = _to_cat(r.get("material_category"))
         if not c:
             continue
@@ -182,11 +187,12 @@ def backfill_supplies_receives():
         new_s = sorted(sup.get(lid, set()) | set(_loc_list(l, "materials"))) if need_s else None
         new_r = sorted(rec.get(lid, set())) if need_r else None
         db.execute(
-            "UPDATE locations SET supplies = ?, receives = ?, materials = ? WHERE id = ?",
+            "UPDATE locations SET supplies = ?, receives = ?, materials = ? "
+            "WHERE tenant_id = ? AND id = ?",
             (json.dumps(new_s) if need_s else l.get("supplies"),
              json.dumps(new_r) if need_r else l.get("receives"),
              json.dumps(new_s) if need_s else l.get("materials"),
-             lid),
+             db.current_tenant(), lid),
         )
         filled += 1
     return {"filled": filled}
@@ -213,7 +219,8 @@ def apply_node_meta():
     except Exception:
         return {"applied": 0, "skipped": 0, "note": "node_meta.json not present"}
 
-    current = {r["id"]: r for r in db.query("SELECT id, vendor, detail FROM locations")}
+    current = {r["id"]: r for r in db.query(
+        "SELECT id, vendor, detail FROM locations WHERE tenant_id = ?", (db.current_tenant(),))}
     applied = skipped = 0
     for row in payload.get("matched", []):
         lid = row.get("location_id")
@@ -224,8 +231,8 @@ def apply_node_meta():
         if cur.get("vendor") or cur.get("detail"):
             skipped += 1
             continue
-        db.execute("UPDATE locations SET vendor = ?, detail = ? WHERE id = ?",
-                   (row.get("vendor"), row.get("detail"), lid))
+        db.execute("UPDATE locations SET vendor = ?, detail = ? WHERE tenant_id = ? AND id = ?",
+                   (row.get("vendor"), row.get("detail"), db.current_tenant(), lid))
         applied += 1
     return {"applied": applied, "skipped": skipped,
             "unmatched": len(payload.get("unmatched", []))}
@@ -277,14 +284,17 @@ def _upsert_geom(route_id, profile, geometry, dist, dur, error, leg="loaded", al
     been burned by before.
     """
     now = datetime.now(timezone.utc).isoformat()
+    # The ON CONFLICT target below has to name the whole primary key, which since
+    # Phase 4.5 leads with tenant_id. The DO UPDATE SET deliberately does not touch
+    # tenant_id: an upsert re-caches a row, it never moves one between tenants.
     db.execute(
         """
         INSERT INTO route_geometry
-            (route_id, vehicle_profile, leg, alt_index, geometry, distance_km,
+            (tenant_id, route_id, vehicle_profile, leg, alt_index, geometry, distance_km,
              duration_hr, computed_at, error, zones_applied, haul_zones, haul_km,
              duration_hr_here)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (route_id, vehicle_profile, leg, alt_index) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (tenant_id, route_id, vehicle_profile, leg, alt_index) DO UPDATE SET
             geometry = EXCLUDED.geometry,
             distance_km = EXCLUDED.distance_km,
             duration_hr = EXCLUDED.duration_hr,
@@ -295,8 +305,8 @@ def _upsert_geom(route_id, profile, geometry, dist, dur, error, leg="loaded", al
             haul_km = EXCLUDED.haul_km,
             duration_hr_here = EXCLUDED.duration_hr_here
         """,
-        (route_id, profile, leg, alt_index, geometry, dist, dur, now, error,
-         zones_applied, haul_zones, haul_km, duration_hr_here),
+        (db.current_tenant(), route_id, profile, leg, alt_index, geometry, dist, dur,
+         now, error, zones_applied, haul_zones, haul_km, duration_hr_here),
     )
 
 
@@ -307,10 +317,13 @@ def clear_geometry(profile=None, leg=None):
         clauses.append("vehicle_profile = ?"); params.append(profile)
     if leg:
         clauses.append("leg = ?"); params.append(leg)
-    sql = "DELETE FROM route_geometry"
+    # tenant_id is baked into the base statement rather than appended as one more
+    # optional clause, so the branch where neither profile nor leg is given cannot
+    # produce an unfiltered DELETE. Its param leads the tuple for the same reason.
+    sql = "DELETE FROM route_geometry WHERE tenant_id = ?"
     if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-    db.execute(sql, tuple(params))
+        sql += " AND " + " AND ".join(clauses)
+    db.execute(sql, (db.current_tenant(),) + tuple(params))
     return True
 
 
@@ -378,9 +391,9 @@ def _bake_leg(r, o, d, profile, leg, factors, alternatives=ALTERNATIVES,
                      zones_applied=zone_tag, haul_zones=haul_tag)
         return 0, str(e)
     db.execute(
-        "DELETE FROM route_geometry WHERE route_id = ? AND vehicle_profile = ? "
-        "AND leg = ? AND alt_index >= ?",
-        (r["id"], profile, leg, len(opts)),
+        "DELETE FROM route_geometry WHERE tenant_id = ? AND route_id = ? "
+        "AND vehicle_profile = ? AND leg = ? AND alt_index >= ?",
+        (db.current_tenant(), r["id"], profile, leg, len(opts)),
     )
     for i, res in enumerate(opts):
         _upsert_geom(r["id"], profile, json.dumps(res["geometry"]),
@@ -413,13 +426,16 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
     if not here_routing.configured():
         return {"error": "HERE_API_KEY not set on the server", "baked": 0, "remaining": None}
 
-    all_routes = db.query("SELECT * FROM routes ORDER BY id")
+    all_routes = db.query("SELECT * FROM routes WHERE tenant_id = ? ORDER BY id",
+                          (db.current_tenant(),))
     attempted = {(g["route_id"], g["leg"]) for g in db.query(
-        "SELECT route_id, leg FROM route_geometry WHERE vehicle_profile = ?", (profile,))}
+        "SELECT route_id, leg FROM route_geometry WHERE tenant_id = ? AND vehicle_profile = ?",
+        (db.current_tenant(), profile))}
     todo = [(r, leg) for r in all_routes for leg in legs
             if (r["id"], leg) not in attempted]
 
-    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
     factors = conversions.load_factors()
     avoid, zone_tag = active_avoid()
     baked = errors = 0
@@ -442,9 +458,9 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
                 samples.append(f"{r['id']}/{leg}: {err[:100]}")
         else:
             baked += 1
-            row = db.query("SELECT haul_zones FROM route_geometry WHERE route_id = ? AND "
-                           "vehicle_profile = ? AND leg = ? AND alt_index = 0",
-                           (r["id"], profile, leg))
+            row = db.query("SELECT haul_zones FROM route_geometry WHERE tenant_id = ? AND "
+                           "route_id = ? AND vehicle_profile = ? AND leg = ? AND alt_index = 0",
+                           (db.current_tenant(), r["id"], profile, leg))
             if row and (row[0].get("haul_zones") or ""):
                 haul_legs += 1
     remaining = max(0, len(todo) - min(limit, len(todo)))
@@ -469,12 +485,14 @@ def routes_geojson(profile=DEFAULT_PROFILE, leg="loaded", alt_index=0):
     other. Default is the laden first-choice route, which is the one the network is
     planned around.
     """
-    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
     geoms = {g["route_id"]: g for g in db.query(
-        "SELECT * FROM route_geometry WHERE vehicle_profile = ? AND leg = ? "
-        "AND alt_index = ?", (profile, leg, alt_index))}
+        "SELECT * FROM route_geometry WHERE tenant_id = ? AND vehicle_profile = ? AND leg = ? "
+        "AND alt_index = ?", (db.current_tenant(), profile, leg, alt_index))}
     feats = []
-    for r in db.query("SELECT * FROM routes ORDER BY id"):
+    for r in db.query("SELECT * FROM routes WHERE tenant_id = ? ORDER BY id",
+                      (db.current_tenant(),)):
         g = geoms.get(r["id"])
         o = locs.get(r["origin_id"], {}); d = locs.get(r["dest_id"], {})
         props = {
@@ -541,11 +559,13 @@ def public_map_data(profile=None):
     plan = factors.get("planning", {}) or {}
     shift_hr = float(plan.get("shift_hours_per_day") or 10)
 
-    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
 
     # every primary-option geometry, in one query rather than per route
     geo = {}
-    for g in db.query("SELECT * FROM route_geometry WHERE alt_index = 0"):
+    for g in db.query("SELECT * FROM route_geometry WHERE tenant_id = ? AND alt_index = 0",
+                      (db.current_tenant(),)):
         geo.setdefault(g["route_id"], {}).setdefault(g["vehicle_profile"], {})[g["leg"]] = g
 
     # disciplines actually forecast on each route, for the map's discipline filter.
@@ -554,13 +574,15 @@ def public_map_data(profile=None):
     disc = {}
     try:
         for r in db.query("SELECT DISTINCT route_id, discipline FROM forecasts "
-                          "WHERE status = 'Approved' AND discipline <> ''"):
+                          "WHERE tenant_id = ? AND status = 'Approved' AND discipline <> ''",
+                          (db.current_tenant(),)):
             disc.setdefault(r["route_id"], []).append(r["discipline"])
     except Exception:
         pass   # forecasts table may not exist yet on a cold database
 
     feats = []
-    for r in db.query("SELECT * FROM routes ORDER BY id"):
+    for r in db.query("SELECT * FROM routes WHERE tenant_id = ? ORDER BY id",
+                      (db.current_tenant(),)):
         per_profile = geo.get(r["id"], {})
         if not per_profile:
             continue                      # not baked: nothing honest to draw
@@ -634,7 +656,8 @@ def public_map_data(profile=None):
 
     # location markers. aux_info keeps the shape the map's popup already expects, and is
     # now built from the vendor/detail salvaged out of a1_data.js before it was retired.
-    for l in db.query("SELECT * FROM locations ORDER BY id"):
+    for l in db.query("SELECT * FROM locations WHERE tenant_id = ? ORDER BY id",
+                      (db.current_tenant(),)):
         aux = ""
         if l.get("vendor"):
             aux += f"<p style='margin:4px 0;'><b>Vendor:</b> {l['vendor']}</p>"
@@ -669,7 +692,8 @@ def locations_geojson():
             return []
 
     feats = []
-    for l in db.query("SELECT * FROM locations ORDER BY id"):
+    for l in db.query("SELECT * FROM locations WHERE tenant_id = ? ORDER BY id",
+                      (db.current_tenant(),)):
         mats = _parse(l.get("materials"))
         supplies = _parse(l.get("supplies")) or mats     # older rows only have materials
         receives = _parse(l.get("receives"))
@@ -688,18 +712,23 @@ def locations_geojson():
 
 
 def routes_touching(location_id):
+    # the OR is parenthesised so the tenant filter binds to both halves rather than
+    # only to the origin_id branch
     return [r["id"] for r in db.query(
-        "SELECT id FROM routes WHERE origin_id = ? OR dest_id = ?", (location_id, location_id))]
+        "SELECT id FROM routes WHERE tenant_id = ? AND (origin_id = ? OR dest_id = ?)",
+        (db.current_tenant(), location_id, location_id))]
 
 
 def profiles_for_route(route_id):
     """Vehicle profiles this route currently has cached geometry for."""
     return sorted({g["vehicle_profile"] for g in db.query(
-        "SELECT DISTINCT vehicle_profile FROM route_geometry WHERE route_id = ?", (route_id,))})
+        "SELECT DISTINCT vehicle_profile FROM route_geometry WHERE tenant_id = ? AND route_id = ?",
+        (db.current_tenant(), route_id))})
 
 
 def _next_location_id():
-    existing = {l["id"] for l in db.query("SELECT id FROM locations")}
+    existing = {l["id"] for l in db.query("SELECT id FROM locations WHERE tenant_id = ?",
+                                         (db.current_tenant(),))}
     i = 1
     while f"L{i:03d}" in existing:
         i += 1
@@ -718,10 +747,11 @@ def create_location(name, role, materials=None, lat=None, lon=None, loc_type=Non
         g_lat = g_lon = None
     # 'materials' mirrors 'supplies' so the existing map popup keeps working.
     db.execute(
-        "INSERT INTO locations (id, name, loc_type, role, materials, supplies, receives, "
+        "INSERT INTO locations (tenant_id, id, name, loc_type, role, materials, supplies, receives, "
         "lat, lon, gate_lat, gate_lon, vendor, detail, material) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (lid, name, loc_type or role, role, json.dumps(supplies), json.dumps(supplies),
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (db.current_tenant(), lid, name, loc_type or role, role, json.dumps(supplies),
+         json.dumps(supplies),
          json.dumps(receives), float(lat), float(lon), g_lat, g_lon,
          (vendor or None), (detail or None), None),
     )
@@ -743,7 +773,8 @@ def update_location(location_id, name=None, role=None, materials=None, lat=None,
     and detail fields — an older client that does not send them must not blank them.
     """
     _ensure_location_columns()
-    cur = db.query("SELECT * FROM locations WHERE id = ?", (location_id,))
+    cur = db.query("SELECT * FROM locations WHERE tenant_id = ? AND id = ?",
+                   (db.current_tenant(), location_id))
     if not cur:
         return {"error": "not found"}
     cur = cur[0]
@@ -771,7 +802,7 @@ def update_location(location_id, name=None, role=None, materials=None, lat=None,
     db.execute(
         "UPDATE locations SET name = ?, loc_type = ?, role = ?, materials = ?, supplies = ?, "
         "receives = ?, lat = ?, lon = ?, gate_lat = ?, gate_lon = ?, vendor = ?, detail = ? "
-        "WHERE id = ?",
+        "WHERE tenant_id = ? AND id = ?",
         (name if name is not None else cur["name"],
          loc_type if loc_type is not None else cur["loc_type"],
          role if role is not None else cur["role"],
@@ -779,7 +810,7 @@ def update_location(location_id, name=None, role=None, materials=None, lat=None,
          float(lat) if lat is not None else cur["lat"],
          float(lon) if lon is not None else cur["lon"],
          g_lat, g_lon, new_vendor, new_detail,
-         location_id),
+         db.current_tenant(), location_id),
     )
     affected = []
     # a gate move changes the routed coordinate just as surely as moving the node does
@@ -790,7 +821,8 @@ def update_location(location_id, name=None, role=None, materials=None, lat=None,
         # with the geometry and a re-bake has to guess.
         affected = [{"id": rid, "profiles": profiles_for_route(rid)} for rid in affected]
         for a in affected:
-            db.execute("DELETE FROM route_geometry WHERE route_id = ?", (a["id"],))
+            db.execute("DELETE FROM route_geometry WHERE tenant_id = ? AND route_id = ?",
+                       (db.current_tenant(), a["id"]))
     return {"id": location_id, "moved": moved, "gate_moved": gate_moved,
             "affected_routes": affected}
 
@@ -798,9 +830,12 @@ def update_location(location_id, name=None, role=None, materials=None, lat=None,
 def delete_location(location_id):
     routes = routes_touching(location_id)
     for rid in routes:
-        db.execute("DELETE FROM route_geometry WHERE route_id = ?", (rid,))
-        db.execute("DELETE FROM routes WHERE id = ?", (rid,))
-    db.execute("DELETE FROM locations WHERE id = ?", (location_id,))
+        db.execute("DELETE FROM route_geometry WHERE tenant_id = ? AND route_id = ?",
+                   (db.current_tenant(), rid))
+        db.execute("DELETE FROM routes WHERE tenant_id = ? AND id = ?",
+                   (db.current_tenant(), rid))
+    db.execute("DELETE FROM locations WHERE tenant_id = ? AND id = ?",
+               (db.current_tenant(), location_id))
     return {"id": location_id, "deleted_routes": routes}
 
 
@@ -815,7 +850,8 @@ def _loc_list(loc, key):
 
 
 def _next_route_id():
-    existing = {r["id"] for r in db.query("SELECT id FROM routes")}
+    existing = {r["id"] for r in db.query("SELECT id FROM routes WHERE tenant_id = ?",
+                                         (db.current_tenant(),))}
     i = 1
     while f"R{i:03d}" in existing:
         i += 1
@@ -832,8 +868,10 @@ def create_route(origin_id, dest_id, material_category=None, route_id=None, ipt=
         return {"error": "origin and destination are required"}
     if origin_id == dest_id:
         return {"error": "origin and destination must be different"}
-    o = db.query("SELECT * FROM locations WHERE id = ?", (origin_id,))
-    d = db.query("SELECT * FROM locations WHERE id = ?", (dest_id,))
+    o = db.query("SELECT * FROM locations WHERE tenant_id = ? AND id = ?",
+                 (db.current_tenant(), origin_id))
+    d = db.query("SELECT * FROM locations WHERE tenant_id = ? AND id = ?",
+                 (db.current_tenant(), dest_id))
     if not o or not d:
         return {"error": "origin or destination not found"}
     o, d = o[0], d[0]
@@ -854,29 +892,34 @@ def create_route(origin_id, dest_id, material_category=None, route_id=None, ipt=
                          f"each one supplies/receives on the Locations tab first"}
 
     rid = (route_id or "").strip() or _next_route_id()
-    if db.query("SELECT id FROM routes WHERE id = ?", (rid,)):
+    # scoped to this tenant: 'R001' colliding in another tenant is not a collision here
+    if db.query("SELECT id FROM routes WHERE tenant_id = ? AND id = ?",
+                (db.current_tenant(), rid)):
         return {"error": f"route id '{rid}' already exists"}
 
     db.execute(
-        "INSERT INTO routes (id, origin_id, dest_id, long_route_id, material_category, ipt, origin_temp_km) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (rid, origin_id, dest_id, None, material_category, (ipt or None), 0),
+        "INSERT INTO routes (tenant_id, id, origin_id, dest_id, long_route_id, material_category, ipt, origin_temp_km) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (db.current_tenant(), rid, origin_id, dest_id, None, material_category,
+         (ipt or None), 0),
     )
     return {"id": rid, "origin_id": origin_id, "dest_id": dest_id,
             "material_category": material_category, "shared_materials": shared}
 
 
 def delete_route(route_id):
-    db.execute("DELETE FROM route_geometry WHERE route_id = ?", (route_id,))
-    db.execute("DELETE FROM routes WHERE id = ?", (route_id,))
+    db.execute("DELETE FROM route_geometry WHERE tenant_id = ? AND route_id = ?",
+               (db.current_tenant(), route_id))
+    db.execute("DELETE FROM routes WHERE tenant_id = ? AND id = ?",
+               (db.current_tenant(), route_id))
     return {"id": route_id}
 
 
 def clear_routes():
     """Drop every route + its geometry, keeping locations. For retiring the V2 seed."""
-    n = len(db.query("SELECT id FROM routes"))
-    db.execute("DELETE FROM route_geometry")
-    db.execute("DELETE FROM routes")
+    n = len(db.query("SELECT id FROM routes WHERE tenant_id = ?", (db.current_tenant(),)))
+    db.execute("DELETE FROM route_geometry WHERE tenant_id = ?", (db.current_tenant(),))
+    db.execute("DELETE FROM routes WHERE tenant_id = ?", (db.current_tenant(),))
     return {"cleared": n}
 
 
@@ -890,11 +933,13 @@ def bake_route(route_id, profile=DEFAULT_PROFILE, legs=None, alternatives=ALTERN
     legs = tuple(legs or LEGS)
     if not here_routing.configured():
         return {"error": "HERE_API_KEY not set on the server", "route_id": route_id}
-    r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+    r = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?",
+                 (db.current_tenant(), route_id))
     if not r:
         return {"error": "route not found", "route_id": route_id}
     r = r[0]
-    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
     o = locs.get(r["origin_id"]); d = locs.get(r["dest_id"])
     avoid, zone_tag = active_avoid()
     if not o or not d:
@@ -916,9 +961,9 @@ def bake_route(route_id, profile=DEFAULT_PROFILE, legs=None, alternatives=ALTERN
             out["legs"][leg] = {"baked": False, "error": err[:200]}
         else:
             best = db.query(
-                "SELECT distance_km, duration_hr FROM route_geometry WHERE route_id = ? "
-                "AND vehicle_profile = ? AND leg = ? AND alt_index = 0",
-                (route_id, profile, leg))
+                "SELECT distance_km, duration_hr FROM route_geometry WHERE tenant_id = ? "
+                "AND route_id = ? AND vehicle_profile = ? AND leg = ? AND alt_index = 0",
+                (db.current_tenant(), route_id, profile, leg))
             out["legs"][leg] = {
                 "baked": True, "alternatives": n,
                 "distance_km": best[0]["distance_km"] if best else None,
@@ -940,9 +985,12 @@ def routes_status():
     'duration_hr', 'error', all describing the laden first-choice route — so anything
     reading the old shape still works. Step B's detail hangs off 'legs'.
     """
-    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
     geoms = {}
-    for g in db.query("SELECT * FROM route_geometry ORDER BY route_id, vehicle_profile, leg, alt_index"):
+    for g in db.query("SELECT * FROM route_geometry WHERE tenant_id = ? "
+                      "ORDER BY route_id, vehicle_profile, leg, alt_index",
+                      (db.current_tenant(),)):
         prof = geoms.setdefault(g["route_id"], {}).setdefault(
             g["vehicle_profile"], {"baked": False, "distance_km": None, "duration_hr": None,
                                    "error": None, "legs": {}})
@@ -969,13 +1017,15 @@ def routes_status():
     # one query for every route's haul-road links rather than one per route
     haul_links = {}
     try:
-        for l in db.query("SELECT * FROM route_haul_roads ORDER BY route_id, seq, zone_id"):
+        for l in db.query("SELECT * FROM route_haul_roads WHERE tenant_id = ? "
+                          "ORDER BY route_id, seq, zone_id", (db.current_tenant(),)):
             haul_links.setdefault(l["route_id"], []).append(l)
     except Exception:
         pass          # table not created yet on a database that predates Phase 4
 
     out = []
-    for r in db.query("SELECT * FROM routes ORDER BY id"):
+    for r in db.query("SELECT * FROM routes WHERE tenant_id = ? ORDER BY id",
+                      (db.current_tenant(),)):
         o = locs.get(r["origin_id"], {}); d = locs.get(r["dest_id"], {})
         profs = geoms.get(r["id"], {})
         for p in profs.values():
@@ -1026,7 +1076,7 @@ def meta_routes(profile=None):
     """
     want = profile or DEFAULT_PROFILE
 
-    locs = db.query("SELECT id, name FROM locations")
+    locs = db.query("SELECT id, name FROM locations WHERE tenant_id = ?", (db.current_tenant(),))
     name_counts = {}
     for l in locs:
         name_counts[l["name"]] = name_counts.get(l["name"], 0) + 1
@@ -1037,12 +1087,14 @@ def meta_routes(profile=None):
     dist = {}
     for g in db.query(
         "SELECT route_id, vehicle_profile, distance_km FROM route_geometry "
-        "WHERE leg = 'loaded' AND alt_index = 0 AND distance_km IS NOT NULL"
+        "WHERE tenant_id = ? AND leg = 'loaded' AND alt_index = 0 AND distance_km IS NOT NULL",
+        (db.current_tenant(),)
     ):
         dist.setdefault(g["route_id"], {})[g["vehicle_profile"]] = g["distance_km"]
 
     out = []
-    for r in db.query("SELECT * FROM routes ORDER BY id"):
+    for r in db.query("SELECT * FROM routes WHERE tenant_id = ? ORDER BY id",
+                      (db.current_tenant(),)):
         per_profile = dist.get(r["id"], {})
         if want in per_profile:
             km, used = per_profile[want], want
@@ -1073,9 +1125,10 @@ def summary():
     rows, which after Step B run up to six per route per profile and would read as a
     wildly inflated total against a route count.
     """
-    total = len(db.query("SELECT id FROM routes"))
+    total = len(db.query("SELECT id FROM routes WHERE tenant_id = ?", (db.current_tenant(),)))
     profiles = {}
-    for g in db.query("SELECT vehicle_profile, leg, alt_index, geometry, error FROM route_geometry"):
+    for g in db.query("SELECT vehicle_profile, leg, alt_index, geometry, error "
+                      "FROM route_geometry WHERE tenant_id = ?", (db.current_tenant(),)):
         p = profiles.setdefault(g["vehicle_profile"],
                                 {"baked": 0, "errors": 0, "return_baked": 0, "rows": 0})
         p["rows"] += 1
@@ -1110,9 +1163,11 @@ def route_geometries(route_id, profile=None, leg=None):
     if leg:
         clauses.append("leg = ?"); params.append(leg)
     feats = []
+    # tenant_id sits in the fixed head of the statement rather than in `clauses`, so no
+    # branch of the optional filters can omit it; its param therefore leads the tuple.
     for g in db.query(
-        "SELECT * FROM route_geometry WHERE " + " AND ".join(clauses) +
-        " ORDER BY vehicle_profile, leg, alt_index", tuple(params)
+        "SELECT * FROM route_geometry WHERE tenant_id = ? AND " + " AND ".join(clauses) +
+        " ORDER BY vehicle_profile, leg, alt_index", (db.current_tenant(),) + tuple(params)
     ):
         try:
             coords = json.loads(g["geometry"])
@@ -1140,8 +1195,8 @@ def promote_alternative(route_id, profile, alt_index, leg="loaded"):
     avoid, local knowledge of a junction). Implemented as a swap of alt_index with 0,
     so the displaced route stays available rather than being discarded.
 
-    The swap goes via a temporary index because (route_id, vehicle_profile, leg,
-    alt_index) is the primary key — two rows cannot briefly share index 0.
+    The swap goes via a temporary index because (tenant_id, route_id, vehicle_profile,
+    leg, alt_index) is the primary key — two rows cannot briefly share index 0.
 
     Note this is not durable against a re-bake: routing the pair again re-imports
     HERE's own ordering. Callers should say so.
@@ -1151,8 +1206,8 @@ def promote_alternative(route_id, profile, alt_index, leg="loaded"):
         return {"route_id": route_id, "profile": profile, "leg": leg,
                 "promoted": 0, "note": "already the primary route"}
     rows = db.query(
-        "SELECT alt_index FROM route_geometry WHERE route_id = ? AND vehicle_profile = ? "
-        "AND leg = ?", (route_id, profile, leg))
+        "SELECT alt_index FROM route_geometry WHERE tenant_id = ? AND route_id = ? "
+        "AND vehicle_profile = ? AND leg = ?", (db.current_tenant(), route_id, profile, leg))
     have = {r["alt_index"] for r in rows}
     if alt_index not in have:
         # Phase 4 regression, and worth naming rather than reporting as a bare miss: a
@@ -1161,9 +1216,9 @@ def promote_alternative(route_id, profile, alt_index, leg="loaded"):
         # cache miss and send someone re-baking to fix something that is working as
         # designed. See haul.route_with_haul().
         primary = db.query(
-            "SELECT haul_zones FROM route_geometry WHERE route_id = ? AND "
+            "SELECT haul_zones FROM route_geometry WHERE tenant_id = ? AND route_id = ? AND "
             "vehicle_profile = ? AND leg = ? AND alt_index = 0",
-            (route_id, profile, leg))
+            (db.current_tenant(), route_id, profile, leg))
         tag = (primary[0].get("haul_zones") if primary else None) or ""
         on_haul = [z.strip() for z in tag.split(",") if z.strip()]
         if on_haul:
@@ -1175,15 +1230,20 @@ def promote_alternative(route_id, profile, alt_index, leg="loaded"):
         return {"error": f"no alternative {alt_index} cached for {profile} / {leg}"}
 
     TMP = -1
+    # tenant_id is a WHERE condition on all three legs of the swap and never appears in
+    # a SET clause: the rows are being re-indexed within one tenant, not moved between.
     db.execute(
-        "UPDATE route_geometry SET alt_index = ? WHERE route_id = ? AND vehicle_profile = ? "
-        "AND leg = ? AND alt_index = 0", (TMP, route_id, profile, leg))
+        "UPDATE route_geometry SET alt_index = ? WHERE tenant_id = ? AND route_id = ? "
+        "AND vehicle_profile = ? AND leg = ? AND alt_index = 0",
+        (TMP, db.current_tenant(), route_id, profile, leg))
     db.execute(
-        "UPDATE route_geometry SET alt_index = 0 WHERE route_id = ? AND vehicle_profile = ? "
-        "AND leg = ? AND alt_index = ?", (route_id, profile, leg, alt_index))
+        "UPDATE route_geometry SET alt_index = 0 WHERE tenant_id = ? AND route_id = ? "
+        "AND vehicle_profile = ? AND leg = ? AND alt_index = ?",
+        (db.current_tenant(), route_id, profile, leg, alt_index))
     db.execute(
-        "UPDATE route_geometry SET alt_index = ? WHERE route_id = ? AND vehicle_profile = ? "
-        "AND leg = ? AND alt_index = ?", (alt_index, route_id, profile, leg, TMP))
+        "UPDATE route_geometry SET alt_index = ? WHERE tenant_id = ? AND route_id = ? "
+        "AND vehicle_profile = ? AND leg = ? AND alt_index = ?",
+        (alt_index, db.current_tenant(), route_id, profile, leg, TMP))
     return {"route_id": route_id, "profile": profile, "leg": leg,
             "promoted": alt_index, "swapped_with": 0,
             "note": "Re-baking this route will restore HERE's own ranking."}
@@ -1213,7 +1273,8 @@ def factors_diagnostics():
 
     # every profile string that actually appears in cached geometry
     used = sorted({g["vehicle_profile"] for g in
-                   db.query("SELECT DISTINCT vehicle_profile FROM route_geometry")})
+                   db.query("SELECT DISTINCT vehicle_profile FROM route_geometry "
+                            "WHERE tenant_id = ?", (db.current_tenant(),))})
 
     rows = []
     for prof in sorted(known | set(used)):
@@ -1267,11 +1328,13 @@ def route_diagnostics(route_id, profile=DEFAULT_PROFILE, probe=False):
     whether HERE declined an alternatives request or whether truck parameters reached
     it at all.
     """
-    r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+    r = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?",
+                 (db.current_tenant(), route_id))
     if not r:
         return {"error": "route not found", "route_id": route_id}
     r = r[0]
-    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
     o, d = locs.get(r["origin_id"]), locs.get(r["dest_id"])
     if not o or not d:
         return {"error": "missing origin/destination", "route_id": route_id}
@@ -1295,8 +1358,9 @@ def route_diagnostics(route_id, profile=DEFAULT_PROFILE, probe=False):
              "duration_hr": g["duration_hr"], "has_geometry": bool(g["geometry"]),
              "error": g["error"], "computed_at": g["computed_at"]}
             for g in db.query(
-                "SELECT * FROM route_geometry WHERE route_id = ? AND vehicle_profile = ? "
-                "ORDER BY leg, alt_index", (route_id, profile))
+                "SELECT * FROM route_geometry WHERE tenant_id = ? AND route_id = ? "
+                "AND vehicle_profile = ? ORDER BY leg, alt_index",
+                (db.current_tenant(), route_id, profile))
         ],
         "here_configured": here_routing.configured(),
     }
@@ -1330,11 +1394,13 @@ def compare_profiles(route_id, profiles=None, probe=False):
     """
     factors = conversions.load_factors()
     profiles = profiles or [p for p in conversions.vehicle_names(factors)]
-    r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+    r = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?",
+                 (db.current_tenant(), route_id))
     if not r:
         return {"error": "route not found", "route_id": route_id}
     r = r[0]
-    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
     o, d = locs.get(r["origin_id"]), locs.get(r["dest_id"])
     if not o or not d:
         return {"error": "missing origin/destination", "route_id": route_id}
@@ -1345,8 +1411,9 @@ def compare_profiles(route_id, profiles=None, probe=False):
     rows = []
     for p in profiles:
         cached = db.query(
-            "SELECT distance_km, duration_hr FROM route_geometry WHERE route_id = ? "
-            "AND vehicle_profile = ? AND leg = 'loaded' AND alt_index = 0", (route_id, p))
+            "SELECT distance_km, duration_hr FROM route_geometry WHERE tenant_id = ? "
+            "AND route_id = ? AND vehicle_profile = ? AND leg = 'loaded' AND alt_index = 0",
+            (db.current_tenant(), route_id, p))
         entry = {"profile": p,
                  "cached_km": cached[0]["distance_km"] if cached else None,
                  "gross_weight_kg": here_routing._truck_params(p, factors, laden=True)
@@ -1413,19 +1480,22 @@ def zones_diagnostics(route_id=None, profile=DEFAULT_PROFILE, probe=False):
     }
     try:
         for row in db.query("SELECT zones_applied, COUNT(*) AS n FROM route_geometry "
-                            "GROUP BY zones_applied"):
+                            "WHERE tenant_id = ? GROUP BY zones_applied",
+                            (db.current_tenant(),)):
             k = row["zones_applied"]
             out["baked_legs_by_tag"]["(pre-Phase-3)" if k is None else (k or "(none)")] = row["n"]
     except Exception:
         pass   # column added by the Phase 3 migration; absent on a database that skipped it
 
     if route_id and probe:
-        r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+        r = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?",
+                     (db.current_tenant(), route_id))
         if not r:
             out["probe_error"] = f"route {route_id} not found"
             return out
         r = r[0]
-        locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+        locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                            (db.current_tenant(),))}
         o, d = locs.get(r["origin_id"]), locs.get(r["dest_id"])
         if not o or not d:
             out["probe_error"] = "missing origin/destination"
@@ -1477,7 +1547,8 @@ def route_analysis(route_id, profiles=None):
     Where a return leg hasn't been baked, the outbound duration stands in and the row
     is flagged 'return_estimated' rather than silently pretending to be measured.
     """
-    r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+    r = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?",
+                 (db.current_tenant(), route_id))
     if not r:
         return {"error": "route not found", "route_id": route_id}
 
@@ -1489,7 +1560,8 @@ def route_analysis(route_id, profiles=None):
     default_veh = veh.get("_default", {}) or {}
 
     rows_by = {}
-    for g in db.query("SELECT * FROM route_geometry WHERE route_id = ?", (route_id,)):
+    for g in db.query("SELECT * FROM route_geometry WHERE tenant_id = ? AND route_id = ?",
+                      (db.current_tenant(), route_id)):
         if profiles and g["vehicle_profile"] not in profiles:
             continue
         rows_by.setdefault(g["vehicle_profile"], {}).setdefault(g["leg"], {})[g["alt_index"]] = g

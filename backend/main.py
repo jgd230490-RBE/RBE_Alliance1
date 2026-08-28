@@ -52,6 +52,12 @@ async def lifespan(app: FastAPI):
         db.init_network_db()
         db.init_taxonomy_db()
         db.init_zones_db()          # Phase 3. No seed — zones are drawn, never shipped.
+        # Phase 4.5. Must sit exactly here: init_tenant() migrates a pre-4.5 database by
+        # rebuilding each table, copying the columns the table actually has — several of
+        # which the init_* calls above add by ALTER. Run it before them and those columns
+        # are silently dropped; run it after the seeds below and the seeds write rows into
+        # a table that has not got its tenant key yet.
+        db.init_tenant()
         if network.seed_network():
             print("Seeded routing network from V2 (locations + routes).")
         network.backfill_location_roles()
@@ -94,6 +100,12 @@ class MatrixRow(BaseModel):
     discipline and section_id join the UNIQUE key, so they are never None on the way in:
     '' is the unassigned sentinel. A NULL here would leave the row unconstrained and
     ON CONFLICT would silently stop firing.
+
+    Phase 4.5 widened that UNIQUE key again, to
+    (tenant_id, route_id, month_index, discipline, section_id). The same failure mode
+    applies to the new column: the ON CONFLICT target in save_matrix_row() must name
+    tenant_id too, or it no longer matches any constraint, the upsert stops firing, and
+    re-saving a matrix row inserts a duplicate instead of updating the row already there.
     """
     route_id: str
     discipline: str = ""                       # '' = unassigned
@@ -193,9 +205,13 @@ def list_forecasts(submitted_by: Optional[str] = None, route_id: Optional[str] =
         clauses.append("submitted_by = ?"); params.append(submitted_by)
     if route_id:
         clauses.append("route_id = ?"); params.append(route_id)
-    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    return db.query(f"SELECT * FROM forecasts{where} ORDER BY route_id, month_index",
-                    tuple(params))
+    # tenant_id is written into the literal rather than pushed through `clauses`, so the
+    # filter is in the SQL text on every branch (there is no longer a no-WHERE branch) and
+    # its ? is always first — which is why db.current_tenant() leads the params tuple.
+    where = "".join(" AND " + c for c in clauses)
+    return db.query(
+        f"SELECT * FROM forecasts WHERE tenant_id = ?{where} ORDER BY route_id, month_index",
+        tuple([db.current_tenant()] + params))
 
 
 @app.delete("/api/forecasts/{route_id}")
@@ -222,8 +238,12 @@ def withdraw_route(route_id: str, submitted_by: Optional[str] = None,
     if section_id is not None:
         clauses.append("section_id = ?"); params.append(section_id or "")
     where = " AND ".join(clauses)
-    n = db.query(f"SELECT COUNT(*) AS n FROM forecasts WHERE {where}", tuple(params))[0]["n"]
-    db.execute(f"DELETE FROM forecasts WHERE {where}", tuple(params))
+    # tenant_id leads the literal WHERE on both statements, so db.current_tenant() leads
+    # the params tuple ahead of everything `clauses` accumulated.
+    n = db.query(f"SELECT COUNT(*) AS n FROM forecasts WHERE tenant_id = ? AND {where}",
+                 tuple([db.current_tenant()] + params))[0]["n"]
+    db.execute(f"DELETE FROM forecasts WHERE tenant_id = ? AND {where}",
+               tuple([db.current_tenant()] + params))
     return {"status": "success", "route_id": route_id, "deleted": n,
             "scoped_to_line": discipline is not None or section_id is not None}
 
@@ -231,7 +251,7 @@ def withdraw_route(route_id: str, submitted_by: Optional[str] = None,
 @app.get("/api/forecasts/summary")
 def forecasts_summary():
     """One row per route: status, span, and window total in vehicles — for the ledger/approvals view."""
-    rows = db.query("SELECT * FROM forecasts")
+    rows = db.query("SELECT * FROM forecasts WHERE tenant_id = ?", (db.current_tenant(),))
     factors = conversions.load_factors()
     by_line = {}
     for r in rows:
@@ -307,11 +327,14 @@ def save_matrix_row(row: MatrixRow):
             db.execute(
                 """
                 INSERT INTO forecasts
-                    (id, route_id, month_index, discipline, section_id, quantity, unit,
+                    (tenant_id, id, route_id, month_index, discipline, section_id,
+                     quantity, unit,
                      material_type, material_description, vehicle_type, submitted_by,
                      status, reject_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (route_id, month_index, discipline, section_id) DO UPDATE SET
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                -- must match the widened UNIQUE key exactly; see MatrixRow's docstring
+                ON CONFLICT (tenant_id, route_id, month_index, discipline, section_id)
+                DO UPDATE SET
                     quantity             = EXCLUDED.quantity,
                     unit                 = EXCLUDED.unit,
                     material_type        = EXCLUDED.material_type,
@@ -321,16 +344,17 @@ def save_matrix_row(row: MatrixRow):
                     status               = EXCLUDED.status,
                     reject_reason        = NULL
                 """,
-                (rid, row.route_id, c.month_index, disc, sect, float(c.quantity), row.unit,
+                (db.current_tenant(),
+                 rid, row.route_id, c.month_index, disc, sect, float(c.quantity), row.unit,
                  row.material_type, row.material_description, row.vehicle_type,
                  row.submitted_by, row.status, None),
             )
             touched += 1
         else:
             db.execute(
-                "DELETE FROM forecasts WHERE route_id = ? AND month_index = ? "
-                "AND discipline = ? AND section_id = ?",
-                (row.route_id, c.month_index, disc, sect),
+                "DELETE FROM forecasts WHERE tenant_id = ? AND route_id = ? "
+                "AND month_index = ? AND discipline = ? AND section_id = ?",
+                (db.current_tenant(), row.route_id, c.month_index, disc, sect),
             )
 
     return {"status": "success", "route_id": row.route_id,
@@ -349,9 +373,10 @@ def _coexisting_lines(route_id, discipline, section_id):
     """
     rows = db.query(
         "SELECT DISTINCT discipline, section_id, submitted_by, COUNT(*) AS months "
-        "FROM forecasts WHERE route_id = ? AND NOT (discipline = ? AND section_id = ?) "
+        "FROM forecasts WHERE tenant_id = ? AND route_id = ? "
+        "AND NOT (discipline = ? AND section_id = ?) "
         "GROUP BY discipline, section_id, submitted_by",
-        (route_id, discipline or "", section_id or ""),
+        (db.current_tenant(), route_id, discipline or "", section_id or ""),
     )
     if not rows:
         return None
@@ -385,11 +410,16 @@ def set_route_status(route_id: str, req: StatusUpdate,
         clauses.append("section_id = ?"); params.append(section_id or "")
     where = " AND ".join(clauses)
 
-    existing = db.query(f"SELECT COUNT(*) AS n FROM forecasts WHERE {where}", tuple(params))
+    existing = db.query(f"SELECT COUNT(*) AS n FROM forecasts WHERE tenant_id = ? AND {where}",
+                        tuple([db.current_tenant()] + params))
     if existing[0]["n"] == 0:
         raise HTTPException(404, "No forecast for that route.")
-    db.execute(f"UPDATE forecasts SET status = ?, reject_reason = ? WHERE {where}",
-               tuple([req.status, req.reject_reason] + params))
+    # tenant_id goes in the WHERE, never the SET — an UPDATE with no tenant predicate
+    # rewrites every tenant's rows. The two SET placeholders come first in the params,
+    # then the tenant, then whatever `clauses` accumulated.
+    db.execute(f"UPDATE forecasts SET status = ?, reject_reason = ? "
+               f"WHERE tenant_id = ? AND {where}",
+               tuple([req.status, req.reject_reason, db.current_tenant()] + params))
     return {"status": "success", "route_id": route_id, "new_status": req.status,
             "scoped_to_line": scoped, "rows": existing[0]["n"]}
 
@@ -410,8 +440,9 @@ def public_route_forecasts(
         raise HTTPException(400, f"unit must be one of {conversions.UNITS}")
     lo, hi = min(from_, to), max(from_, to)
     rows = db.query(
-        "SELECT * FROM forecasts WHERE status = 'Approved' AND month_index BETWEEN ? AND ?",
-        (lo, hi),
+        "SELECT * FROM forecasts WHERE tenant_id = ? AND status = 'Approved' "
+        "AND month_index BETWEEN ? AND ?",
+        (db.current_tenant(), lo, hi),
     )
     factors = conversions.load_factors()
     agg = {}
@@ -449,8 +480,9 @@ def public_forecast_matrix(
         raise HTTPException(400, f"unit must be one of {conversions.UNITS}")
     lo, hi = min(from_, to), max(from_, to)
     rows = db.query(
-        "SELECT * FROM forecasts WHERE status = 'Approved' AND month_index BETWEEN ? AND ? ORDER BY route_id, month_index",
-        (lo, hi),
+        "SELECT * FROM forecasts WHERE tenant_id = ? AND status = 'Approved' "
+        "AND month_index BETWEEN ? AND ? ORDER BY route_id, month_index",
+        (db.current_tenant(), lo, hi),
     )
     factors = conversions.load_factors()
     by_line = {}
@@ -564,7 +596,9 @@ def routes_analysis_batch(route_ids: Optional[str] = None, profile: Optional[str
     """
     ids = [r.strip() for r in (route_ids or "").split(",") if r.strip()]
     if not ids:
-        ids = [r["id"] for r in db.query("SELECT id FROM routes ORDER BY id")]
+        ids = [r["id"] for r in db.query(
+            "SELECT id FROM routes WHERE tenant_id = ? ORDER BY id",
+            (db.current_tenant(),))]
 
     profs = [profile] if profile else None
     out, missing = {}, []
@@ -1000,7 +1034,8 @@ def list_haul_roads(on: Optional[str] = None):
     """
     return {"haul_roads": zones.haul_roads(on=on, include_inactive=True,
                                            require_geometry=False),
-            "links": db.query("SELECT * FROM route_haul_roads ORDER BY route_id, seq"),
+            "links": db.query("SELECT * FROM route_haul_roads WHERE tenant_id = ? "
+                              "ORDER BY route_id, seq", (db.current_tenant(),)),
             "summary": haul.summary()}
 
 
@@ -1014,7 +1049,8 @@ def route_haul_roads(route_id: str):
     planner can see that the loaded leg enters a road at one end and the return leg at
     the other without spending a request to find out.
     """
-    if not db.query("SELECT id FROM routes WHERE id = ?", (route_id,)):
+    if not db.query("SELECT id FROM routes WHERE tenant_id = ? AND id = ?",
+                    (db.current_tenant(), route_id)):
         raise HTTPException(404, "route not found")
     return haul.diagnostics(route_id=route_id, probe=False)
 
@@ -1153,7 +1189,8 @@ def route_restrictions(route_id: str, profile: Optional[str] = None):
     been established here. The class and the vehicle's gross weight are both returned and
     `needs_interpretation` is set. See restrictions.check_route().
     """
-    if not db.query("SELECT id FROM routes WHERE id = ?", (route_id,)):
+    if not db.query("SELECT id FROM routes WHERE tenant_id = ? AND id = ?",
+                    (db.current_tenant(), route_id)):
         raise HTTPException(404, "route not found")
     return restrictions.check_route(route_id, profile=profile)
 

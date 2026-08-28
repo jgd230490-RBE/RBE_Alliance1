@@ -124,47 +124,59 @@ def seed_taxonomy():
     """
     counts = {"disciplines": 0, "discipline_materials": 0, "ipts": 0, "design_sections": 0}
 
-    have = {r["id"] for r in db.query("SELECT id FROM disciplines")}
+    # Every read and write below is scoped to the current tenant, so "is it already
+    # there" is asked of this tenant's rows only. A second tenant seeds its own copy of
+    # the taxonomy rather than inheriting the first one's — and an edit one client makes
+    # to a discipline label cannot show up in another's picker.
+    tenant = db.current_tenant()
+
+    have = {r["id"] for r in db.query("SELECT id FROM disciplines WHERE tenant_id = ?",
+                                      (tenant,))}
     for did, label, order, in_scope, note in DISCIPLINES:
         if did in have:
             continue
         db.execute(
-            "INSERT INTO disciplines (id, label, sort_order, in_scope, scope_note, active) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (did, label, order, bool(in_scope), note, True),
+            "INSERT INTO disciplines (tenant_id, id, label, sort_order, in_scope, "
+            "scope_note, active) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tenant, did, label, order, bool(in_scope), note, True),
         )
         counts["disciplines"] += 1
 
     have_dm = {(r["discipline_id"], r["material_category"])
-               for r in db.query("SELECT discipline_id, material_category FROM discipline_materials")}
+               for r in db.query("SELECT discipline_id, material_category FROM "
+                                 "discipline_materials WHERE tenant_id = ?", (tenant,))}
     for did, cats in DISCIPLINE_MATERIALS.items():
         for cat in cats:
             if (did, cat) in have_dm:
                 continue
             db.execute(
-                "INSERT INTO discipline_materials (discipline_id, material_category) VALUES (?, ?)",
-                (did, cat),
+                "INSERT INTO discipline_materials (tenant_id, discipline_id, "
+                "material_category) VALUES (?, ?, ?)",
+                (tenant, did, cat),
             )
             counts["discipline_materials"] += 1
 
-    have_i = {r["id"] for r in db.query("SELECT id FROM ipts")}
+    have_i = {r["id"] for r in db.query("SELECT id FROM ipts WHERE tenant_id = ?",
+                                        (tenant,))}
     for iid, label in IPTS:
         if iid in have_i:
             continue
         db.execute(
-            "INSERT INTO ipts (id, label, manager, active, merged_into) VALUES (?, ?, ?, ?, ?)",
-            (iid, label, None, True, None),
+            "INSERT INTO ipts (tenant_id, id, label, manager, active, merged_into) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (tenant, iid, label, None, True, None),
         )
         counts["ipts"] += 1
 
-    have_ds = {r["id"] for r in db.query("SELECT id FROM design_sections")}
+    have_ds = {r["id"] for r in db.query("SELECT id FROM design_sections WHERE tenant_id = ?",
+                                         (tenant,))}
     for dsid, label, note in DESIGN_SECTIONS:
         if dsid in have_ds:
             continue
         db.execute(
-            "INSERT INTO design_sections (id, label, km_from, km_to, scope_note) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (dsid, label, None, None, note),
+            "INSERT INTO design_sections (tenant_id, id, label, km_from, km_to, scope_note) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (tenant, dsid, label, None, None, note),
         )
         counts["design_sections"] += 1
 
@@ -178,11 +190,13 @@ def list_disciplines(include_out_of_scope=False):
     """In programme order. Out-of-scope disciplines are hidden from pickers by default."""
     rows = db.query(
         "SELECT id, label, sort_order, in_scope, scope_note, active FROM disciplines "
-        "ORDER BY sort_order, id"
+        "WHERE tenant_id = ? ORDER BY sort_order, id",
+        (db.current_tenant(),)
     )
     by_disc = {}
     for m in db.query("SELECT discipline_id, material_category FROM discipline_materials "
-                      "ORDER BY material_category"):
+                      "WHERE tenant_id = ? ORDER BY material_category",
+                      (db.current_tenant(),)):
         by_disc.setdefault(m["discipline_id"], []).append(m["material_category"])
 
     out = []
@@ -203,8 +217,9 @@ def list_disciplines(include_out_of_scope=False):
 def materials_for(discipline_id):
     """The material categories one discipline moves."""
     return [r["material_category"] for r in db.query(
-        "SELECT material_category FROM discipline_materials WHERE discipline_id = ? "
-        "ORDER BY material_category", (discipline_id,))]
+        "SELECT material_category FROM discipline_materials "
+        "WHERE tenant_id = ? AND discipline_id = ? "
+        "ORDER BY material_category", (db.current_tenant(), discipline_id))]
 
 
 def derive_receives(discipline_ids):
@@ -227,7 +242,8 @@ def derive_receives(discipline_ids):
 
 
 def list_ipts(active_only=True):
-    rows = db.query("SELECT id, label, manager, active, merged_into FROM ipts ORDER BY id")
+    rows = db.query("SELECT id, label, manager, active, merged_into FROM ipts "
+                    "WHERE tenant_id = ? ORDER BY id", (db.current_tenant(),))
     for r in rows:
         r["active"] = bool(r["active"])
     return [r for r in rows if r["active"]] if active_only else rows
@@ -237,7 +253,8 @@ def list_work_sections(in_scope_only=False):
     rows = db.query(
         "SELECT section_id, parent_section_id, design_section_id, ipt_id, name, "
         "primary_discipline, in_scope, active, scope_note FROM work_sections "
-        "ORDER BY section_id"
+        "WHERE tenant_id = ? ORDER BY section_id",
+        (db.current_tenant(),)
     )
     for r in rows:
         r["in_scope"] = bool(r["in_scope"])

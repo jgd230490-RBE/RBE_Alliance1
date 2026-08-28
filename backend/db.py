@@ -9,11 +9,63 @@ Tiny database layer.
 The rest of the app calls query()/execute() and never worries which backend is
 in use. SQL is written with '?' placeholders and translated to '%s' for Postgres.
 """
+import contextvars
 import os
 import sqlite3
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 IS_PG = bool(DATABASE_URL)
+
+# --------------------------------------------------------------------------- #
+#  Phase 4.5 — the tenant key                                                  #
+# --------------------------------------------------------------------------- #
+# One tenant, no auth. What this phase buys is the DATA MODEL: every table
+# carries tenant_id, it is part of every primary key, and every query filters on
+# it. Behaviour is unchanged, because with one tenant the filter is a no-op —
+# which is exactly why the pre-existing assertions are the proof it is safe.
+#
+# ⚠️ A tenant column with no filter is worse than no column: it looks like
+#    isolation and is not. backend/tests/test_tenant_audit.py parses every SQL
+#    literal in backend/*.py and fails if a read or write of a tenanted table has
+#    no tenant_id predicate. That file, not this comment, is what keeps the
+#    promise true after the next edit.
+#
+# ⚠️ tenant_id is in the PRIMARY KEY, not merely a column beside it. Ids here are
+#    human-meaningful and client-supplied — locations are 'C01', routes are
+#    'R001'. Two clients will both want 'C01'. With a global primary key the
+#    second tenant's seed fails on a key violation and the app looks broken;
+#    the column would be present and the isolation absent. That is why eleven
+#    tables get a key rebuild rather than a plain ADD COLUMN.
+
+TENANT_DEFAULT = os.environ.get("TENANT_ID", "default").strip() or "default"
+
+# The eleven tenanted tables. test_tenant_audit.py cross-checks this set against
+# every CREATE TABLE in this file, so it cannot drift from the schema.
+TENANTED_TABLES = {
+    "forecasts", "locations", "routes", "route_geometry",
+    "disciplines", "discipline_materials", "ipts",
+    "design_sections", "work_sections", "zones", "route_haul_roads",
+}
+
+# A contextvar rather than a module global, so Phase 6 can make the tenant
+# request-scoped by setting it in one middleware WITHOUT touching any of the 139
+# call sites this phase threads. Every one of them asks current_tenant(); none of
+# them takes a tenant argument. That is the whole point of resolving it here.
+_TENANT = contextvars.ContextVar("tenant_id", default=None)
+
+
+def current_tenant():
+    """The tenant every query filters on. One value today; per-request in Phase 6."""
+    return _TENANT.get() or TENANT_DEFAULT
+
+
+def set_current_tenant(tenant_id):
+    """Set the active tenant for this context. Returns the token to reset with."""
+    return _TENANT.set((tenant_id or "").strip() or TENANT_DEFAULT)
+
+
+def reset_current_tenant(token):
+    _TENANT.reset(token)
 
 if IS_PG:
     import psycopg2
@@ -64,24 +116,22 @@ def execute(sql, params=()):
         conn.close()
 
 
-FORECASTS_DDL = """
-    CREATE TABLE IF NOT EXISTS forecasts (
-        id                   TEXT PRIMARY KEY,
-        route_id             TEXT NOT NULL,
-        month_index          INTEGER NOT NULL,
-        discipline           TEXT NOT NULL DEFAULT '',
-        section_id           TEXT NOT NULL DEFAULT '',
-        quantity             REAL NOT NULL,
-        unit                 TEXT NOT NULL,
-        material_type        TEXT,
-        material_description TEXT,
-        vehicle_type         TEXT,
-        submitted_by         TEXT,
-        status               TEXT NOT NULL DEFAULT 'Pending',
-        reject_reason        TEXT,
-        UNIQUE (route_id, month_index, discipline, section_id)
-    )
-"""
+# FORECASTS_DDL was here. Phase 4.5 made _TENANT_DDL["forecasts"] the single source
+# for this table, so a second copy of the DDL could only ever drift out of it — and a
+# drifted copy without tenant_id is precisely the "column present, isolation absent"
+# failure this phase exists to prevent. Use _create_tenanted(cur, "forecasts").
+
+
+def _create_tenanted(cur, table):
+    """
+    Create one tenanted table from the single-source DDL in _TENANT_DDL.
+
+    A FRESH database is born with tenant_id already in the key, so it never needs
+    the Phase 4.5 migration at all. init_tenant() exists for databases that
+    predate 4.5 — including the live Postgres — where IF NOT EXISTS makes this a
+    no-op and the migration does the work instead.
+    """
+    cur.execute(_TENANT_DDL[table].replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1))
 
 
 def init_db():
@@ -99,7 +149,7 @@ def init_db():
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(FORECASTS_DDL)
+        _create_tenanted(cur, "forecasts")
         conn.commit()
         _migrate_forecasts_to_phase2(conn, cur)
     finally:
@@ -134,7 +184,7 @@ def _migrate_forecasts_to_phase2(conn, cur):
     try:
         cur.execute("DROP TABLE IF EXISTS forecasts_legacy")
         cur.execute("ALTER TABLE forecasts RENAME TO forecasts_legacy")
-        cur.execute(FORECASTS_DDL)
+        _create_tenanted(cur, "forecasts")
         conn.commit()
         print(f"Phase 2: forecasts rebuilt on the widened key. "
               f"{n} legacy row(s) moved to forecasts_legacy — drop that table when ready.")
@@ -144,7 +194,8 @@ def _migrate_forecasts_to_phase2(conn, cur):
 
 
 def count_forecasts():
-    return query("SELECT COUNT(*) AS n FROM forecasts")[0]["n"]
+    return query("SELECT COUNT(*) AS n FROM forecasts WHERE tenant_id = ?",
+                 (current_tenant(),))[0]["n"]
 
 
 def init_network_db():
@@ -152,22 +203,7 @@ def init_network_db():
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS locations (
-                id        TEXT PRIMARY KEY,
-                name      TEXT NOT NULL,
-                loc_type  TEXT,
-                role      TEXT,
-                materials TEXT,
-                supplies  TEXT,
-                receives  TEXT,
-                lat       REAL NOT NULL,
-                lon       REAL NOT NULL,
-                material  TEXT
-            )
-            """
-        )
+        _create_tenanted(cur, "locations")
         conn.commit()
         # migrate pre-existing tables: add the newer columns if they're missing.
         # network.seed_network() writes role/materials on the very first boot, so
@@ -216,35 +252,8 @@ def init_network_db():
                 conn.commit()
             except Exception:
                 conn.rollback()  # column already present — fine
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS routes (
-                id                TEXT PRIMARY KEY,
-                origin_id         TEXT,
-                dest_id           TEXT,
-                long_route_id     TEXT,
-                material_category TEXT,
-                ipt               TEXT,
-                origin_temp_km    REAL DEFAULT 0
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS route_geometry (
-                route_id        TEXT NOT NULL,
-                vehicle_profile TEXT NOT NULL,
-                leg             TEXT NOT NULL DEFAULT 'loaded',
-                alt_index       INTEGER NOT NULL DEFAULT 0,
-                geometry        TEXT,
-                distance_km     REAL,
-                duration_hr     REAL,
-                computed_at     TEXT,
-                error           TEXT,
-                PRIMARY KEY (route_id, vehicle_profile, leg, alt_index)
-            )
-            """
-        )
+        _create_tenanted(cur, "routes")
+        _create_tenanted(cur, "route_geometry")
         conn.commit()
         _migrate_route_geometry_key(conn, cur)
         # Phase 3: which zones were avoided when this leg was baked, as a comma-separated
@@ -358,7 +367,8 @@ def _has_column(cur, table, column):
 
 
 def count_locations():
-    return query("SELECT COUNT(*) AS n FROM locations")[0]["n"]
+    return query("SELECT COUNT(*) AS n FROM locations WHERE tenant_id = ?",
+                 (current_tenant(),))[0]["n"]
 
 
 # --------------------------------------------------------------------------- #
@@ -384,70 +394,14 @@ def init_taxonomy_db():
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS disciplines (
-                id         TEXT PRIMARY KEY,
-                label      TEXT NOT NULL,
-                sort_order INTEGER,
-                in_scope   BOOLEAN DEFAULT TRUE,
-                scope_note TEXT,
-                active     BOOLEAN DEFAULT TRUE
-            )
-            """
-        )
+        _create_tenanted(cur, "disciplines")
         # many-to-many on purpose: 'Large aggregate / ballast' belongs to BOTH
         # substructure (sub-ballast) and superstructure (track ballast). Nest it under
         # one discipline and the copies drift.
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS discipline_materials (
-                discipline_id     TEXT NOT NULL,
-                material_category TEXT NOT NULL,
-                PRIMARY KEY (discipline_id, material_category)
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ipts (
-                id          TEXT PRIMARY KEY,
-                label       TEXT,
-                manager     TEXT,
-                active      BOOLEAN DEFAULT TRUE,
-                merged_into TEXT
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS design_sections (
-                id         TEXT PRIMARY KEY,
-                label      TEXT,
-                km_from    REAL,
-                km_to      REAL,
-                scope_note TEXT
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS work_sections (
-                section_id         TEXT PRIMARY KEY,
-                parent_section_id  TEXT,
-                design_section_id  TEXT,
-                ipt_id             TEXT,
-                name               TEXT,
-                primary_discipline TEXT,
-                in_scope           BOOLEAN DEFAULT TRUE,
-                active             BOOLEAN DEFAULT TRUE,
-                km_from            REAL,
-                km_to              REAL,
-                scope_note         TEXT,
-                receives_override  TEXT
-            )
-            """
-        )
+        _create_tenanted(cur, "discipline_materials")
+        _create_tenanted(cur, "ipts")
+        _create_tenanted(cur, "design_sections")
+        _create_tenanted(cur, "work_sections")
         conn.commit()
     finally:
         conn.close()
@@ -488,23 +442,7 @@ def init_zones_db():
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS zones (
-                id              TEXT PRIMARY KEY,
-                name            TEXT NOT NULL,
-                kind            TEXT,
-                geometry        TEXT,
-                affects_routing BOOLEAN DEFAULT TRUE,
-                starts_on       TEXT,
-                ends_on         TEXT,
-                note            TEXT,
-                active          BOOLEAN DEFAULT TRUE,
-                created_at      TEXT,
-                updated_at      TEXT
-            )
-            """
-        )
+        _create_tenanted(cur, "zones")
         conn.commit()
         # Phase 4: two columns that only mean anything for kind = 'haul_road'.
         #   speed_kph   the assigned running speed on this road. HERE will not accept a
@@ -535,25 +473,372 @@ def init_zones_db():
         # `seq` orders multiple haul roads along one route, because a route that uses two
         # of them must enter them in the right order or the splice produces a line that
         # doubles back. The return leg walks the same list in reverse.
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS route_haul_roads (
-                route_id   TEXT NOT NULL,
-                zone_id    TEXT NOT NULL,
-                seq        INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT,
-                PRIMARY KEY (route_id, zone_id)
-            )
-            """
-        )
+        _create_tenanted(cur, "route_haul_roads")
         conn.commit()
     finally:
         conn.close()
 
 
 def count_zones():
-    return query("SELECT COUNT(*) AS n FROM zones")[0]["n"]
+    return query("SELECT COUNT(*) AS n FROM zones WHERE tenant_id = ?",
+                 (current_tenant(),))[0]["n"]
 
 
 def count_haul_links():
-    return query("SELECT COUNT(*) AS n FROM route_haul_roads")[0]["n"]
+    return query("SELECT COUNT(*) AS n FROM route_haul_roads WHERE tenant_id = ?",
+                 (current_tenant(),))[0]["n"]
+
+
+# --------------------------------------------------------------------------- #
+#  Phase 4.5 — tenant migration                                                #
+# --------------------------------------------------------------------------- #
+# Each entry is the table AS IT SHOULD END UP: every column it has after all the
+# earlier ALTER-added ones, plus tenant_id, with tenant_id first in the primary
+# key. The SQLite rebuild creates the target from this DDL and copies the
+# INTERSECTION of the old table's real columns with it, so a database that never
+# received one of the later ADD COLUMNs still migrates rather than erroring.
+_TENANT_DDL = {
+    "forecasts": """
+        CREATE TABLE forecasts (
+            tenant_id            TEXT NOT NULL DEFAULT 'default',
+            id                   TEXT NOT NULL,
+            route_id             TEXT NOT NULL,
+            month_index          INTEGER NOT NULL,
+            discipline           TEXT NOT NULL DEFAULT '',
+            section_id           TEXT NOT NULL DEFAULT '',
+            quantity             REAL NOT NULL,
+            unit                 TEXT NOT NULL,
+            material_type        TEXT,
+            material_description TEXT,
+            vehicle_type         TEXT,
+            submitted_by         TEXT,
+            status               TEXT NOT NULL DEFAULT 'Pending',
+            reject_reason        TEXT,
+            PRIMARY KEY (tenant_id, id),
+            UNIQUE (tenant_id, route_id, month_index, discipline, section_id)
+        )
+    """,
+    "locations": """
+        CREATE TABLE locations (
+            tenant_id          TEXT NOT NULL DEFAULT 'default',
+            id                 TEXT NOT NULL,
+            name               TEXT NOT NULL,
+            loc_type           TEXT,
+            role               TEXT,
+            materials          TEXT,
+            supplies           TEXT,
+            receives           TEXT,
+            lat                REAL NOT NULL,
+            lon                REAL NOT NULL,
+            material           TEXT,
+            default_section_id TEXT,
+            vendor             TEXT,
+            detail             TEXT,
+            gate_lat           REAL,
+            gate_lon           REAL,
+            PRIMARY KEY (tenant_id, id)
+        )
+    """,
+    "routes": """
+        CREATE TABLE routes (
+            tenant_id         TEXT NOT NULL DEFAULT 'default',
+            id                TEXT NOT NULL,
+            origin_id         TEXT,
+            dest_id           TEXT,
+            long_route_id     TEXT,
+            material_category TEXT,
+            ipt               TEXT,
+            origin_temp_km    REAL DEFAULT 0,
+            PRIMARY KEY (tenant_id, id)
+        )
+    """,
+    "route_geometry": """
+        CREATE TABLE route_geometry (
+            tenant_id        TEXT NOT NULL DEFAULT 'default',
+            route_id         TEXT NOT NULL,
+            vehicle_profile  TEXT NOT NULL,
+            leg              TEXT NOT NULL DEFAULT 'loaded',
+            alt_index        INTEGER NOT NULL DEFAULT 0,
+            geometry         TEXT,
+            distance_km      REAL,
+            duration_hr      REAL,
+            computed_at      TEXT,
+            error            TEXT,
+            zones_applied    TEXT,
+            haul_zones       TEXT,
+            haul_km          REAL,
+            duration_hr_here REAL,
+            PRIMARY KEY (tenant_id, route_id, vehicle_profile, leg, alt_index)
+        )
+    """,
+    "disciplines": """
+        CREATE TABLE disciplines (
+            tenant_id  TEXT NOT NULL DEFAULT 'default',
+            id         TEXT NOT NULL,
+            label      TEXT NOT NULL,
+            sort_order INTEGER,
+            in_scope   BOOLEAN DEFAULT TRUE,
+            scope_note TEXT,
+            active     BOOLEAN DEFAULT TRUE,
+            PRIMARY KEY (tenant_id, id)
+        )
+    """,
+    "discipline_materials": """
+        CREATE TABLE discipline_materials (
+            tenant_id         TEXT NOT NULL DEFAULT 'default',
+            discipline_id     TEXT NOT NULL,
+            material_category TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, discipline_id, material_category)
+        )
+    """,
+    "ipts": """
+        CREATE TABLE ipts (
+            tenant_id   TEXT NOT NULL DEFAULT 'default',
+            id          TEXT NOT NULL,
+            label       TEXT,
+            manager     TEXT,
+            active      BOOLEAN DEFAULT TRUE,
+            merged_into TEXT,
+            PRIMARY KEY (tenant_id, id)
+        )
+    """,
+    "design_sections": """
+        CREATE TABLE design_sections (
+            tenant_id  TEXT NOT NULL DEFAULT 'default',
+            id         TEXT NOT NULL,
+            label      TEXT,
+            km_from    REAL,
+            km_to      REAL,
+            scope_note TEXT,
+            PRIMARY KEY (tenant_id, id)
+        )
+    """,
+    "work_sections": """
+        CREATE TABLE work_sections (
+            tenant_id          TEXT NOT NULL DEFAULT 'default',
+            section_id         TEXT NOT NULL,
+            parent_section_id  TEXT,
+            design_section_id  TEXT,
+            ipt_id             TEXT,
+            name               TEXT,
+            primary_discipline TEXT,
+            in_scope           BOOLEAN DEFAULT TRUE,
+            active             BOOLEAN DEFAULT TRUE,
+            km_from            REAL,
+            km_to              REAL,
+            scope_note         TEXT,
+            receives_override  TEXT,
+            PRIMARY KEY (tenant_id, section_id)
+        )
+    """,
+    "zones": """
+        CREATE TABLE zones (
+            tenant_id       TEXT NOT NULL DEFAULT 'default',
+            id              TEXT NOT NULL,
+            name            TEXT NOT NULL,
+            kind            TEXT,
+            geometry        TEXT,
+            affects_routing BOOLEAN DEFAULT TRUE,
+            starts_on       TEXT,
+            ends_on         TEXT,
+            note            TEXT,
+            active          BOOLEAN DEFAULT TRUE,
+            created_at      TEXT,
+            updated_at      TEXT,
+            speed_kph       REAL,
+            haul_mode       TEXT,
+            PRIMARY KEY (tenant_id, id)
+        )
+    """,
+    "route_haul_roads": """
+        CREATE TABLE route_haul_roads (
+            tenant_id  TEXT NOT NULL DEFAULT 'default',
+            route_id   TEXT NOT NULL,
+            zone_id    TEXT NOT NULL,
+            seq        INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            PRIMARY KEY (tenant_id, route_id, zone_id)
+        )
+    """,
+}
+
+# The primary key each table ends up with, for the Postgres in-place path.
+_TENANT_PK = {
+    "forecasts": "(tenant_id, id)",
+    "locations": "(tenant_id, id)",
+    "routes": "(tenant_id, id)",
+    "route_geometry": "(tenant_id, route_id, vehicle_profile, leg, alt_index)",
+    "disciplines": "(tenant_id, id)",
+    "discipline_materials": "(tenant_id, discipline_id, material_category)",
+    "ipts": "(tenant_id, id)",
+    "design_sections": "(tenant_id, id)",
+    "work_sections": "(tenant_id, section_id)",
+    "zones": "(tenant_id, id)",
+    "route_haul_roads": "(tenant_id, route_id, zone_id)",
+}
+
+# Extra UNIQUE constraints that must also take tenant_id. Only forecasts has one.
+_TENANT_UNIQUE = {
+    "forecasts": "(tenant_id, route_id, month_index, discipline, section_id)",
+}
+
+
+def _columns_of(cur, table):
+    """The columns a table really has right now, in order."""
+    try:
+        if IS_PG:
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = %s ORDER BY ordinal_position",
+                (table,),
+            )
+            return [r[0] for r in cur.fetchall()]
+        cur.execute(f"PRAGMA table_info({table})")
+        return [r[1] for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def _ddl_columns(ddl):
+    """The column names declared in one of the _TENANT_DDL blocks."""
+    cols = []
+    body = ddl[ddl.index("(") + 1:ddl.rindex(")")]
+    depth = 0
+    line = ""
+    for ch in body:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            cols.append(line.strip())
+            line = ""
+        else:
+            line += ch
+    cols.append(line.strip())
+    out = []
+    for c in cols:
+        first = c.split()[0] if c.split() else ""
+        if first.upper() in ("PRIMARY", "UNIQUE", "FOREIGN", "CHECK", "CONSTRAINT"):
+            continue
+        if first:
+            out.append(first)
+    return out
+
+
+def _pg_constraint_names(cur, table, kind):
+    """Constraint names of a given kind ('p' primary, 'u' unique) on a table."""
+    try:
+        cur.execute(
+            "SELECT con.conname FROM pg_constraint con "
+            "JOIN pg_class rel ON rel.oid = con.conrelid "
+            "WHERE rel.relname = %s AND con.contype = %s",
+            (table, kind),
+        )
+        return [r[0] for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def _migrate_table_to_tenant(conn, cur, table):
+    """
+    Give one table its tenant_id column and fold it into the primary key.
+
+    Idempotent: the presence of tenant_id is the flag for 'already done'.
+
+    Postgres redefines the constraints in place. SQLite cannot drop a primary key
+    at all — the same wall `_migrate_route_geometry_key()` hit — so there the
+    table is rebuilt, copied and swapped. Existing rows are stamped with
+    TENANT_DEFAULT, which is what makes this a no-op for the single tenant that
+    exists today.
+    """
+    if _has_column(cur, table, "tenant_id"):
+        return "already"
+
+    ddl = _TENANT_DDL[table]
+    want = _ddl_columns(ddl)
+
+    if IS_PG:
+        try:
+            cur.execute(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id "
+                f"TEXT NOT NULL DEFAULT '{TENANT_DEFAULT}'"
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            return "failed"
+        # the old unique constraint has to go before the new one can be added,
+        # or a two-tenant insert fails on a constraint nobody remembers existing
+        for kind, target in (("p", _TENANT_PK[table]), ("u", _TENANT_UNIQUE.get(table))):
+            if not target:
+                continue
+            for name in _pg_constraint_names(cur, table, kind):
+                try:
+                    cur.execute(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {name}")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+            try:
+                if kind == "p":
+                    cur.execute(f"ALTER TABLE {table} ADD PRIMARY KEY {target}")
+                else:
+                    cur.execute(f"ALTER TABLE {table} ADD UNIQUE {target}")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+        return "migrated"
+
+    # SQLite: rebuild, copy, swap.
+    have = _columns_of(cur, table)
+    if not have:
+        return "missing"
+    carry = [c for c in want if c in have and c != "tenant_id"]
+    cols = ", ".join(carry)
+    try:
+        cur.execute(f"DROP TABLE IF EXISTS {table}_pre45")
+        cur.execute(f"ALTER TABLE {table} RENAME TO {table}_pre45")
+        cur.execute(ddl)
+        cur.execute(
+            f"INSERT INTO {table} (tenant_id, {cols}) "
+            f"SELECT '{TENANT_DEFAULT}', {cols} FROM {table}_pre45"
+        )
+        cur.execute(f"DROP TABLE {table}_pre45")
+        conn.commit()
+        return "migrated"
+    except Exception as e:
+        conn.rollback()
+        print(f"Phase 4.5: {table} tenant migration failed:", e)
+        try:
+            # put the original back rather than leaving the app with no table
+            cur.execute(f"DROP TABLE IF EXISTS {table}")
+            cur.execute(f"ALTER TABLE {table}_pre45 RENAME TO {table}")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        return "failed"
+
+
+def init_tenant():
+    """
+    Phase 4.5. Runs AFTER every other init_*, because the SQLite rebuild copies
+    the columns a table really has, and the earlier inits are what add several of
+    them by ALTER. Run it first and those columns would be silently dropped.
+
+    Safe to call on every boot; each table's migration is a no-op once done.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        done = {}
+        for table in sorted(TENANTED_TABLES):
+            done[table] = _migrate_table_to_tenant(conn, cur, table)
+        moved = [t for t, r in done.items() if r == "migrated"]
+        if moved:
+            print(f"Phase 4.5: tenant key added to {len(moved)} table(s): {', '.join(moved)}")
+        bad = [t for t, r in done.items() if r == "failed"]
+        if bad:
+            print(f"⚠️  Phase 4.5: tenant migration FAILED on: {', '.join(bad)}")
+        return done
+    finally:
+        conn.close()

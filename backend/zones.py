@@ -367,7 +367,10 @@ def _now():
 
 
 def _next_zone_id():
-    ids = [r["id"] for r in db.query("SELECT id FROM zones")]
+    # per tenant: Z-numbers are only unique within a tenant, and scanning every
+    # tenant's ids would make one client's zone count push the next client's numbering
+    ids = [r["id"] for r in db.query("SELECT id FROM zones WHERE tenant_id = ?",
+                                     (db.current_tenant(),))]
     n = 0
     for i in ids:
         m = re.match(r"^Z(\d+)$", (i or "").strip())
@@ -413,7 +416,8 @@ def _row(z):
 
 
 def list_zones(include_inactive=True, on=None):
-    rows = [_row(z) for z in db.query("SELECT * FROM zones ORDER BY id")]
+    rows = [_row(z) for z in db.query("SELECT * FROM zones WHERE tenant_id = ? ORDER BY id",
+                                      (db.current_tenant(),))]
     if not include_inactive:
         rows = [z for z in rows if z["active"]]
     if on:
@@ -422,7 +426,8 @@ def list_zones(include_inactive=True, on=None):
 
 
 def get_zone(zone_id):
-    r = db.query("SELECT * FROM zones WHERE id = ?", (zone_id,))
+    r = db.query("SELECT * FROM zones WHERE tenant_id = ? AND id = ?",
+                 (db.current_tenant(), zone_id))
     return _row(r[0]) if r else None
 
 
@@ -458,14 +463,17 @@ def create_zone(name, geometry, kind=None, affects_routing=True,
         return {"error": "a haul road must be drawn as a LineString — it is travelled "
                          "along, and a closed shape has no entry or exit"}
     zid = (zone_id or "").strip() or _next_zone_id()
-    if db.query("SELECT id FROM zones WHERE id = ?", (zid,)):
+    # the id clash that matters is one within this tenant — the primary key is
+    # (tenant_id, id), so two tenants may each hold a Z001
+    if db.query("SELECT id FROM zones WHERE tenant_id = ? AND id = ?",
+                (db.current_tenant(), zid)):
         return {"error": f"zone {zid} already exists"}
     now = _now()
     db.execute(
-        "INSERT INTO zones (id, name, kind, geometry, affects_routing, starts_on, "
-        "ends_on, note, active, created_at, updated_at, speed_kph, haul_mode) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (zid, name.strip(), kind, json.dumps(geometry),
+        "INSERT INTO zones (tenant_id, id, name, kind, geometry, affects_routing, "
+        "starts_on, ends_on, note, active, created_at, updated_at, speed_kph, haul_mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (db.current_tenant(), zid, name.strip(), kind, json.dumps(geometry),
          bool(affects_routing), _clean_date(starts_on), _clean_date(ends_on),
          (note or None), bool(active), now, now,
          _clean_speed(speed_kph), _clean_mode(haul_mode)),
@@ -479,7 +487,8 @@ def update_zone(zone_id, **fields):
     knows nothing about (say) `note` cannot blank one by omitting it — the same trap the
     Locations PUT hit when a node drag started wiping salvaged vendor names.
     """
-    cur = db.query("SELECT * FROM zones WHERE id = ?", (zone_id,))
+    cur = db.query("SELECT * FROM zones WHERE tenant_id = ? AND id = ?",
+                   (db.current_tenant(), zone_id))
     if not cur:
         return {"error": "zone not found", "id": zone_id}
     sets, params = [], []
@@ -519,15 +528,24 @@ def update_zone(zone_id, **fields):
     if not sets:
         return get_zone(zone_id)
     sets.append("updated_at = ?"); params.append(_now())
+    # tenant_id constrains the WHERE and never appears in the SET — an edit must not be
+    # able to move a row into another tenant. Params run SET-values, then tenant, then id,
+    # matching the ? order. Built with .format rather than an f-string so that `UPDATE
+    # zones` and the tenant predicate stay in one string literal: split across an
+    # f-string's fragments the write reads as unfiltered to the Phase 4.5 audit.
+    params.append(db.current_tenant())
     params.append(zone_id)
-    db.execute(f"UPDATE zones SET {', '.join(sets)} WHERE id = ?", tuple(params))
+    db.execute("UPDATE zones SET {} WHERE tenant_id = ? AND id = ?".format(", ".join(sets)),
+               tuple(params))
     return get_zone(zone_id)
 
 
 def delete_zone(zone_id):
-    if not db.query("SELECT id FROM zones WHERE id = ?", (zone_id,)):
+    if not db.query("SELECT id FROM zones WHERE tenant_id = ? AND id = ?",
+                    (db.current_tenant(), zone_id)):
         return {"error": "zone not found", "id": zone_id}
-    db.execute("DELETE FROM zones WHERE id = ?", (zone_id,))
+    db.execute("DELETE FROM zones WHERE tenant_id = ? AND id = ?",
+               (db.current_tenant(), zone_id))
     return {"deleted": zone_id}
 
 
@@ -601,11 +619,15 @@ def _baked_lines():
     out = []
     try:
         rows = db.query("SELECT route_id, vehicle_profile, leg, alt_index, geometry, "
-                        "zones_applied FROM route_geometry WHERE geometry IS NOT NULL")
+                        "zones_applied FROM route_geometry "
+                        "WHERE tenant_id = ? AND geometry IS NOT NULL",
+                        (db.current_tenant(),))
     except Exception:
         # database that has not run the Phase 3 migration: every row is pre-Phase-3
         rows = db.query("SELECT route_id, vehicle_profile, leg, alt_index, geometry "
-                        "FROM route_geometry WHERE geometry IS NOT NULL")
+                        "FROM route_geometry "
+                        "WHERE tenant_id = ? AND geometry IS NOT NULL",
+                        (db.current_tenant(),))
         for r in rows:
             r["zones_applied"] = None
     for g in rows:
@@ -727,8 +749,9 @@ def invalidate(zone_id=None, new_geometry=None, old_geometry=None, dry_run=False
     if not dry_run:
         for rid, prof, leg in legs:
             db.execute(
-                "DELETE FROM route_geometry WHERE route_id = ? AND vehicle_profile = ? "
-                "AND leg = ?", (rid, prof, leg))
+                "DELETE FROM route_geometry WHERE tenant_id = ? AND route_id = ? "
+                "AND vehicle_profile = ? AND leg = ?",
+                (db.current_tenant(), rid, prof, leg))
     return {
         "cleared": 0 if dry_run else len(keys),
         "legs": [{"route_id": r, "vehicle_profile": p, "leg": l,

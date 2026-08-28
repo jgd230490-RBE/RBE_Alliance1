@@ -86,21 +86,24 @@ def _now():
 def links_for_route(route_id):
     """Haul-road links on one route, in traversal order for the LOADED leg."""
     return db.query(
-        "SELECT * FROM route_haul_roads WHERE route_id = ? ORDER BY seq, zone_id",
-        (route_id,))
+        "SELECT * FROM route_haul_roads WHERE tenant_id = ? AND route_id = ? "
+        "ORDER BY seq, zone_id",
+        (db.current_tenant(), route_id))
 
 
 def routes_for_zone(zone_id):
     """Which routes are attached to a haul road. Drives invalidation on an edit."""
     return [r["route_id"] for r in db.query(
-        "SELECT route_id FROM route_haul_roads WHERE zone_id = ? ORDER BY route_id",
-        (zone_id,))]
+        "SELECT route_id FROM route_haul_roads WHERE tenant_id = ? AND zone_id = ? "
+        "ORDER BY route_id",
+        (db.current_tenant(), zone_id))]
 
 
 def link_counts():
     """zone_id -> number of routes attached, for the zones table's 'used by' column."""
     out = {}
-    for r in db.query("SELECT zone_id, COUNT(*) AS n FROM route_haul_roads GROUP BY zone_id"):
+    for r in db.query("SELECT zone_id, COUNT(*) AS n FROM route_haul_roads "
+                      "WHERE tenant_id = ? GROUP BY zone_id", (db.current_tenant(),)):
         out[r["zone_id"]] = r["n"]
     return out
 
@@ -114,7 +117,8 @@ def attach(route_id, zone_id, seq=None):
     unknown route or zone for the same reason the rest of the codebase does — a dangling
     link would surface later as a bake that quietly skips a road nobody can find.
     """
-    if not db.query("SELECT id FROM routes WHERE id = ?", (route_id,)):
+    if not db.query("SELECT id FROM routes WHERE tenant_id = ? AND id = ?",
+                    (db.current_tenant(), route_id)):
         return {"error": "route not found", "route_id": route_id}
     z = zones.get_zone(zone_id)
     if not z:
@@ -123,25 +127,29 @@ def attach(route_id, zone_id, seq=None):
         return {"error": f"zone {zone_id} is a '{z['kind']}', not a haul road"}
     if not zones.as_line(z["geometry"]):
         return {"error": f"zone {zone_id} is not drawn as a line, so it cannot be traversed"}
-    if db.query("SELECT * FROM route_haul_roads WHERE route_id = ? AND zone_id = ?",
-                (route_id, zone_id)):
+    if db.query("SELECT * FROM route_haul_roads WHERE tenant_id = ? AND route_id = ? "
+                "AND zone_id = ?",
+                (db.current_tenant(), route_id, zone_id)):
         return {"error": f"{zone_id} is already attached to {route_id}"}
     if seq is None:
         existing = links_for_route(route_id)
         seq = (max([l["seq"] for l in existing]) + 1) if existing else 0
     db.execute(
-        "INSERT INTO route_haul_roads (route_id, zone_id, seq, created_at) "
-        "VALUES (?, ?, ?, ?)", (route_id, zone_id, int(seq), _now()))
+        "INSERT INTO route_haul_roads (tenant_id, route_id, zone_id, seq, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (db.current_tenant(), route_id, zone_id, int(seq), _now()))
     refresh_origin_temp_km(route_id)
     return {"attached": {"route_id": route_id, "zone_id": zone_id, "seq": int(seq)}}
 
 
 def detach(route_id, zone_id):
-    if not db.query("SELECT * FROM route_haul_roads WHERE route_id = ? AND zone_id = ?",
-                    (route_id, zone_id)):
+    if not db.query("SELECT * FROM route_haul_roads WHERE tenant_id = ? AND route_id = ? "
+                    "AND zone_id = ?",
+                    (db.current_tenant(), route_id, zone_id)):
         return {"error": f"{zone_id} is not attached to {route_id}"}
-    db.execute("DELETE FROM route_haul_roads WHERE route_id = ? AND zone_id = ?",
-               (route_id, zone_id))
+    db.execute("DELETE FROM route_haul_roads WHERE tenant_id = ? AND route_id = ? "
+               "AND zone_id = ?",
+               (db.current_tenant(), route_id, zone_id))
     refresh_origin_temp_km(route_id)
     return {"detached": {"route_id": route_id, "zone_id": zone_id}}
 
@@ -165,8 +173,11 @@ def reorder(route_id, zone_ids):
                          "route, once each",
                 "attached": sorted(have), "sent": list(zone_ids or [])}
     for i, zid in enumerate(want):
-        db.execute("UPDATE route_haul_roads SET seq = ? WHERE route_id = ? AND zone_id = ?",
-                   (i, route_id, zid))
+        # tenant_id is a WHERE term, never a SET term: reordering must not move the row
+        # to another tenant. The seq param stays first because it belongs to SET.
+        db.execute("UPDATE route_haul_roads SET seq = ? WHERE tenant_id = ? AND "
+                   "route_id = ? AND zone_id = ?",
+                   (i, db.current_tenant(), route_id, zid))
     refresh_origin_temp_km(route_id)
     return {"route_id": route_id, "order": want}
 
@@ -174,7 +185,8 @@ def reorder(route_id, zone_ids):
 def clear_links_for_zone(zone_id):
     """Drop every link to a haul road. Called when the zone itself is deleted."""
     affected = routes_for_zone(zone_id)
-    db.execute("DELETE FROM route_haul_roads WHERE zone_id = ?", (zone_id,))
+    db.execute("DELETE FROM route_haul_roads WHERE tenant_id = ? AND zone_id = ?",
+               (db.current_tenant(), zone_id))
     for rid in affected:
         refresh_origin_temp_km(rid)
     return len(affected)
@@ -257,10 +269,12 @@ def haul_km_for_route(route_id, on=None):
 
 def _route_endpoints(route_id):
     """([lon, lat] origin, [lon, lat] destination) for a route, or None."""
-    r = db.query("SELECT * FROM routes WHERE id = ?", (route_id,))
+    r = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?",
+                 (db.current_tenant(), route_id))
     if not r:
         return None
-    locs = {l["id"]: l for l in db.query("SELECT * FROM locations")}
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                         (db.current_tenant(),))}
     o, d = locs.get(r[0]["origin_id"]), locs.get(r[0]["dest_id"])
     if not o or not d:
         return None
@@ -286,11 +300,16 @@ def refresh_origin_temp_km(route_id=None):
     or active flag moves it without any link changing. Cheap: no HERE calls, pure
     geometry, so calling it twice costs nothing.
     """
-    ids = [route_id] if route_id else [r["id"] for r in db.query("SELECT id FROM routes")]
+    ids = [route_id] if route_id else [
+        r["id"] for r in db.query("SELECT id FROM routes WHERE tenant_id = ?",
+                                  (db.current_tenant(),))]
     changed = 0
     for rid in ids:
         km = haul_km_for_route(rid)
-        db.execute("UPDATE routes SET origin_temp_km = ? WHERE id = ?", (km, rid))
+        # tenant_id constrains the row, it is not SET: this must never rewrite another
+        # tenant's route that happens to share an id.
+        db.execute("UPDATE routes SET origin_temp_km = ? WHERE tenant_id = ? AND id = ?",
+                   (km, db.current_tenant(), rid))
         changed += 1
     return {"routes_updated": changed}
 
@@ -525,7 +544,8 @@ def invalidate_for_zone(zone_id, dry_run=False):
     unchanged.
     """
     linked = set(routes_for_zone(zone_id))
-    rows = db.query("SELECT route_id, vehicle_profile, leg, haul_zones FROM route_geometry")
+    rows = db.query("SELECT route_id, vehicle_profile, leg, haul_zones FROM route_geometry "
+                    "WHERE tenant_id = ?", (db.current_tenant(),))
     keys, why = [], {}
     for g in rows:
         tag = g.get("haul_zones")
@@ -540,8 +560,11 @@ def invalidate_for_zone(zone_id, dry_run=False):
     legs = sorted(set(keys))
     if not dry_run:
         for rid, prof, leg in legs:
-            db.execute("DELETE FROM route_geometry WHERE route_id = ? AND "
-                       "vehicle_profile = ? AND leg = ?", (rid, prof, leg))
+            # the keys came from a tenant-filtered read, but the DELETE carries its own
+            # filter: without it an id shared with another tenant would take their row too
+            db.execute("DELETE FROM route_geometry WHERE tenant_id = ? AND route_id = ? "
+                       "AND vehicle_profile = ? AND leg = ?",
+                       (db.current_tenant(), rid, prof, leg))
     return {
         "cleared": 0 if dry_run else len(legs),
         "legs": [{"route_id": r, "vehicle_profile": p, "leg": l,
@@ -558,10 +581,12 @@ def invalidate_for_zone(zone_id, dry_run=False):
 def invalidate_for_route(route_id, dry_run=False):
     """Clear every baked leg of one route — used when its haul-road set changes."""
     rows = db.query("SELECT DISTINCT route_id, vehicle_profile, leg FROM route_geometry "
-                    "WHERE route_id = ?", (route_id,))
+                    "WHERE tenant_id = ? AND route_id = ?",
+                    (db.current_tenant(), route_id))
     legs = sorted({(g["route_id"], g["vehicle_profile"], g["leg"]) for g in rows})
     if not dry_run:
-        db.execute("DELETE FROM route_geometry WHERE route_id = ?", (route_id,))
+        db.execute("DELETE FROM route_geometry WHERE tenant_id = ? AND route_id = ?",
+                   (db.current_tenant(), route_id))
     return {
         "cleared": 0 if dry_run else len(legs),
         "legs": [{"route_id": r, "vehicle_profile": p, "leg": l,
@@ -639,7 +664,8 @@ def diagnostics(zone_id=None, route_id=None, profile=None, probe=False):
             "is_line": bool(zones.as_line(z["geometry"])),
             "routes_attached": counts.get(z["id"], 0),
         } for z in roads],
-        "links": db.query("SELECT * FROM route_haul_roads ORDER BY route_id, seq"),
+        "links": db.query("SELECT * FROM route_haul_roads WHERE tenant_id = ? "
+                          "ORDER BY route_id, seq", (db.current_tenant(),)),
         "default_mode": DEFAULT_MODE,
         "here_configured": here_routing.configured(),
         "probe": None,
@@ -731,7 +757,8 @@ def summary():
         "without_speed": len([z for z in roads if not z["speed_kph"]]),
         "links": db.count_haul_links(),
         "routes_using": len({r["route_id"] for r in
-                             db.query("SELECT route_id FROM route_haul_roads")}),
+                             db.query("SELECT route_id FROM route_haul_roads "
+                                      "WHERE tenant_id = ?", (db.current_tenant(),))}),
         "attached_counts": counts,
         "default_mode": DEFAULT_MODE,
     }
