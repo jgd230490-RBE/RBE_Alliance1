@@ -262,7 +262,13 @@ function medianOf(arr) {
   return a.length % 2 ? a[h] : (a[h - 1] + a[h]) / 2;
 }
 
-function splitOnce(coords, out) {
+// Every cut edge is also KEPT, as a two-point "bridge". The geometry cut stays
+// hard — a bridge is a separate feature, flagged is_bridge, painted at 30%
+// opacity on its own layer. So the corridor reads as continuous while the
+// missing stretches stay visibly weaker, and nothing measured off the solid
+// features includes a straight line across country. See BRIDGE_STEP_M below for
+// why they are then densified rather than drawn as single straights.
+function splitOnce(coords, out, bridges) {
   if (coords.length < 3) { out.push(coords); return false; }
   var steps = [];
   for (var i = 0; i < coords.length - 1; i++) steps.push(metres(coords[i], coords[i + 1]));
@@ -272,6 +278,7 @@ function splitOnce(coords, out) {
   for (var j = 0; j < steps.length; j++) {
     if (steps[j] > GAP_MIN_M && steps[j] > GAP_RATIO * med) {
       if (j + 1 - start >= 2) out.push(coords.slice(start, j + 1));
+      if (bridges) bridges.push([coords[j], coords[j + 1]]);
       start = j + 1;
       cut = true;
       gapStats.edges_cut++;
@@ -288,21 +295,40 @@ function splitOnce(coords, out) {
 // run. Iterate until nothing more splits — otherwise the invariant asserted in
 // backend/tests/test_ipt_overlay.js ("no gap-shaped edge survives") is only
 // true of the first pass.
-function splitAtGaps(coords) {
+function splitAtGaps(coords, bridges) {
   if (!GAP_SPLIT || coords.length < 3) return [coords];
   var work = [coords];
   var depth = 0;
   while (depth++ < 20) {
     var next = [];
     var any = false;
-    for (var i = 0; i < work.length; i++) if (splitOnce(work[i], next)) any = true;
+    for (var i = 0; i < work.length; i++) if (splitOnce(work[i], next, bridges)) any = true;
     work = next;
     if (!any) break;
   }
   return work.length ? work : [coords];
 }
 
-function segmentPart(coords, index, props, out) {
+// A bridge can be 45 km long, which is longer than five of the seven IPT bands.
+// Drawn as one straight it would have to be given ONE colour — the exact
+// midpoint-stamping mistake this file exists to avoid, just at 30% opacity. So
+// each bridge is densified to a vertex every BRIDGE_STEP_M and then fed through
+// the same band splitter as everything else: it changes colour where it crosses
+// a boundary, like the real track beside it.
+var BRIDGE_STEP_M = 200;
+
+function densify(a, b) {
+  var d = metres(a, b);
+  var n = Math.max(1, Math.min(400, Math.ceil(d / BRIDGE_STEP_M)));
+  var pts = [];
+  for (var i = 0; i <= n; i++) {
+    var f = i / n;
+    pts.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+  }
+  return pts;
+}
+
+function segmentPart(coords, index, props, out, isBridge) {
   if (!coords || coords.length < 2) return;
 
   var bands = new Array(coords.length);
@@ -338,6 +364,7 @@ function segmentPart(coords, index, props, out) {
       p.chain_from_m = cs.length ? Math.round(Math.min.apply(null, cs)) : null;
       p.chain_to_m = ce.length ? Math.round(Math.max.apply(null, ce)) : null;
       p.is_main_track = (props.align_type === 'Main Track');
+      p.is_bridge = !!isBridge;
       out.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: slice }, properties: p });
     }
     segStart = j;
@@ -366,15 +393,27 @@ window.buildIptAlignment = function (alignmentFC, chainageFC) {
     var raw = (g.type === 'LineString') ? [g.coordinates]
             : (g.type === 'MultiLineString') ? g.coordinates : [];
     for (var k = 0; k < raw.length; k++) {
-      var runs = splitAtGaps(raw[k]);
+      var bridges = [];
+      var runs = splitAtGaps(raw[k], bridges);
       for (var r = 0; r < runs.length; r++) segmentPart(runs[r], index, f.properties || {}, out);
+      // Bridges are emitted AFTER their own feature's runs but into the same
+      // array, and the layer that draws them is added after the solid one, so a
+      // bridge never paints over real track.
+      for (var b = 0; b < bridges.length; b++) {
+        segmentPart(densify(bridges[b][0], bridges[b][1]), index, f.properties || {}, out, true);
+      }
     }
   }
 
   var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  var nBridge = 0;
+  for (var q = 0; q < out.length; q++) if (out[q].properties.is_bridge) nBridge++;
+
   window.IPT_BUILD_STATS = {
     source_features: src.length,
     output_features: out.length,
+    solid_features: out.length - nBridge,
+    bridge_features: nBridge,
     chainage_markers: index.count,
     gap_split: GAP_SPLIT,
     gap_edges_cut: gapStats.edges_cut,
@@ -388,6 +427,52 @@ window.buildIptAlignment = function (alignmentFC, chainageFC) {
 };
 
 window.IPT_GAP_CONFIG = { split: GAP_SPLIT, min_m: GAP_MIN_M, ratio: GAP_RATIO };
+
+// ---------------------------------------------------------------------------
+// Chainage marker density
+// ---------------------------------------------------------------------------
+// 2,180 markers on a 205 km corridor is one every ~94 m. At corridor zoom that
+// is a grey smear, not information. Each point gets a `step_m` — the coarsest
+// round interval its chainage falls on — and the map shows only the coarse ones
+// until you zoom in.
+//
+//   step_m   points   what it is
+//   10000        24   the 10 km ticks. All that is drawn at corridor zoom.
+//    5000        21   the intermediate 5 km ticks
+//    1000       173   kilometre ticks
+//     100      1962   everything else
+//
+// ⚠️ Mapbox GL cannot use ['zoom'] inside a layer `filter`. So the tiering is
+//    done in the PAINT and LAYOUT expressions instead — an outermost
+//    ['step', ['zoom'], ...] whose branches test step_m — which is allowed, and
+//    keeps both layer ids unchanged so the existing checkbox still works.
+window.CHAINAGE_STEPS = [10000, 5000, 1000, 100];
+
+window.buildChainageSteps = function (chainageFC) {
+  if (!chainageFC || !chainageFC.features) return chainageFC;
+  var out = [];
+  var counts = {};
+  for (var i = 0; i < chainageFC.features.length; i++) {
+    var f = chainageFC.features[i];
+    var raw = (f.properties || {}).chain;
+    var m = raw == null ? NaN : parseFloat(String(raw).replace(/,/g, ''));
+    var step = 100;
+    if (!isNaN(m)) {
+      var r = Math.round(m);
+      var steps = window.CHAINAGE_STEPS;
+      for (var s = 0; s < steps.length; s++) {
+        if (r % steps[s] === 0) { step = steps[s]; break; }
+      }
+    }
+    counts[step] = (counts[step] || 0) + 1;
+    var p = {};
+    for (var k in f.properties) p[k] = f.properties[k];
+    p.step_m = step;
+    out.push({ type: 'Feature', geometry: f.geometry, properties: p });
+  }
+  window.CHAINAGE_STEP_COUNTS = counts;
+  return { type: 'FeatureCollection', features: out };
+};
 
 // Legend rows, one per unique IPT, generated from IPT_SEGMENTS so the table
 // stays the single source of truth. 'Outside A1' is shown muted rather than
