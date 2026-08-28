@@ -164,9 +164,16 @@ ok("discipline defaults to ''", "discipline" in c and str(c["discipline"][4]).st
 ok("section_id defaults to ''", "section_id" in c and str(c["section_id"][4]).strip("'\"") == "")
 
 sql = table_sql("forecasts")
-ok("UNIQUE key is the 4-tuple",
-   "UNIQUE (route_id, month_index, discipline, section_id)" in sql, sql[:120])
+# ⚠️ Phase 4.5 widened this key AGAIN, to a 5-tuple led by tenant_id. The Phase 2
+# four are all still in it and still in order — that is what this pair checks, and
+# what stops a future edit quietly dropping one of them while adding the tenant.
+ok("UNIQUE key is the tenant-widened 5-tuple",
+   "UNIQUE (tenant_id, route_id, month_index, discipline, section_id)" in sql, sql[:120])
+ok("the Phase 2 four survive inside it",
+   "route_id, month_index, discipline, section_id)" in sql)
 ok("old 2-part UNIQUE key is gone", "UNIQUE (route_id, month_index)\n" not in sql)
+ok("and no untenanted copy of the 4-tuple key survives",
+   "UNIQUE (route_id, month_index, discipline, section_id)" not in sql)
 
 # =========================================================================== #
 #  2. Clean-rebuild migration off the pre-Phase-2 table                        #
@@ -605,10 +612,16 @@ ok("nothing loads seed_data/routes.json any more",
    'SEED_DIR / "routes.json"' not in main_src)
 ok("the forecast insert no longer writes vehicle_type_2",
    "vehicle_type_2, split_pct, submitted_by" not in main_src)
-ok("ON CONFLICT targets the widened key",
-   "ON CONFLICT (route_id, month_index, discipline, section_id)" in main_src)
+# ⚠️ Phase 4.5. The unique constraint is now (tenant_id, route_id, month_index,
+# discipline, section_id) and the ON CONFLICT target must match it exactly, or the
+# upsert stops firing and re-saving a matrix row inserts a duplicate instead of
+# updating it — the same failure the Phase 2 widening had to be checked for.
+ok("ON CONFLICT targets the tenant-widened key",
+   "ON CONFLICT (tenant_id, route_id, month_index, discipline, section_id)" in main_src)
 ok("no narrow ON CONFLICT survives",
    "ON CONFLICT (route_id, month_index)" not in main_src)
+ok("and no untenanted 4-tuple ON CONFLICT survives",
+   "ON CONFLICT (route_id, month_index, discipline, section_id)" not in main_src)
 ok("the zero-cell delete is scoped to the line",
    "AND discipline = ? AND section_id = ?" in main_src)
 # strip comments first — main.py explains in prose why these calls were removed, and a

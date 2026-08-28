@@ -178,7 +178,13 @@ for col in ("id", "name", "kind", "geometry", "affects_routing",
             "starts_on", "ends_on", "note", "active", "created_at", "updated_at"):
     ok(f"zones.{col} exists", col in zc)
 ok("zones.name is NOT NULL", "name" in zc and zc["name"][3] == 1)
-ok("zones.id is the primary key", "id" in zc and zc["id"][5] == 1)
+# ⚠️ Phase 4.5 put tenant_id in front of id in the key. id is still part of it and
+# still unique WITHIN a tenant; what changed is that two tenants may each hold a
+# 'Z001', which is the entire point of the rebuild.
+ok("zones.tenant_id exists", "tenant_id" in zc)
+ok("tenant_id is the first primary key column", "tenant_id" in zc and zc["tenant_id"][5] == 1)
+ok("zones.id is the second, so the key is (tenant_id, id)",
+   "id" in zc and zc["id"][5] == 2)
 
 rg = cols("route_geometry")
 ok("route_geometry.zones_applied added by the Phase 3 migration", "zones_applied" in rg)
@@ -522,8 +528,14 @@ ok("zone writes do not call HERE inline — that would time out on Render",
 # the migration must not have disturbed the widened Phase 2 key
 reset_db()
 sqltxt = db.query("SELECT sql FROM sqlite_master WHERE name = 'route_geometry'")[0]["sql"]
-ok("the Phase 2 route_geometry primary key survives Phase 3",
-   "PRIMARY KEY (route_id, vehicle_profile, leg, alt_index)" in sqltxt, sqltxt[:160])
+# ⚠️ Phase 4.5 prefixed this key with tenant_id. The Phase 2 four are still there,
+# still in order — a tenant key that quietly reordered or dropped one of them would
+# break the alternatives model, so both halves are checked.
+ok("the route_geometry key is the tenant-widened 5-tuple",
+   "PRIMARY KEY (tenant_id, route_id, vehicle_profile, leg, alt_index)" in sqltxt,
+   sqltxt[:160])
+ok("and the Phase 2 four survive inside it, in order",
+   "route_id, vehicle_profile, leg, alt_index)" in sqltxt)
 
 # =========================================================================== #
 #  10. End-to-end through the bake path, with HERE replaced by a recorder       #
