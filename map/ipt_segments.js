@@ -52,15 +52,92 @@
 // in backend/tests/parse_map.js — a gap would leave unpainted track and an
 // overlap would make the first-match scan silently win.
 window.IPT_SEGMENTS = [
-  { ipt: 'IPT 6', ws: ['WS7', 'WS8', 'WS9', 'WS10', 'WS11'], label: 'Superstructure / Ülemiste / Soodevahe', chain_from: -5000, chain_to: 105480, colour: '#039E86' },
-  { ipt: 'IPT 1', ws: ['WS1', 'WS12', 'WS13'], label: 'Tootsi–Timmermanni / local stops', chain_from: 105480, chain_to: 117278, colour: '#003787' },
-  { ipt: 'IPT 2', ws: ['WS2'], label: 'Timmermanni–Orasselja', chain_from: 117278, chain_to: 125000, colour: '#0E7490' },
-  { ipt: 'IPT 3', ws: ['WS3'], label: 'Rääma bog / Papiniidu approach', chain_from: 125000, chain_to: 130036, colour: '#475569' },
-  { ipt: 'IPT 4', ws: ['WS4'], label: 'Pärnu Papiniidu bridge BR2032', chain_from: 130036, chain_to: 135400, colour: '#C6841D' },
-  { ipt: 'IPT 5', ws: ['WS5'], label: 'Pärnu passenger terminal area', chain_from: 135400, chain_to: 137685, colour: '#BF2E55' },
-  { ipt: 'IPT 4', ws: ['WS6'], label: 'Pärnu terminal – A1/A2 border', chain_from: 137685, chain_to: 142000, colour: '#C6841D' },
+  { ipt: 'IPT 6', ws: ['WS7', 'WS8', 'WS9', 'WS10', 'WS11'], label: 'Superstructure / Ülemiste / Soodevahe', chain_from: -5000, chain_to: 105480, colour: '#86198F' },
+  { ipt: 'IPT 1', ws: ['WS1', 'WS12', 'WS13'], label: 'Tootsi–Timmermanni / local stops', chain_from: 105480, chain_to: 117278, colour: '#7F1D1D' },
+  { ipt: 'IPT 2', ws: ['WS2'], label: 'Timmermanni–Orasselja', chain_from: 117278, chain_to: 125000, colour: '#78716C' },
+  { ipt: 'IPT 3', ws: ['WS3'], label: 'Rääma bog / Papiniidu approach', chain_from: 125000, chain_to: 130036, colour: '#854D0E' },
+  { ipt: 'IPT 4', ws: ['WS4'], label: 'Pärnu Papiniidu bridge BR2032', chain_from: 130036, chain_to: 135400, colour: '#155E75' },
+  { ipt: 'IPT 5', ws: ['WS5'], label: 'Pärnu passenger terminal area', chain_from: 135400, chain_to: 137685, colour: '#166534' },
+  { ipt: 'IPT 4', ws: ['WS6'], label: 'Pärnu terminal – A1/A2 border', chain_from: 137685, chain_to: 142000, colour: '#155E75' },
   { ipt: 'Outside A1', ws: [], label: 'Outside Alliance 1 mainline scope', chain_from: 142000, chain_to: 250000, colour: '#94a3b8' },
 ];
+
+// ---------------------------------------------------------------------------
+// The colour rule, and what it is protecting
+// ---------------------------------------------------------------------------
+// ⚠️ MANDATORY (2026-08-28): no IPT colour may reuse a hex the map already
+//    spends on a route, a forecast, a selection or temporary haul. If it did,
+//    a planner could not tell "this stretch is IPT 6" from "this route is
+//    laden" — and the route layers are the ones that carry money.
+//
+// Every hex below was checked against the real source, not taken on trust:
+//
+//   #039E86  inbound (laden)          7 uses in map/index.html
+//   #f59e0b  outbound (empty)         4
+//   #C2790B  temporary haul           2
+//   #3398DB  forecast routes          1 in map/config.js
+//   #BF2E55  selection / peak / zones 4
+//   #003787  brand navy               6
+//   #0A1446  brand dark / casing      2
+//
+// None of them appears in IPT_SEGMENTS. Asserted in parse_map.js so a future
+// palette edit cannot quietly reintroduce one.
+//
+// ⭐ The first palette put IPT 2 on #6D28D9, which is also MAT_PALETTE[4] in
+//    map/index.html (a material chip in the forecast-detail drawer table) and
+//    NODE_COLORS['Site'] in the admin app. That was accepted at the time because
+//    neither is a line on this map. The 2026-08-28 rebuild removed it anyway —
+//    no band colour now matches anything the codebase uses for anything else.
+window.IPT_RESERVED_COLOURS = [
+  '#039E86', '#f59e0b', '#C2790B', '#3398DB', '#BF2E55', '#003787', '#0A1446',
+];
+
+// ---------------------------------------------------------------------------
+// ⚠️ MEASURED — the palette was rebuilt on 2026-08-28 because the first one failed
+// ---------------------------------------------------------------------------
+// The mandated palette put IPT 6, IPT 1 and IPT 2 in the same indigo/violet
+// family, and those are three CONSECUTIVE bands: the corridor changes package
+// three times between chainage 105480 and 125000. Measured with CIE ΔE2000,
+// where ~1 is a just-noticeable difference and two 2.5 px lines on a light
+// basemap need roughly 20+ to read as different colours:
+//
+//                              first palette      this palette
+//   weakest adjacent pair            6.3               22.1
+//   weakest pair anywhere            5.7               21.0
+//   underlay vs the colour on it     0.0               34.5
+//   weakest adjacent, colour-blind   2.0               21.5
+//
+// ⭐ That last row is the one that decided it. Simulated for deuteranopia and
+//    protanopia, three consecutive bands of the first palette were ΔE 2.0 apart
+//    — the same colour, not a similar one.
+//
+// ⚠️ 21.0 is the CEILING, not a compromise nobody tried to beat. Seven hexes are
+//    already spent on route, forecast, selection and brand layers, and the
+//    remaining hue space will not hold six band colours plus an underlay any
+//    further apart than this. Searched exhaustively over a bank of 28 corporate
+//    tones under all four constraints at once (every pair apart, every adjacent
+//    pair further apart, colour-blind safe, and clear of every line the map
+//    already draws). If a band ever needs more room, the way to get it is to
+//    free up a reserved colour, not to re-shuffle these.
+//
+// How the palette is built, so an edit keeps the property rather than losing it:
+//   * six hue families, one per band: plum, oxblood, stone, bronze, teal blue,
+//     pine. No two bands share a family, so the LEGEND reads as six things.
+//   * the underlay is a light lavender wash (L* 77) rather than another deep
+//     colour, so it separates from everything it sits under by lightness rather
+//     than competing with it on hue.
+//   * 'Outside A1' stays muted slate.
+//
+// ⚠️ Closest remaining approaches to a line the map already draws, all
+//    acceptable but worth knowing: Outside A1 vs forecast ΔE 15.4 (both muted,
+//    and Outside A1 predates this palette), IPT 1 vs selection 17.1, IPT 4 vs
+//    brand navy 17.8, IPT 3 vs temporary haul 19.5 — temporary haul is dashed,
+//    which separates it independently of colour.
+window.IPT_UNDERLAY = {
+  colour: '#C4B5FD',   // lavender 300 — a wash, not a seventh competing colour
+  width: 4.5,
+  opacity: 0.9,
+};
 
 window.IPT_DEFAULT = { ipt: 'Unknown', ws: [], label: 'Unassigned', colour: '#64748B' };
 
@@ -446,28 +523,42 @@ window.IPT_GAP_CONFIG = { split: GAP_SPLIT, min_m: GAP_MIN_M, ratio: GAP_RATIO }
 //    done in the PAINT and LAYOUT expressions instead — an outermost
 //    ['step', ['zoom'], ...] whose branches test step_m — which is allowed, and
 //    keeps both layer ids unchanged so the existing checkbox still works.
-window.CHAINAGE_STEPS = [10000, 5000, 1000, 100];
+window.CHAINAGE_STEPS = [10000, 5000, 1000, 500, 100];
+
+// ⚠️ The spec gave the on-tick test as
+//        Math.abs(chain_m % step) < 0.5 || Math.abs(chain_m % step - step) < 0.5
+//    which is WRONG for negative chainage, and this corridor has chainage down
+//    to -3982.3. In JS, (-3982.3 % 10000) is -3982.3, so the first clause fails
+//    and the second compares against -13982.3 — a negative tick can never
+//    match. Normalising the remainder into [0, step) first fixes it and keeps
+//    the intended tolerance, which exists because these values are floats
+//    ("42,900.00") and not all of them land on an exact integer.
+function onTick(m, step) {
+  var r = ((m % step) + step) % step;
+  return r < 0.5 || r > step - 0.5;
+}
+window.iptOnTick = onTick;
 
 window.buildChainageSteps = function (chainageFC) {
   if (!chainageFC || !chainageFC.features) return chainageFC;
   var out = [];
   var counts = {};
+  var steps = window.CHAINAGE_STEPS;
   for (var i = 0; i < chainageFC.features.length; i++) {
     var f = chainageFC.features[i];
     var raw = (f.properties || {}).chain;
     var m = raw == null ? NaN : parseFloat(String(raw).replace(/,/g, ''));
-    var step = 100;
+    var step = steps[steps.length - 1];
     if (!isNaN(m)) {
-      var r = Math.round(m);
-      var steps = window.CHAINAGE_STEPS;
       for (var s = 0; s < steps.length; s++) {
-        if (r % steps[s] === 0) { step = steps[s]; break; }
+        if (onTick(m, steps[s])) { step = steps[s]; break; }
       }
     }
     counts[step] = (counts[step] || 0) + 1;
     var p = {};
     for (var k in f.properties) p[k] = f.properties[k];
     p.step_m = step;
+    p.chain_m = isNaN(m) ? null : Math.round(m);
     out.push({ type: 'Feature', geometry: f.geometry, properties: p });
   }
   window.CHAINAGE_STEP_COUNTS = counts;

@@ -274,23 +274,80 @@
         return CHAINAGE_STEPPED;
     }
 
-    // One row per unique IPT, from IPT_SEGMENTS. 'Outside A1' is shown muted rather
-    // than hidden — an unexplained grey line on the map reads as a bug.
+    // ===== Per-IPT selection ==============================================
+    // One checkbox per unique IPT, generated from IPT_SEGMENTS so the band table
+    // stays the only place a colour or a work section is written down.
+    //
+    // ⚠️ IPT 6 is NOT in the civil filter. It is the corridor-wide superstructure
+    //    UNDERLAY, and its checkbox controls that layer alone — unchecking it
+    //    leaves every civil colour exactly where it was, which is what the spec
+    //    asks for. Its civil band in the north (chainage -5000 to 105480) stays
+    //    drawn either way; with the underlay on it simply reads wider.
+    const IPT_UNDERLAY_KEY = 'IPT 6';
+
+    function iptCheckboxId(ipt) {
+        return 'ipt-on-' + ipt.replace(/[^A-Za-z0-9]+/g, '-');
+    }
+
+    // Which civil bands are ticked. IPT 6 is always in the set — see above.
+    function checkedIpts() {
+        const on = [IPT_UNDERLAY_KEY];
+        (window.iptLegendRows ? window.iptLegendRows() : []).forEach(r => {
+            if (r.ipt === IPT_UNDERLAY_KEY) return;
+            const el = document.getElementById(iptCheckboxId(r.ipt));
+            if (!el || el.checked) on.push(r.ipt);
+        });
+        return on;
+    }
+
+    // A Mapbox `filter` on the existing source — no GeoJSON is rebuilt when a
+    // box is ticked, which is why toggling is instant on 981 features.
+    function applyIptFilter() {
+        const on = ['literal', checkedIpts()];
+        if (map.getLayer('rail-alignment')) {
+            map.setFilter('rail-alignment', ['all',
+                ['!=', ['get', 'is_bridge'], true],
+                ['==', ['get', 'align_type'], 'Main Track'],
+                ['in', ['get', 'ipt'], on]]);
+        }
+        if (map.getLayer('rail-alignment-bridge')) {
+            map.setFilter('rail-alignment-bridge', ['all',
+                ['==', ['get', 'is_bridge'], true],
+                ['==', ['get', 'align_type'], 'Main Track'],
+                ['in', ['get', 'ipt'], on]]);
+        }
+    }
+
+    function toggleUnderlay(visible) {
+        toggleLayer('rail-alignment-underlay', visible);
+    }
+
+    // 'Outside A1' is shown muted rather than hidden — an unexplained grey line
+    // reads as a bug.
     function renderIptLegend() {
         const el = document.getElementById('ipt-legend');
         if (!el || !window.iptLegendRows) return;
-        el.innerHTML = window.iptLegendRows().map(r =>
-            `<div style="display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:1.5;${r.muted ? 'opacity:.65;' : ''}" title="${r.labels.join(' · ').replace(/"/g, '&quot;')}">`
-            + `<span style="flex:0 0 13px;height:3px;background:${r.colour};border-radius:0;"></span>`
-            + `<span style="color:#8a9099;"><b style="color:#5b6270;">${r.ipt}</b>${r.ws.length ? ' · ' + r.ws.join(', ') : ''}</span></div>`
-        ).join('');
+        el.innerHTML = window.iptLegendRows().map(r => {
+            const under = r.ipt === IPT_UNDERLAY_KEY;
+            const colour = under ? (window.IPT_UNDERLAY || {}).colour || r.colour : r.colour;
+            const label = under
+                ? `<b style="color:#5b6270;">${r.ipt}</b> · Superstructure (corridor underlay)`
+                : `<b style="color:#5b6270;">${r.ipt}</b>${r.ws.length ? ' · ' + r.ws.join(', ') : ''}`;
+            const handler = under ? 'toggleUnderlay(this.checked)' : 'applyIptFilter()';
+            return `<div style="display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:1.7;${r.muted ? 'opacity:.7;' : ''}" title="${r.labels.join(' · ').replace(/"/g, '&quot;')}">`
+                + `<input type="checkbox" id="${iptCheckboxId(r.ipt)}" checked onchange="${handler}" style="margin:0;">`
+                + `<span style="flex:0 0 14px;height:${under ? 4 : 3}px;background:${colour};border-radius:0;"></span>`
+                + `<span style="color:#8a9099;">${label}</span></div>`;
+        }).join('');
     }
 
-    // The IPT view is three things that must move together: the solid coloured track,
-    // the faint bridges across the gaps, and the legend that explains both.
     function toggleAlignment(visible) {
         toggleLayer('rail-alignment', visible);
         toggleLayer('rail-alignment-bridge', visible);
+        toggleLayer('rail-alignment-underlay', visible && (function () {
+            const el = document.getElementById(iptCheckboxId(IPT_UNDERLAY_KEY));
+            return !el || el.checked;
+        })());
         ['ipt-legend', 'ipt-legend-note'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.style.display = visible ? 'block' : 'none';
@@ -576,12 +633,14 @@
         });
 
         // ===== Alignment =====================================================
-        // Three layers over two sources, and the ADD ORDER IS THE Z-ORDER:
-        //   1. survey    — the untouched original, every track type, black hairline
-        //   2. bridges   — 30% opacity connectors across the cut gaps
-        //   3. IPT       — solid Main Track, coloured by works package
+        // Four layers over two sources, and the ADD ORDER IS THE Z-ORDER:
+        //   1.  survey   — the untouched original, every track type, black hairline
+        //   1b. underlay — IPT 6 superstructure, corridor-wide, wider, beneath
+        //   2.  bridges  — 30% opacity connectors across the cut gaps
+        //   3.  IPT      — solid Main Track, coloured by works package
         // Bridges under solid so a faint connector never washes over real track;
-        // survey under both so turning it on adds context rather than obscuring.
+        // underlay under both so the civil colour stays the primary read; survey
+        // under everything so turning it on adds context rather than obscuring.
 
         // 1. The alignment exactly as it was drawn before the IPT overlay. Same
         //    source data, no split, no gap cut — this is the layer to turn on to see
@@ -591,6 +650,30 @@
             'id': 'rail-alignment-survey', 'type': 'line', 'source': 'alignment-survey-source',
             'layout': { 'visibility': document.getElementById('layer-alignment-survey').checked ? 'visible' : 'none' },
             'paint': { 'line-color': '#000000', 'line-width': 1.5 },
+        });
+
+        // 1b. ⭐ IPT 6 superstructure UNDERLAY. Same Main Track path as the civil
+        //     layer, not a parallel offset: superstructure is delivered along the
+        //     whole A1 mainline, not only the northern band where IPT 6 is also
+        //     the civil owner. Wider and beneath, so where a civil package sits
+        //     on top you see its colour with the underlay showing at the edges.
+        //
+        //     ⚠️ Excluded: 'Outside A1' (by definition not in A1 scope) and the
+        //     gap bridges (a 4.5 px solid line across 5.7 km of country with no
+        //     surveyed track is exactly what the 30% bridges were built to avoid).
+        //     So the underlay has the same holes the solid track does — honest,
+        //     and the faint civil bridges still carry the corridor across them.
+        map.addLayer({
+            'id': 'rail-alignment-underlay', 'type': 'line', 'source': 'alignment-source',
+            'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' },
+            'filter': ['all', ['!=', ['get', 'is_bridge'], true],
+                              ['==', ['get', 'align_type'], 'Main Track'],
+                              ['!=', ['get', 'ipt'], 'Outside A1']],
+            'paint': {
+                'line-color': (window.IPT_UNDERLAY || {}).colour || '#5B21B6',
+                'line-width': (window.IPT_UNDERLAY || {}).width || 4.5,
+                'line-opacity': (window.IPT_UNDERLAY || {}).opacity || 0.9,
+            },
         });
 
         // 2. Gap bridges: solid, not dashed, at 30% opacity in the band's own colour.
@@ -630,18 +713,31 @@
         });
         // ===== Chainage, zoom-synced ==========================================
         // 2,180 markers every ~94 m was a grey smear at corridor zoom. Each point
-        // now carries a step_m tier (10 km / 5 km / 1 km / 100 m) and the map draws
-        // only the coarse ones until you zoom in: 24 ticks at corridor zoom, all
-        // 2,180 by zoom 13.5.
+        // carries a step_m tier and the map draws only the coarse ones until you
+        // zoom in. The 2026-08-28 ladder:
+        //
+        //   zoom      circles          labels
+        //   < 9       10 km   (24)     none
+        //   9 – 11     5 km   (45)     10 km
+        //   11 – 13    1 km  (218)      5 km
+        //   13 – 15  500 m   (436)      1 km
+        //   >= 15    100 m (2,180)    500 m
+        //
+        // ⚠️ Labels stop at the 500 m tier even at maximum zoom. Labelling all
+        //    2,180 would put a number every 94 m along the line, which is the
+        //    same smear this ladder exists to remove — just made of text.
         //
         // ⚠️ Mapbox GL cannot use ['zoom'] inside a layer `filter`, so the tiering
-        //    lives in the paint/layout expressions — an outermost ['step', ['zoom']]
-        //    whose branches test step_m, which IS allowed. Radius 0 hides a circle;
-        //    an empty text-field removes a label from collision entirely, which
-        //    'text-opacity': 0 would not.
+        //    lives in the paint/layout expressions — an outermost
+        //    ['step', ['zoom'], ...] whose branches test step_m, which IS allowed.
+        //    Radius 0 hides a circle; an EMPTY text-field removes a label from
+        //    collision entirely, which 'text-opacity': 0 would not.
         //
-        // Both layer ids are unchanged, so the existing checkbox still targets them.
+        // Both layer ids are unchanged, so the existing checkbox still works, and
+        // the toggle is off by default — chainage is a reference tool, not part of
+        // the default read.
         const CH_TIER = (lo) => ['case', ['>=', ['get', 'step_m'], lo], 2.6, 0];
+        const CH_LBL = (lo) => ['case', ['>=', ['get', 'step_m'], lo], ['get', 'chaintxt'], ''];
         map.addLayer({
             'id': 'chainage-global', 'type': 'circle', 'source': 'chainage-source',
             'layout': { 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none' },
@@ -650,10 +746,11 @@
                 'circle-stroke-width': 1,
                 'circle-stroke-color': '#333',
                 'circle-radius': ['step', ['zoom'],
-                    CH_TIER(10000),        // corridor view: 10 km ticks only (24 of them)
-                    10, CH_TIER(5000),     // 45 points
-                    12, CH_TIER(1000),     // 218 points
-                    13.5, 3,               // everything
+                    CH_TIER(10000),
+                    9, CH_TIER(5000),
+                    11, CH_TIER(1000),
+                    13, CH_TIER(500),
+                    15, 3,
                 ],
             },
         });
@@ -662,11 +759,11 @@
             'layout': {
                 'visibility': document.getElementById('layer-chainage').checked ? 'visible' : 'none',
                 'text-field': ['step', ['zoom'],
-                    '',                                                                   // < 10: no labels at all
-                    10, ['case', ['>=', ['get', 'step_m'], 10000], ['get', 'chaintxt'], ''],
-                    12, ['case', ['>=', ['get', 'step_m'], 5000], ['get', 'chaintxt'], ''],
-                    13.5, ['case', ['>=', ['get', 'step_m'], 1000], ['get', 'chaintxt'], ''],
-                    15, ['get', 'chaintxt'],
+                    '',
+                    9, CH_LBL(10000),
+                    11, CH_LBL(5000),
+                    13, CH_LBL(1000),
+                    15, CH_LBL(500),
                 ],
                 'text-size': 10,
                 'text-offset': [0, 1.2],
@@ -679,6 +776,7 @@
         applyFilters();
         setupHoverEvents();
         renderIptLegend();
+        applyIptFilter();
         setupAlignmentPopup();
         // zones ride on style.load like everything else, so a basemap switch re-adds them
         if (ZONES.loaded) ensureZoneLayers(); else loadZones();
