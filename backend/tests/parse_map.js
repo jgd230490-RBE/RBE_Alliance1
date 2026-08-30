@@ -267,25 +267,37 @@ ok("it draws at ONE width, not two",
 ok("the old two-width case expression is gone",
   !/\['case',\s*\['==',\s*\['get',\s*'align_type'\],\s*'Main Track'\],\s*2\.5,\s*1\.2\]/.test(code));
 
-// Gap bridges — REMOVED 2026-08-30 at the user's request
-// ⚠️ These assertions are reversed rather than deleted. The point they were making
-// — that a gap must not be silently invented, and must not be silently hidden
-// either — still holds; it is now enforced from the other side. The geometry cut
-// itself is untouched.
-ok("⭐ the bridge layer is gone", !code.includes("'id': 'rail-alignment-bridge'"));
-ok("and nothing still tries to toggle or filter it",
-  !/toggleLayer\('rail-alignment-bridge'/.test(code) &&
-  !/setFilter\('rail-alignment-bridge'/.test(code));
-ok("⭐ but the GEOMETRY CUT survives — the 239.5 km of phantom straights stay out",
+// Gap connectors — SOLID since 2026-08-30
+// ⚠️ These assertions have now been reversed twice: bridges at 30%, then removed,
+// now restored at full opacity. Each turn is kept rather than rewritten, because
+// the thing being protected never changed — a gap must not be silently invented
+// AND must not be silently hidden. What moved is WHERE that honesty lives, and it
+// now lives only in the popup.
+ok("the connector layer exists again", code.includes("'id': 'rail-alignment-bridge'"));
+ok("it carries only the connectors",
+  /'id': 'rail-alignment-bridge'[\s\S]{0,400}\['==', \['get', 'is_bridge'\], true\]/.test(code));
+ok("⭐ drawn SOLID — no opacity, no dash — so the corridor reads as one line",
+  !/'id': 'rail-alignment-bridge'[\s\S]{0,700}line-opacity/.test(code) &&
+  !/'id': 'rail-alignment-bridge'[\s\S]{0,700}line-dasharray/.test(code));
+ok("at the same width and colour as real track",
+  /'id': 'rail-alignment-bridge'[\s\S]{0,700}'line-width': 2\.5/.test(code) &&
+  /'id': 'rail-alignment-bridge'[\s\S]{0,600}\['get', 'ipt_colour'\]/.test(code));
+ok("⭐ the trade is written down: the map now draws railway the survey does not cover",
+  /drawing railway on ground the survey does not cover/.test(src));
+ok("⭐ and the popup is named as the ONLY place the distinction survives",
+  /only place the distinction now\s*\/\/\s*exists|only place the distinction/.test(src));
+ok("⭐ the GEOMETRY CUT still survives — the 239.5 km of phantom straights stay out",
   /var GAP_SPLIT = true/.test(iptSrc));
-ok("and the builder still emits the is_bridge flag, so nothing downstream breaks",
-  /p\.is_bridge = /.test(iptSrc));
-ok("the civil layer still excludes bridges, guarding a future reinstatement",
-  /'id': 'rail-alignment',[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
-ok("⭐ the CONSEQUENCE is written down — the corridor reads dashed again",
-  /reads DASHED again/.test(src) && /open question H2/.test(src));
-ok("and the legend says a break is data, not a rendering fault",
-  /not a rendering fault/.test(html));
+ok("the connectors follow the per-IPT checkboxes like the solid track",
+  (code.match(/\['in', \['get', 'ipt'\], on\]/g) || []).length === 2);
+ok("and the IPT toggle hides them",
+  /function toggleAlignment[\s\S]{0,400}toggleLayer\('rail-alignment-bridge', visible\)/.test(code));
+ok("⭐ the underlay now bridges the gaps too, or it would be dashed under a "
+   + "solid line",
+  !/'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
+ok("the reason for that is recorded", /dashed wash under a continuous line/.test(src));
+ok("the legend tells the reader to click rather than to look",
+  /click the line to check/.test(html));
 
 // Survey layer
 ok("the original continuous alignment survives as its own layer",
@@ -316,8 +328,8 @@ ok("the reason for that order is written down next to it",
 // the three parts of the IPT view move together
 ok("toggling the IPT view hides both legend blocks",
   /function toggleAlignment[\s\S]{0,500}'ipt-legend-note'/.test(code));
-ok("the legend explains what a fainter segment means",
-  /id="ipt-legend-note"/.test(html) && /no surveyed Main Track in the alignment file/.test(html));
+ok("the legend note still exists and points at the popup",
+  /id="ipt-legend-note"/.test(html) && /no surveyed alignment beneath them/.test(html));
 
 // clicking a bridge must explain itself
 ok("⭐ the boundary ticks answer a click too — a mark with no line under it is "
@@ -396,8 +408,7 @@ ok("its colour, width and opacity are one tunable object, not three literals",
 ok("⭐ it runs the whole A1 mainline, not just the northern IPT 6 civil band — "
    + "so it is filtered by align_type and scope, never by chainage",
   /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'ipt'\], 'Outside A1'\]/.test(code));
-ok("⭐ and it still excludes anything flagged is_bridge",
-  /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
+
 
 // --- per-IPT selection ---------------------------------------------------------
 ok("the legend rows are checkboxes now",
@@ -408,8 +419,7 @@ ok("ticking one re-filters rather than rebuilding the GeoJSON",
   code.includes("function applyIptFilter") && !/applyIptFilter[\s\S]{0,600}buildIptAlignment/.test(code));
 ok("the filter is a membership test on ipt",
   /\['in', \['get', 'ipt'\], on\]/.test(code));
-ok("the civil filter is applied in exactly one place now the bridges are gone",
-  (code.match(/\['in', \['get', 'ipt'\], on\]/g) || []).length === 1);
+
 ok("⭐ the IPT 6 checkbox drives the UNDERLAY, not the civil filter",
   /toggleUnderlay\(this\.checked\)/.test(code) &&
   /function toggleUnderlay[\s\S]{0,140}rail-alignment-underlay/.test(code));
@@ -578,6 +588,18 @@ ok("the popup names the IPT and the owning work section",
   code.includes("Work section:") && code.includes("p.ipt_label"));
 ok("⭐ it shows the OWNING section, not every code on that ground",
   code.includes("p.ws_primary") && /also on this ground/.test(code));
+ok("⭐ and DERIVES the owning section when the feature does not carry it, rather "
+   + "than reporting 'none'",
+  /if \(!wsCode && !outside\)/.test(code) && /window\.IPT_SEGMENTS \|\| \[\]\)\.find/.test(code));
+ok("⭐ 'no work section' is only said for Outside A1 — every other empty value is "
+   + "a missing stamp, which is a different sentence",
+  /const outside = p\.ipt === 'Outside A1'/.test(code) &&
+  /not recorded/.test(code));
+ok("and that case points at the version banner rather than inventing an answer",
+  /out of step, see the sidebar/.test(code));
+ok("⭐ a connector says there is no surveyed alignment under it",
+  code.includes("No surveyed alignment here.") &&
+  /nothing is measured or routed on it/.test(code));
 ok("with its official name, not just the code",
   /wsName/.test(code) && /window\.wsLabel/.test(iptSrc));
 ok("⭐ chainage reads as an engineer writes it — 105+480, not 105.48 km",
