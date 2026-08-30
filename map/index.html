@@ -149,7 +149,7 @@
              colours are defined. -->
         <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" style="background:linear-gradient(90deg,#039E86,#003787,#0E7490,#C6841D,#BF2E55); border-radius:0; width:13px; height:3px;"></span></div>
         <div id="ipt-legend" style="padding-left:23px;margin:-2px 0 4px;"></div>
-        <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Breaks in the line = no surveyed Main Track in the alignment file, not a rendering fault.</div>
+        <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Some stretches have no surveyed alignment beneath them — click the line to check.</div>
         <div class="control-item"><label><input type="checkbox" id="layer-ws-bounds" checked onchange="toggleWsBounds(this.checked)"> Work section boundaries</label><span class="color-dot" style="background:#334155; border-radius:0; width:3px; height:13px;"></span></div>
         <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">7 package edges · ticks from zoom 11, labels from 13</span></div>
         <!-- The alignment as it was drawn before the IPT overlay: every track type, one
@@ -254,7 +254,7 @@
     // still the polish build, which showed as IPT 6 stuck green, bridges still
     // present, and a "Work section boundaries" checkbox that toggled nothing.
     // One cause, three symptoms, and nothing in the console to say so.
-    const IPT_INDEX_VERSION = 'v6';
+    const IPT_INDEX_VERSION = 'v7';
     function checkOverlayVersion() {
         const got = window.IPT_SEGMENTS_VERSION;
         if (got === IPT_INDEX_VERSION) return true;
@@ -356,6 +356,12 @@
                 ['==', ['get', 'align_type'], 'Main Track'],
                 ['in', ['get', 'ipt'], on]]);
         }
+        if (map.getLayer('rail-alignment-bridge')) {
+            map.setFilter('rail-alignment-bridge', ['all',
+                ['==', ['get', 'is_bridge'], true],
+                ['==', ['get', 'align_type'], 'Main Track'],
+                ['in', ['get', 'ipt'], on]]);
+        }
     }
 
     function toggleUnderlay(visible) {
@@ -383,6 +389,7 @@
 
     function toggleAlignment(visible) {
         toggleLayer('rail-alignment', visible);
+        toggleLayer('rail-alignment-bridge', visible);
         toggleLayer('rail-alignment-underlay', visible && (function () {
             const el = document.getElementById(iptCheckboxId(IPT_UNDERLAY_KEY));
             return !el || el.checked;
@@ -706,8 +713,10 @@
         map.addLayer({
             'id': 'rail-alignment-underlay', 'type': 'line', 'source': 'alignment-source',
             'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' },
-            'filter': ['all', ['!=', ['get', 'is_bridge'], true],
-                              ['==', ['get', 'align_type'], 'Main Track'],
+            // ⚠️ Bridges are INCLUDED here since 2026-08-30. With the civil line
+            // solid across the gaps, an underlay that skipped them would show as a
+            // dashed wash under a continuous line — which looks like a fault.
+            'filter': ['all', ['==', ['get', 'align_type'], 'Main Track'],
                               ['!=', ['get', 'ipt'], 'Outside A1']],
             'paint': {
                 'line-color': (window.IPT_UNDERLAY || {}).colour || '#5B21B6',
@@ -716,26 +725,36 @@
             },
         });
 
-        // 2. ⚠️ THE GAP BRIDGES ARE GONE (user decision, 2026-08-30).
+        // 2. Gap connectors — SOLID, at full opacity, in the band's own colour.
         //
-        //    A 30%-opacity connector was drawn across each cut gap so the corridor
-        //    read continuously. Removed at the user's request: they did not want a
-        //    transparent line on the map.
+        //    Where the alignment file has no surveyed Main Track, the corridor is
+        //    bridged so the line reads continuously. Drawn identically to real
+        //    track: same width, same colour, no transparency.
         //
-        //    ⚠️ CONSEQUENCE, since the opposite was argued for two days earlier:
-        //    the corridor now reads DASHED again. 31 stretches over 300 m have no
-        //    Main Track geometry — about 60 km in total, the largest 7.0 km — and
-        //    every one of them is now a visible break. That is the truth of the
-        //    data (open question H2) but it will look like missing rendering.
+        //    ⚠️ SAY THIS OUT LOUD, because it is the trade being made: the map is
+        //    now drawing railway on ground the survey does not cover, and nothing
+        //    on the line itself distinguishes the two. That was a deliberate
+        //    decision (2026-08-30) — the alternative was 60 km of visible breaks,
+        //    which read as a rendering fault.
         //
-        //    ⭐ What was kept is the INFORMATION, which is what the bridges were
-        //    really carrying: the three package boundaries that fall in a hole say
-        //    so on their own label and in their popup. Nothing is asserted about
-        //    ground the survey does not cover; it is simply named.
+        //    ⭐ The honesty lives in the POPUP instead. Click any stretch and it
+        //    says whether there is surveyed alignment beneath it and, if not, why
+        //    the line is still drawn. That is the only place the distinction now
+        //    exists, so it must not be removed from there.
         //
-        //    The geometry cut itself is UNCHANGED — GAP_SPLIT still removes the
-        //    239.5 km of phantom straights, which is a separate and much older
-        //    decision. Do not undo that to make the line look continuous again.
+        //    The geometry cut is UNCHANGED: GAP_SPLIT still removes 239.5 km of
+        //    phantom straights from the underlying data. These connectors are
+        //    separate features, flagged is_bridge, and are presentation only.
+        map.addLayer({
+            'id': 'rail-alignment-bridge', 'type': 'line', 'source': 'alignment-source',
+            'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' },
+            'filter': ['all', ['==', ['get', 'is_bridge'], true],
+                              ['==', ['get', 'align_type'], 'Main Track']],
+            'paint': {
+                'line-color': ['coalesce', ['get', 'ipt_colour'], '#64748B'],
+                'line-width': 2.5,
+            },
+        });
 
         // 3. The IPT layer proper. `coalesce` keeps it drawable if ipt_segments.js
         //    failed to load — it falls back to neutral slate rather than to nothing.
@@ -911,7 +930,10 @@
         // The alignment answers the click. The bridge layer it used to share this
         // handler with was removed on 2026-08-30 — the gaps are now simply absent,
         // and what is said about them moved to the boundary ticks.
-        ['rail-alignment'].forEach(lId => {
+        // Both layers answer the click, and the connectors matter MORE: they are
+        // the ones drawn over ground the survey does not cover, so they are where
+        // an explanation is owed.
+        ['rail-alignment', 'rail-alignment-bridge'].forEach(lId => {
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
             map.on('click', lId, (e) => {
@@ -925,7 +947,30 @@
                 // in p.ws are point assets — a station, a halt, a depot — sitting on
                 // the same ground without owning it, so naming them here would say
                 // something the scope diagram does not.
-                const wsCode = p.ws_primary || '';
+                // ⭐ DERIVE it if the feature does not carry it.
+                //
+                // Two bugs met here on 2026-08-30. Clicking IPT 6 reported "Work
+                // section: none — outside A1 mainline scope" and then listed WS7–WS11
+                // underneath, which is self-contradicting nonsense.
+                //
+                //  1. The data file was older than the one index.html expected, so
+                //     ws_primary was never stamped. The version banner now catches
+                //     that, but the popup should not depend on it: the owning section
+                //     is derivable from the band table, which is in this same file.
+                //  2. Empty ws_primary was being READ as "outside A1". It is not —
+                //     Outside A1 is one specific band, and every other empty value
+                //     means the stamp is missing, which is a different sentence.
+                const bridge = p.is_bridge === true || p.is_bridge === 'true';
+                const outside = p.ipt === 'Outside A1';
+                let wsCode = p.ws_primary || '';
+                if (!wsCode && !outside) {
+                    const band = (window.IPT_SEGMENTS || []).find(b =>
+                        b.ipt === p.ipt &&
+                        (p.chain_from_m == null ||
+                         (p.chain_from_m >= b.chain_from && p.chain_from_m < b.chain_to)));
+                    wsCode = (band && band.ws_primary) ||
+                             (String(p.ws || '').split(',').filter(Boolean)[0] || '');
+                }
                 const wsName = p.ws_name || (window.wsLabel ? window.wsLabel(wsCode) : '');
                 const wsMeta = (window.WS_NAMES || {})[wsCode] || {};
                 // the underlay note is conditional on the underlay actually being on
@@ -944,8 +989,10 @@
                         + `<b>${p.ipt || 'Unknown'}</b></div>`
                         + `<div style="color:#475569;margin-bottom:5px;">${p.ipt_label || 'Unassigned'}</div>`
                         + (wsCode
-                            ? `<div><b>Work section:</b> ${wsCode} — ${wsName}</div>`
-                            : `<div><b>Work section:</b> none — outside A1 mainline scope</div>`)
+                            ? `<div><b>Work section:</b> ${wsCode}${wsName ? ' — ' + wsName : ''}</div>`
+                            : outside
+                                ? `<div><b>Work section:</b> none — outside A1 mainline scope</div>`
+                                : `<div><b>Work section:</b> <span style="color:#b91c1c;">not recorded</span> — the overlay files are out of step, see the sidebar</div>`)
                         + (ws.length > 1
                             ? `<div style="font-size:11px;color:#64748b;">also on this ground: `
                               + `${ws.filter(w => w !== wsCode).join(', ')}</div>`
@@ -1001,6 +1048,12 @@
                               + `${p.track_gap_m} m away — this boundary falls in one of the gaps in `
                               + `the alignment file, so there is no line to mark. The chainage is right; `
                               + `the survey data is short.</div>`
+                            : '')
+                        + (bridge
+                            ? `<div style="margin-top:6px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`
+                              + `<b>No surveyed alignment here.</b> The alignment file has no Main Track `
+                              + `geometry across this stretch. The line is drawn so the corridor reads `
+                              + `continuously — it is reference only, and nothing is measured or routed on it.</div>`
                             : '')
                         + (p.provisional === true || p.provisional === 'true'
                             ? `<div style="margin-top:6px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`

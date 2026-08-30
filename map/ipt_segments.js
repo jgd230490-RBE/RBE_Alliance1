@@ -63,7 +63,7 @@
 // So the two halves now announce their version to each other. A mismatch prints
 // a console error AND puts a red line in the sidebar, because a silent
 // half-upgrade costs more to diagnose than it does to prevent.
-window.IPT_SEGMENTS_VERSION = 'v6';
+window.IPT_SEGMENTS_VERSION = 'v7';
 
 // --- The bands -------------------------------------------------------------
 // Contiguous by construction: each chain_to is the next chain_from. Asserted
