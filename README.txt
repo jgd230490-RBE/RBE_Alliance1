@@ -1,94 +1,80 @@
-rbe-ipt-overlay-v6.zip — the three reported faults, and a guard so they cannot recur
-2026-08-30. Extract over the repo root.
+rbe-ipt-overlay-v7.zip — solid line everywhere, and the work-section popup fixed
+2026-08-30. Extract over the repo root. SUPERSEDES every earlier overlay zip
+except rbe-ipt-overlay.zip itself, which you still apply first.
 
-SUPERSEDES the polish zip, v3, v4 and v5.
-
-*** EXTRACT BOTH FILES. That is the whole of fault (1) and (3). ***
+*** BOTH FILES. Console check after loading /map/:  window.IPT_SEGMENTS_VERSION
+    should return "v7". Anything else means one file did not get replaced. ***
 
 FILES (4, all replacements)
-  map/ipt_segments.js                version stamp, no_surveyed_track flag
-  map/index.html                     version handshake, bridges removed, font fix
-  backend/tests/parse_map.js         250 assertions
+  map/ipt_segments.js
+  map/index.html
+  backend/tests/parse_map.js         257 assertions
   backend/tests/test_ipt_overlay.js  140 assertions
-  Full suite 1,235 assertions, 0 failed.
+  Full suite 1,242 assertions, 0 failed.
 
 =====================================================================
-DIAGNOSIS - your three symptoms are ONE cause
+1. THE LINE IS SOLID EVERYWHERE NOW
 =====================================================================
-  "IPT 6 green underlay still exists"
-  "the transparent line is still there"
-  "work section ticks/labels haven't worked, only the filter appears"
+The connectors across the unsurveyed stretches are back, drawn at FULL opacity,
+same width and same band colour as real track. The corridor reads as one
+continuous line whether or not the survey covers it.
 
-map/index.html was at v5 and map/ipt_segments.js was still the POLISH build.
+The notice stayed where you asked for it: click any stretch and the popup says
+whether there is surveyed alignment beneath it, and if not, that the line is
+reference only and nothing is measured or routed on it.
 
-Every delivery ships both files and they are a matched pair. Update one without
-the other and the map does not error - it half-works, silently:
+** The trade, stated once so it is on the record: the map now draws railway on
+   ground the survey does not cover, and nothing on the line itself
+   distinguishes the two. ** That is a deliberate choice - the alternative was
+   60 km of visible breaks that read as a rendering fault. It does mean the
+   popup is the ONLY place the distinction survives, so it must not be removed
+   from there.
 
-  - IPT 6 green      -> the polish build still had the ORIGINAL palette. v4
-                        made IPT 6 plum #86198F and the underlay lavender.
-  - transparent line -> gap bridges came in the polish build. v5 still had them.
-  - WS checkbox with -> v5's index.html draws the tick layers and adds the
-    nothing behind it    checkbox, but they read window.buildWsBoundaries, which
-                         only exists from v5's ipt_segments.js. Missing function
-                         -> empty FeatureCollection -> a toggle over nothing.
+The underlying geometry cut is UNCHANGED. GAP_SPLIT still strips 239.5 km of
+phantom straight lines out of the data; these connectors are separate features
+flagged is_bridge, and they are presentation only. Nothing measures them.
 
-VERIFY IN ONE LINE. Open /map/, then in the browser console:
-
-    window.IPT_SEGMENTS_VERSION
-
-  "v6"       -> the data file is current
-  "v5"/older -> that file did not get replaced
-  undefined  -> it is older than v5
-
-From v6 the two halves check each other on load. A mismatch prints a console
-error AND puts a red line in the sidebar naming which file is stale. This class
-of confusion should not cost you a debugging session again.
+The IPT 6 underlay now bridges the gaps too - otherwise it would have shown as
+a dashed wash beneath a solid line, which looks like a fault.
 
 =====================================================================
-(2) THE TRANSPARENT LINE IS GONE - and what replaced the message
+2. THE WORK SECTION POPUP - a real bug, and I wrote it
 =====================================================================
-The 30%-opacity gap bridges are removed.
+You saw, on IPT 6:
 
-** CONSEQUENCE, and I argued the opposite two days ago, so it is only fair to
-   say it plainly: the corridor now reads DASHED again. ** 31 stretches over
-300 m have no Main Track geometry in alignment.js - about 60 km in total, the
-largest 7.0 km. Every one is now a visible break in the line.
+    Work section: none - outside A1 mainline scope
+    also on this ground: WS7, WS8, WS9, WS10, WS11
 
-What was KEPT is the information, which is what the bridges were really for:
+That is self-contradicting and it was two faults meeting:
 
-  - The three package boundaries that fall in a hole now say so ON THEIR LABEL:
-    "WS1 | WS2 / 117+278 / no surveyed alignment here".
-  - Those ticks are drawn in a lighter grey, so the caveat is visible before you
-    read anything.
-  - Clicking a tick gives the full explanation and the measured distance to the
-    nearest drawn track (1,377 m at 117+278; 708 m at 142+000; 448 m at 135+400).
-  - The sidebar note now reads "Breaks in the line = no surveyed Main Track in
-    the alignment file, not a rendering fault."
+  (a) The data file on the deployment was older than the one index.html
+      expected, so ws_primary was never stamped on the features. The version
+      banner added in v6 catches that now.
 
-The flag is MEASURED at build time from the real geometry, not hard-coded, so a
-better alignment file changes the answer instead of leaving a stale warning.
+  (b) ** My popup read "no ws_primary" as "outside A1". It is not. ** Outside A1
+      is one specific band at the far end of the corridor; every other empty
+      value means the stamp is missing, which is a completely different
+      sentence. That was my error, not a consequence of (a).
 
-** THE GEOMETRY CUT IS UNCHANGED. ** GAP_SPLIT still removes the 239.5 km of
-phantom straight lines. That is a separate and older decision - do not undo it to
-make the line look continuous again, or the map goes back to drawing 45 km of
-railway that does not exist.
+Both fixed:
 
-=====================================================================
-(3) A SECOND REASON THE TICKS MIGHT NOT HAVE DRAWN - now removed
-=====================================================================
-The v5 tick layer specified 'text-font': ['Open Sans Bold', 'Arial Unicode MS
-Bold']. It was the ONLY symbol layer on this map with an explicit font, and a
-fontstack the style cannot serve makes a symbol layer render NOTHING, silently.
-Removed - it now inherits the style default like every other label here.
+  - The popup now DERIVES the owning work section from the band table when the
+    feature does not carry it. The band table is in the same file as the popup
+    code, so this works even against an older data file - it no longer depends
+    on the two being in step.
+  - "none - outside A1 mainline scope" is now said ONLY for the Outside A1 band.
+    A genuinely missing stamp says "not recorded" in red and points at the
+    version banner, rather than inventing a confident wrong answer.
 
-So even on a correctly matched pair, v5's ticks may not have drawn. Both causes
-are fixed; if they still do not appear, tell me and I will take the next step
-rather than guess again.
+On IPT 6 you should now see:
+    Work section: WS7 - Superstructure
+    also on this ground: WS8, WS9, WS10, WS11
 
 TO ACTION
   Nothing by hand. No data file touched.
 
 STILL UNVERIFIED
-  No browser here. Check: ticks perpendicular and not clipped; labels not
-  colliding at zoom 13-14; the three lighter ticks legible; no red version
-  warning in the sidebar.
+  No browser here. Worth checking: the corridor reads continuous end to end;
+  clicking an unsurveyed stretch gives the amber notice; IPT 6 reports WS7; the
+  seven boundary ticks appear from zoom 11 with labels from 13; no red version
+  banner in the sidebar.
