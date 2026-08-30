@@ -69,6 +69,10 @@ TENANTED = {
     "work_sections",
     "zones",
     "route_haul_roads",
+    # Phase 5a. Added in the same delivery as the table — test_tenant_registry below
+    # fails if db.py creates a table this set does not name, which is the mechanism
+    # that stops a new table shipping with no isolation.
+    "location_gates",
 }
 
 # Tables that are deliberately NOT tenanted, with the reason. Anything here is

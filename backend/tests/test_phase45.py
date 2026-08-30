@@ -142,6 +142,7 @@ def reset_db():
     db.init_network_db()
     db.init_taxonomy_db()
     db.init_zones_db()
+    db.init_gates_db()     # Phase 5a
     db.init_tenant()
 
 
@@ -191,7 +192,10 @@ A, B = "acme", "beta"
 # =========================================================================== #
 reset_db()
 
-ok("db.py names the tenanted tables in one place", len(db.TENANTED_TABLES) == 11,
+# 11 at Phase 4.5, 12 from Phase 5a's location_gates. Pinned to an exact number on
+# purpose: a table added to db.py without being registered here and in
+# test_tenant_audit.py ships with the column present and the isolation absent.
+ok("db.py names the tenanted tables in one place", len(db.TENANTED_TABLES) == 12,
    f"got {len(db.TENANTED_TABLES)}")
 
 for t in sorted(db.TENANTED_TABLES):

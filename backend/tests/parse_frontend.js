@@ -269,6 +269,49 @@ ok("a route with no hits says so explicitly rather than rendering nothing",
 ok("expired records are declared as excluded, not silently dropped",
   code.includes("expired_or_future_excluded"));
 
+// ---- Phase 5a: gates, and the turnaround split -------------------------------
+ok("the gate editor is present on the Locations panel",
+  code.includes("saveGate") && code.includes("gateForm"));
+ok("gates are only offered once a location exists — a gate needs a location_id",
+  src.includes("Gates can be added once the location has been created"));
+ok("a gate can be placed by clicking the map, like every other point in this app",
+  code.includes("placeGateAt") && code.includes("gatePlaceRef"));
+ok("gate placement is a separate click mode from node placement",
+  code.includes("gatePlaceRef.current") && code.includes('modeRef.current === "add"'));
+ok("leaving the Locations tab abandons a half-placed gate",
+  src.includes('if(subTab !== "locations") setGatePlace(false)'));
+ok("the three directions are offered by their meaning, not by their column value",
+  src.includes("Entry only") && src.includes("Exit only") && src.includes("In and out"));
+ok("induction time is editable per gate (B3)", code.includes("safety_minutes"));
+ok("the flat gate-to-face allowance is editable per gate (B5)",
+  code.includes("internal_travel_minutes"));
+ok("the UI says the flat allowance is IGNORED where a haul road is drawn — B5(c)",
+  src.includes("ignored") && src.includes("counting both would inflate every"));
+ok("a deactivated gate is shown as deactivated rather than just missing",
+  src.includes("deactivated"));
+
+ok("routes can select a gate at each end", code.includes("RouteGates")
+  && code.includes("origin_gate_id") && code.includes("dest_gate_id"));
+ok("'no explicit choice' is an offered option, not an empty select",
+  src.includes("Default for this site"));
+ok("B2: a blocked route says so on the collapsed row, not only when expanded",
+  src.includes("gate blocked") && code.includes("r.gate_blockers"));
+ok("and the blocker text names what is wrong",
+  src.includes("This route will not bake"));
+ok("changing a gate warns that the cached geometry is now stale",
+  src.includes("cached geometry now points at the old gate"));
+
+ok("the turnaround cell reads the backend's total, never its own sum",
+  code.includes("r.turnaround_hr") && !code.includes("load_minutes + r.unload_minutes"));
+ok("the turnaround breakdown comes from the backend's parts",
+  code.includes("r.turnaround_parts"));
+ok("the tooltip explains a drawn-road cycle rather than hiding the missing allowance",
+  src.includes("not a flat allowance"));
+ok("the 125% lesson is recorded where the total is displayed",
+  src.includes("125%"));
+ok("the factors panel no longer calls its load+unload figure 'turnaround'",
+  !code.includes("v.turnaround_hr") && code.includes("v.unloading_hr"));
+
 // ---- report ------------------------------------------------------------------
 console.log();
 for (const f of fail) console.log("  FAIL:", f);

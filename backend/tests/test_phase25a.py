@@ -147,6 +147,7 @@ def reset_db():
         os.remove(db._SQLITE_PATH)
     db.init_network_db()
     db.init_zones_db()
+    db.init_gates_db()     # Phase 5a
 
 
 # =========================================================================== #

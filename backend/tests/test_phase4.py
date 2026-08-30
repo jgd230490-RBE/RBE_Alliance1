@@ -138,6 +138,7 @@ def reset_db():
         os.remove(db._SQLITE_PATH)
     db.init_network_db()
     db.init_zones_db()
+    db.init_gates_db()     # Phase 5a
 
 
 def cols(table):
@@ -208,6 +209,7 @@ ok("zones_applied survived the Phase 4 migration", "zones_applied" in gc)
 
 # the migration must be re-runnable: Render runs it on every boot
 db.init_zones_db()
+db.init_gates_db()     # Phase 5a
 db.init_network_db()
 ok("re-running the migrations is idempotent",
    "route_haul_roads" in tables() and "haul_km" in cols("route_geometry"))

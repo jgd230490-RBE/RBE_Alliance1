@@ -128,6 +128,7 @@ def reset_db():
         os.remove(db._SQLITE_PATH)
     db.init_network_db()
     db.init_zones_db()
+    db.init_gates_db()     # Phase 5a
 
 
 def cols(table):
@@ -195,6 +196,7 @@ ok("the route_geometry key is untouched by Phase 3",
 
 # migration must be idempotent: init runs on every boot
 db.init_zones_db()
+db.init_gates_db()     # Phase 5a
 db.init_network_db()
 ok("init_zones_db is idempotent", "zones" in tables())
 ok("the zones_applied migration is idempotent", "zones_applied" in cols("route_geometry"))
