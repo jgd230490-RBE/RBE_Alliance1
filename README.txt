@@ -1,71 +1,86 @@
-rbe-ipt-polish.zip — IPT overlay visual polish
+rbe-ipt-overlay-v4.zip — palette rebuilt on measurement
 2026-08-28. Extract over the repo root.
 
-APPLY AFTER rbe-ipt-overlay.zip. It replaces two of that zip's four files.
-No file overlap with rbe-phase45-tenant.zip; order between the two does not matter.
+SUPERSEDES rbe-ipt-polish.zip AND rbe-ipt-overlay-v3.zip. Same four files, later
+versions. Apply AFTER rbe-ipt-overlay.zip. No overlap with rbe-phase45-tenant.zip.
 
-FILES (4, all replacements — nothing new, nothing to delete)
-  map/ipt_segments.js               gap bridges + chainage step tiers
-  map/index.html                    three alignment layers, zoom-synced chainage
-  backend/tests/parse_map.js        126 -> 165 assertions
-  backend/tests/test_ipt_overlay.js  57 -> 81 assertions
+ONLY the palette changed from v3. The band splitter, gap bridges, IPT 6 underlay,
+per-IPT checkboxes, survey layer and chainage ladder are all as delivered in v3.
 
-WHAT CHANGED
-  1. Gap bridges. Every edge the gap splitter cuts is now KEPT as a separate
-     feature, flagged is_bridge, drawn solid at 30% opacity in the band's own
-     colour. The geometry cut is unchanged - GAP_SPLIT still removes the phantom
-     straights from the solid track. Solid 407.2 km + bridge 239.5 km = 646.7 km,
-     which is the source file exactly. Nothing invented, nothing lost.
+FILES (4, all replacements)
+  map/ipt_segments.js
+  map/index.html                     (untouched from v3 - included so the zip is whole)
+  backend/tests/parse_map.js         206 -> 212 assertions
+  backend/tests/test_ipt_overlay.js   93 assertions
 
-     A bridge can be 45 km long, longer than five of the seven IPT bands, so
-     bridges are densified every 200 m and band-split like everything else. 272
-     cut edges produce 279 bridge features because seven of them cross a band
-     boundary and change colour.
+=====================================================================
+WHY THE PALETTE WAS REBUILT
+=====================================================================
+You said the colours were too similar, especially the ones next to each other.
+Measured with CIE dE2000 (~1 = a just-noticeable difference; two 2.5px lines on a
+light basemap need roughly 20+ to read as different colours):
 
-  2. IPT layer is Main Track ONLY, at ONE width (2.5 px). Side tracks,
-     crossovers and 1520 mm were 471 of the 531 source features and clustered at
-     stations, turning every node into a blob of package colour. They are still
-     in the data and the survey layer draws them.
+                              as specified     rebuilt
+  weakest adjacent pair             6.3          22.1
+  weakest pair anywhere             5.7          21.0
+  underlay vs the colour on it      0.0          34.5
+  weakest adjacent, colour-blind    2.0          21.5
 
-  3. New layer: "Alignment (survey, continuous)". The original presentation -
-     raw alignment_data, every track type, black 1.5 px, nothing cut. Its own
-     source so the IPT cuts cannot reach it, its own checkbox, OFF by default.
+That last row decided it. Simulated for deuteranopia and protanopia, three
+CONSECUTIVE bands of the first palette were dE 2.0 apart - the same colour, not
+a similar one. And the underlay was dE 0.0 from IPT 6 because they were the same
+hex, so it could never show beneath the band it was supposed to sit under.
 
-     ADD ORDER IS Z-ORDER: survey, then bridges, then solid IPT track.
+I also under-reported this the first time. My earlier note said dE 10.7 and 17.2
+using CIE76; dE2000 is the better model and gives 6.3 and 6.4. Five of the seven
+adjacent pairs were too close, not two.
 
-  4. Chainage markers are zoom-synced. Each point carries a step_m tier and the
-     map draws 24 markers at corridor zoom instead of 2,180 - a 99% reduction -
-     densifying to 45 at zoom 10, 218 at zoom 12, all 2,180 at 13.5. Labels are
-     off entirely below zoom 10.
+THE REBUILT PALETTE
 
-     Mapbox GL cannot use ['zoom'] inside a layer filter, so the tiering is in
-     the paint/layout expressions instead. Both layer ids are unchanged, so the
-     existing checkbox still works.
+  IPT 6       #86198F  plum          L* 33
+  IPT 1       #7F1D1D  oxblood       L* 28
+  IPT 2       #78716C  stone         L* 48
+  IPT 3       #854D0E  bronze        L* 38
+  IPT 4       #155E75  teal blue     L* 37
+  IPT 5       #166534  pine green    L* 37
+  Outside A1  #94a3b8  slate         L* 66   (unchanged)
+  underlay    #C4B5FD  lavender      L* 77   (a light wash, not a 7th deep colour)
 
-  5. Clicking a bridge explains itself: "No surveyed track here." Someone
-     looking at a fainter line needs an answer more than someone looking at a
-     solid one.
+Six different hue families, one per band, so the LEGEND reads as six things
+rather than two purples and two greens. The underlay separates by LIGHTNESS
+rather than competing on hue - that is what lets it show beneath a dark band.
+
+Muted engineering tones throughout: no neon, nothing brighter than the route
+layers, and it still reads as an infrastructure map rather than a chart.
+
+** 21.0 IS THE CEILING, NOT A COMPROMISE NOBODY TRIED TO BEAT. **
+Seven hexes are already spent on inbound, outbound, temporary haul, forecast,
+selection, brand navy and brand dark. Searched exhaustively over a bank of 28
+corporate tones against all four constraints at once - every pair apart, every
+adjacent pair further apart, colour-blind safe, and clear of every line the map
+already draws. Nothing scores higher. If a band ever needs more separation than
+this, the way to get it is to free up a reserved colour, not to re-shuffle these.
+
+ALSO FIXED: the #6D28D9 collision is gone, not just documented. No band colour
+now matches anything the codebase uses for anything else.
+
+CLOSEST REMAINING APPROACHES - acceptable, but worth knowing
+  Outside A1 vs forecast          dE 15.4   both muted; Outside A1 predates this
+  IPT 1      vs selection/zone    dE 17.1
+  IPT 4      vs brand navy        dE 17.8   navy draws node markers, not lines
+  IPT 3      vs temporary haul    dE 19.5   temp haul is DASHED, which separates
+                                            it independently of colour
 
 TO ACTION
-  Nothing by hand. No data file is touched; factors.json is not included.
+  Nothing by hand. No data file touched.
 
 UNVERIFIED
-  No browser in this sandbox, so Mapbox rendering, the legend's appearance and
-  the zoom transitions are unrun. A PNG rendered from the built GeoJSON without
-  Mapbox was delivered with this zip; it is as close as the sandbox gets.
-
-  Worth a look on the live map: IPT 1 navy (#003787) and IPT 3 slate (#475569)
-  are close in tone, as are IPT 6 (#039E86) and IPT 2 (#0E7490). They are never
-  adjacent along the corridor so it reads fine in the preview, but if they are
-  hard to tell apart on the real basemap the colours are yours to change - one
-  line each in window.IPT_SEGMENTS.
-
-STILL OPEN (unchanged)
-  - WS2/WS3 global bound at 125000 is approximate. Refine after the visual check.
-  - ~60 km of Main Track missing from alignment.js - whose file is it?
-  - Two multi-km single-edge Main Track features - real, or placeholders?
+  No browser in this sandbox. The delivered PNG is built from the real GeoJSON
+  without Mapbox, showing chainage 93-146 km where the corridor changes package
+  six times - old palette left, rebuilt right. Judge it on the real basemap;
+  every colour is one line in window.IPT_SEGMENTS.
 
 TESTS
-  node backend/tests/parse_map.js          165 passed
-  node backend/tests/test_ipt_overlay.js    81 passed
-  Full suite 1,091 assertions, 0 failed.
+  node backend/tests/parse_map.js         212 passed
+  node backend/tests/test_ipt_overlay.js   93 passed
+  Full suite 1,150 assertions, 0 failed.
