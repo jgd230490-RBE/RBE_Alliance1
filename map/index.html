@@ -150,6 +150,8 @@
         <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" style="background:linear-gradient(90deg,#039E86,#003787,#0E7490,#C6841D,#BF2E55); border-radius:0; width:13px; height:3px;"></span></div>
         <div id="ipt-legend" style="padding-left:23px;margin:-2px 0 4px;"></div>
         <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Fainter segments = no surveyed Main Track in the alignment file.</div>
+        <div class="control-item"><label><input type="checkbox" id="layer-ws-bounds" checked onchange="toggleWsBounds(this.checked)"> Work section boundaries</label><span class="color-dot" style="background:#334155; border-radius:0; width:3px; height:13px;"></span></div>
+        <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">7 package edges · ticks from zoom 11, labels from 13</span></div>
         <!-- The alignment as it was drawn before the IPT overlay: every track type, one
              dark line, nothing cut. Kept as its own layer because the IPT view answers
              "which package" and this one answers "where is the railway" — and the gap
@@ -272,6 +274,24 @@
             ? window.buildChainageSteps(chainage_global_data)
             : chainage_global_data;
         return CHAINAGE_STEPPED;
+    }
+
+    // The seven work-section boundary ticks. Same treatment as the other two builds:
+    // computed once, held, so a basemap switch re-adds the same object.
+    let WS_BOUNDS = null;
+    function wsBoundaryData() {
+        if (WS_BOUNDS) return WS_BOUNDS;
+        WS_BOUNDS = window.buildWsBoundaries
+            ? window.buildWsBoundaries(chainage_global_data)
+            : { type: 'FeatureCollection', features: [] };
+        return WS_BOUNDS;
+    }
+
+    // Ticks and their labels move together — a label with no tick is a number
+    // floating beside the railway with nothing to attach it to.
+    function toggleWsBounds(visible) {
+        toggleLayer('ws-boundary-ticks', visible);
+        toggleLayer('ws-boundary-labels', visible);
     }
 
     // ===== Per-IPT selection ==============================================
@@ -491,6 +511,7 @@
         // bridges cannot affect what this draws
         if (!map.getSource('alignment-survey-source')) map.addSource('alignment-survey-source', { type: 'geojson', data: alignment_data });
         if (!map.getSource('chainage-source')) map.addSource('chainage-source', { type: 'geojson', data: chainageStepData() });
+        if (!map.getSource('ws-boundary-source')) map.addSource('ws-boundary-source', { type: 'geojson', data: wsBoundaryData() });
 
         // --- PROFESSIONAL MAPBOX STYLING (Corporate Palette + Highway Offsets) ---
 
@@ -711,6 +732,62 @@
                 'line-width': 2.5,
             },
         });
+        // ===== Work section boundary ticks ====================================
+        // Seven package edges, drawn as a short mark ACROSS the alignment. Added
+        // after the alignment layers so a tick is never buried under the line it
+        // marks, and before chainage so a 100 m dot never sits on top of a tick.
+        //
+        // ⚠️ A SYMBOL layer, not a line. A tick has to be a constant size on
+        //    SCREEN: a fixed ground length would be one pixel at corridor zoom
+        //    and half the viewport at zoom 16. A rotated glyph with
+        //    text-rotation-alignment 'map' turns with the map and stays the same
+        //    size, which is what a tick mark is.
+        //
+        // ⚠️ tick_rotate is the local bearing PLUS 90, so the mark lies across the
+        //    railway rather than along it. The bearing is measured from the
+        //    chainage markers either side of the boundary — see the comment in
+        //    buildWsBoundaries() for the bug that cost three of the seven ticks.
+        //
+        // The colour is neutral slate on purpose: a tick is not a package and not
+        // a route, and giving it either palette would make it look like one.
+        map.addLayer({
+            'id': 'ws-boundary-ticks', 'type': 'symbol', 'source': 'ws-boundary-source',
+            'minzoom': 11,
+            'layout': {
+                'visibility': document.getElementById('layer-ws-bounds').checked ? 'visible' : 'none',
+                'text-field': '|',
+                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+                'text-size': ['interpolate', ['linear'], ['zoom'], 11, 18, 16, 30],
+                'text-rotate': ['get', 'tick_rotate'],
+                'text-rotation-alignment': 'map',
+                'text-allow-overlap': true,   // only seven, and they never collide
+                'text-ignore-placement': true,
+            },
+            'paint': {
+                'text-color': '#334155',
+                'text-halo-color': '#ffffff',
+                'text-halo-width': 1.6,
+            },
+        });
+        map.addLayer({
+            'id': 'ws-boundary-labels', 'type': 'symbol', 'source': 'ws-boundary-source',
+            'minzoom': 13,
+            'layout': {
+                'visibility': document.getElementById('layer-ws-bounds').checked ? 'visible' : 'none',
+                'text-field': ['concat', ['get', 'label'], '\n', ['get', 'chain_txt']],
+                'text-size': 10.5,
+                'text-offset': [0, -1.6],
+                'text-anchor': 'bottom',
+                'text-allow-overlap': false,
+                'text-padding': 4,
+            },
+            'paint': {
+                'text-color': '#334155',
+                'text-halo-color': '#ffffff',
+                'text-halo-width': 2,
+            },
+        });
+
         // ===== Chainage, zoom-synced ==========================================
         // 2,180 markers every ~94 m was a grey smear at corridor zoom. Each point
         // carries a step_m tier and the map draws only the coarse ones until you
@@ -803,9 +880,26 @@
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
             map.on('click', lId, (e) => {
                 const p = (e.features && e.features[0] && e.features[0].properties) || {};
-                const km = (v) => (v == null || v === '') ? '–' : (Number(v) / 1000).toFixed(3).replace(/\.?0+$/, '') + ' km';
+                // 105480 -> "105+480", which is how the chainage is written on every
+                // drawing this will be read next to
+                const ch = (v) => (v == null || v === '') ? '–'
+                    : (window.chainText ? window.chainText(Number(v)) : String(v));
                 const ws = p.ws ? String(p.ws).split(',').filter(Boolean) : [];
                 const bridge = p.is_bridge === true || p.is_bridge === 'true';
+                // ⭐ The work section that OWNS this chainage band. The other codes
+                // in p.ws are point assets — a station, a halt, a depot — sitting on
+                // the same ground without owning it, so naming them here would say
+                // something the scope diagram does not.
+                const wsCode = p.ws_primary || '';
+                const wsName = p.ws_name || (window.wsLabel ? window.wsLabel(wsCode) : '');
+                const wsMeta = (window.WS_NAMES || {})[wsCode] || {};
+                // the underlay note is conditional on the underlay actually being on
+                const undBox = document.getElementById(iptCheckboxId(IPT_UNDERLAY_KEY));
+                const undOn = (!undBox || undBox.checked) &&
+                              document.getElementById('layer-alignment').checked &&
+                              p.ipt !== 'Outside A1';
+                const provisional = /125000/.test((window.IPT_BOUNDS_PROVISIONAL || []).join(',')) &&
+                                    (wsCode === 'WS2' || wsCode === 'WS3');
                 new mapboxgl.Popup({ closeButton: true })
                     .setLngLat(e.lngLat)
                     .setHTML(
@@ -814,15 +908,33 @@
                         + `<span style="flex:0 0 14px;height:4px;background:${p.ipt_colour || '#64748B'};${bridge ? 'opacity:.35;' : ''}"></span>`
                         + `<b>${p.ipt || 'Unknown'}</b></div>`
                         + `<div style="color:#475569;margin-bottom:5px;">${p.ipt_label || 'Unassigned'}</div>`
-                        + (ws.length ? `<div><b>Work sections:</b> ${ws.join(', ')}</div>` : '')
+                        + (wsCode
+                            ? `<div><b>Work section:</b> ${wsCode} — ${wsName}</div>`
+                            : `<div><b>Work section:</b> none — outside A1 mainline scope</div>`)
+                        + (ws.length > 1
+                            ? `<div style="font-size:11px;color:#64748b;">also on this ground: `
+                              + `${ws.filter(w => w !== wsCode).join(', ')}</div>`
+                            : '')
                         + `<div><b>Track:</b> ${p.align_type || '–'}</div>`
-                        + `<div><b>Chainage:</b> ${km(p.chain_from_m)} – ${km(p.chain_to_m)}</div>`
+                        + `<div><b>Chainage:</b> ${ch(p.chain_from_m)} – ${ch(p.chain_to_m)}</div>`
+                        + (undOn
+                            ? `<div style="margin-top:5px;padding:4px 7px;border-left:3px solid ${(window.IPT_UNDERLAY || {}).colour || '#C4B5FD'};font-size:11.5px;color:#475569;">`
+                              + `IPT 6 superstructure applies on this stretch (underlay).</div>`
+                            : '')
+                        + (provisional
+                            ? `<div style="margin-top:5px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`
+                              + `<b>Provisional boundary.</b> The WS2/WS3 edge at 125+000 is approximate `
+                              + `and awaits the design drawings.</div>`
+                            : '')
+                        + (wsMeta.note
+                            ? `<div style="margin-top:5px;font-size:10.5px;color:#8a9099;">⚠ ${wsMeta.note}.</div>`
+                            : '')
                         + (bridge
                             ? `<div style="margin-top:6px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`
                               + `<b>No surveyed track here.</b> The alignment file has no Main Track geometry across this stretch. `
                               + `The connector is drawn so the corridor reads continuously; it is not measured or routed on.</div>`
                             : '')
-                        + `<div style="margin-top:6px;font-size:10.5px;color:#8a9099;">Reference geometry. Band boundaries from the scope diagram; WS2/WS3 at 125 km is provisional.</div>`
+                        + `<div style="margin-top:6px;font-size:10.5px;color:#8a9099;">Reference geometry. Band boundaries from the scope diagram.</div>`
                         + `</div>`
                     )
                     .addTo(map);

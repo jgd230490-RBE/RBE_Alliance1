@@ -52,14 +52,14 @@
 // in backend/tests/parse_map.js — a gap would leave unpainted track and an
 // overlap would make the first-match scan silently win.
 window.IPT_SEGMENTS = [
-  { ipt: 'IPT 6', ws: ['WS7', 'WS8', 'WS9', 'WS10', 'WS11'], label: 'Superstructure / Ülemiste / Soodevahe', chain_from: -5000, chain_to: 105480, colour: '#86198F' },
-  { ipt: 'IPT 1', ws: ['WS1', 'WS12', 'WS13'], label: 'Tootsi–Timmermanni / local stops', chain_from: 105480, chain_to: 117278, colour: '#7F1D1D' },
-  { ipt: 'IPT 2', ws: ['WS2'], label: 'Timmermanni–Orasselja', chain_from: 117278, chain_to: 125000, colour: '#78716C' },
-  { ipt: 'IPT 3', ws: ['WS3'], label: 'Rääma bog / Papiniidu approach', chain_from: 125000, chain_to: 130036, colour: '#854D0E' },
-  { ipt: 'IPT 4', ws: ['WS4'], label: 'Pärnu Papiniidu bridge BR2032', chain_from: 130036, chain_to: 135400, colour: '#155E75' },
-  { ipt: 'IPT 5', ws: ['WS5'], label: 'Pärnu passenger terminal area', chain_from: 135400, chain_to: 137685, colour: '#166534' },
-  { ipt: 'IPT 4', ws: ['WS6'], label: 'Pärnu terminal – A1/A2 border', chain_from: 137685, chain_to: 142000, colour: '#155E75' },
-  { ipt: 'Outside A1', ws: [], label: 'Outside Alliance 1 mainline scope', chain_from: 142000, chain_to: 250000, colour: '#94a3b8' },
+  { ipt: 'IPT 6', ws: ['WS7', 'WS8', 'WS9', 'WS10', 'WS11'], label: 'Superstructure / Ülemiste / Soodevahe', ws_primary: 'WS7', chain_from: -5000, chain_to: 105480, colour: '#86198F' },
+  { ipt: 'IPT 1', ws: ['WS1', 'WS12'], label: 'Tootsi–Timmermanni / local stops', ws_primary: 'WS1', chain_from: 105480, chain_to: 117278, colour: '#7F1D1D' },
+  { ipt: 'IPT 2', ws: ['WS2', 'WS13'], label: 'Timmermanni–Orasselja', ws_primary: 'WS2', chain_from: 117278, chain_to: 125000, colour: '#78716C' },
+  { ipt: 'IPT 3', ws: ['WS3'], label: 'Rääma bog / Papiniidu approach', ws_primary: 'WS3', chain_from: 125000, chain_to: 130036, colour: '#854D0E' },
+  { ipt: 'IPT 4', ws: ['WS4'], label: 'Pärnu Papiniidu bridge BR2032', ws_primary: 'WS4', chain_from: 130036, chain_to: 135400, colour: '#155E75' },
+  { ipt: 'IPT 5', ws: ['WS5'], label: 'Pärnu passenger terminal area', ws_primary: 'WS5', chain_from: 135400, chain_to: 137685, colour: '#166534' },
+  { ipt: 'IPT 4', ws: ['WS6'], label: 'Pärnu terminal – A1/A2 border', ws_primary: 'WS6', chain_from: 137685, chain_to: 142000, colour: '#155E75' },
+  { ipt: 'Outside A1', ws: [], label: 'Outside Alliance 1 mainline scope', ws_primary: null, chain_from: 142000, chain_to: 250000, colour: '#94a3b8' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -137,6 +137,69 @@ window.IPT_UNDERLAY = {
   colour: '#C4B5FD',   // lavender 300 — a wash, not a seventh competing colour
   width: 4.5,
   opacity: 0.9,
+};
+
+// ---------------------------------------------------------------------------
+// Work sections — official names, and where they are DISPUTED
+// ---------------------------------------------------------------------------
+// ⚠️ The names below came from the IPT Matrix. `claude/roadmap.md` marks that
+//    document "second-hand AI output, superseded", and `claude/scope-diagram.md`
+//    — derived from the real Appendix E scope diagram — corrects it. Where the
+//    two disagree, the DIAGRAM wins here, and the disagreement is recorded on
+//    the row rather than silently resolved.
+//
+// ⭐ Two corrections were applied on 2026-08-30, and the first was already
+//    shipped wrong:
+//
+//    * WS13 (Urge halt) belongs to **IPT 2**, not IPT 1. `ipt-matrix.md` lists
+//      "WS 13 (Urge) → IPT 1" in its own table of KNOWN ERRORS, and the diagram
+//      shows the ITP 2 band directly beneath Urge. The first overlay delivery
+//      inherited the error and IPT 1's legend row has been reading
+//      "WS1, WS12, WS13" ever since. Now WS1, WS12 — and WS2, WS13.
+//    * WS14 / WS15 ownership is **NOT settled**. The spec asserts IPT 6; the
+//      scope diagram draws NO IPT band beneath them, and "Which IPT owns
+//      WS 14 & 15?" is open question A3.2. Marked provisional, not asserted.
+//
+// ⚠️ Also unmodelled: the diagram subdivides WS7 into **WS 7.1–7.4** along the
+//    alignment. This overlay carries a single WS7, so the popup says WS7 for the
+//    whole northern band. That is a simplification, not a finding.
+window.WS_NAMES = {
+  WS1:  { name: 'Tootsi – Timmermanni',            ipt: 'IPT 1' },
+  WS2:  { name: 'Timmermanni to Orasselja',        ipt: 'IPT 2' },
+  WS3:  { name: 'Timmermanni to Papiniidu',        ipt: 'IPT 3',
+          note: 'the scope diagram labels this stretch "Rääma bog"' },
+  WS4:  { name: 'Pärnu Papiniidu bridge BR2032',   ipt: 'IPT 4' },
+  WS5:  { name: 'Pärnu passenger terminal area',   ipt: 'IPT 5' },
+  WS6:  { name: 'Pärnu terminal to A1/A2 border',  ipt: 'IPT 4' },
+  WS7:  { name: 'Superstructure',                  ipt: 'IPT 6',
+          note: 'the scope diagram subdivides this into WS 7.1–7.4' },
+  WS8:  { name: 'Ülemiste Terminal',               ipt: 'IPT 6' },
+  WS9:  { name: 'Rolling Stock Depot',             ipt: 'IPT 6' },
+  WS10: { name: 'Soodevahe construction base',     ipt: 'IPT 6' },
+  WS11: { name: 'Soodevahe IMF',                   ipt: 'IPT 6' },
+  WS12: { name: 'Tootsi local stop',               ipt: 'IPT 1' },
+  WS13: { name: 'Urge halt',                       ipt: 'IPT 2',
+          note: 'the IPT Matrix says IPT 1; that is one of its own listed errors' },
+  WS14: { name: 'Pärnu Construction Base',         ipt: null, provisional: true,
+          note: 'no IPT band is drawn beneath it — open question A3.2' },
+  WS15: { name: 'Pärnu IMF',                       ipt: null, provisional: true,
+          note: 'no IPT band is drawn beneath it — open question A3.2' },
+};
+
+window.wsLabel = function (code) {
+  var w = (window.WS_NAMES || {})[code];
+  return w ? w.name : '';
+};
+
+// Chainage as a railway engineer writes it: 105480 -> "105+480".
+window.chainText = function (m) {
+  if (m == null || isNaN(m)) return '–';
+  var v = Math.round(m);
+  var sign = v < 0 ? '-' : '';
+  v = Math.abs(v);
+  var km = Math.floor(v / 1000);
+  var rem = v % 1000;
+  return sign + km + '+' + String(rem).padStart(3, '0');
 };
 
 window.IPT_DEFAULT = { ipt: 'Unknown', ws: [], label: 'Unassigned', colour: '#64748B' };
@@ -436,6 +499,13 @@ function segmentPart(coords, index, props, out, isBridge) {
       for (var key in props) p[key] = props[key];
       p.ipt = seg.ipt;
       p.ws = (seg.ws || []).join(',');
+      // ⭐ The band table's boundaries ARE the seven work-section boundaries, so
+      // every segment already falls inside exactly one WS band — no finer split
+      // is needed to stamp it. ws_primary is the MAINLINE section that owns this
+      // chainage; the other codes in `ws` are point assets (stations, halts,
+      // depots) that sit on the same ground without owning the band.
+      p.ws_primary = seg.ws_primary || '';
+      p.ws_name = seg.ws_primary ? window.wsLabel(seg.ws_primary) : '';
       p.ipt_label = seg.label;
       p.ipt_colour = seg.colour;
       p.chain_from_m = cs.length ? Math.round(Math.min.apply(null, cs)) : null;
@@ -562,6 +632,123 @@ window.buildChainageSteps = function (chainageFC) {
     out.push({ type: 'Feature', geometry: f.geometry, properties: p });
   }
   window.CHAINAGE_STEP_COUNTS = counts;
+  return { type: 'FeatureCollection', features: out };
+};
+
+// ---------------------------------------------------------------------------
+// Work-section boundary ticks
+// ---------------------------------------------------------------------------
+// Seven package edges, drawn as a short mark ACROSS the alignment. Not a second
+// coloured corridor and not a second chainage ladder: the chainage layer is a
+// 100 m grid of 2,180 points, this is seven lines that mean something.
+//
+// ⚠️ These are the SAME seven chainages the band table already cuts on. They are
+//    declared once, here, and asserted against IPT_SEGMENTS in
+//    backend/tests/test_ipt_overlay.js — a tick that drifts from the colour
+//    change it marks would be worse than no tick.
+//
+// ⚠️ 142000 is the A1/A2 border. The scope diagram says ~141+930, so the tick is
+//    about 70 m east of the drawn boundary. The band table has always used
+//    142000 and moving one without the other would put the tick off the colour
+//    change, so both stay at 142000 until the real figure is confirmed.
+//
+// ⚠️ NOT drawn: WS12, WS13, WS14, WS15. Those are point assets — a station, a
+//    halt and two Pärnu facilities — not mainline bands, and giving them ticks
+//    would assert edges the scope diagram does not draw. Nor is the Work_Sections
+//    figure "31+507": that is LOCAL chainage and this map is global throughout.
+window.WS_BOUNDARIES = [
+  { chain_m: 105480, from_ws: 'WS7', to_ws: 'WS1', from_ipt: 'IPT 6', to_ipt: 'IPT 1' },
+  { chain_m: 117278, from_ws: 'WS1', to_ws: 'WS2', from_ipt: 'IPT 1', to_ipt: 'IPT 2' },
+  { chain_m: 125000, from_ws: 'WS2', to_ws: 'WS3', from_ipt: 'IPT 2', to_ipt: 'IPT 3',
+    provisional: true },
+  { chain_m: 130036, from_ws: 'WS3', to_ws: 'WS4', from_ipt: 'IPT 3', to_ipt: 'IPT 4' },
+  { chain_m: 135400, from_ws: 'WS4', to_ws: 'WS5', from_ipt: 'IPT 4', to_ipt: 'IPT 5' },
+  { chain_m: 137685, from_ws: 'WS5', to_ws: 'WS6', from_ipt: 'IPT 5', to_ipt: 'IPT 4' },
+  { chain_m: 142000, from_ws: 'WS6', to_ws: null,  from_ipt: 'IPT 4', to_ipt: 'Outside A1',
+    note: 'A1/A2 border — the scope diagram says ~141+930' },
+];
+
+window.WS_TICK_COLOUR = '#334155';   // neutral slate: not a route, not a package
+
+function bearingBetween(a, b) {
+  var y = Math.sin((b[0] - a[0]) * Math.PI / 180) * Math.cos(b[1] * Math.PI / 180);
+  var x = Math.cos(a[1] * Math.PI / 180) * Math.sin(b[1] * Math.PI / 180) -
+          Math.sin(a[1] * Math.PI / 180) * Math.cos(b[1] * Math.PI / 180) *
+          Math.cos((b[0] - a[0]) * Math.PI / 180);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+// Points, not lines. The tick is drawn as a rotated glyph in a symbol layer so
+// it stays a constant SIZE ON SCREEN: a fixed ground length would be one pixel
+// at corridor zoom and half the viewport at zoom 16.
+window.buildWsBoundaries = function (chainageFC) {
+  if (!chainageFC || !chainageFC.features) return { type: 'FeatureCollection', features: [] };
+  var pts = [];
+  for (var i = 0; i < chainageFC.features.length; i++) {
+    var f = chainageFC.features[i];
+    var raw = (f.properties || {}).chain;
+    var m = raw == null ? NaN : parseFloat(String(raw).replace(/,/g, ''));
+    var c = f.geometry && f.geometry.coordinates;
+    if (isNaN(m) || !c) continue;
+    pts.push({ m: m, lon: c[0], lat: c[1] });
+  }
+  pts.sort(function (a, b) { return a.m - b.m; });
+
+  // de-duplicate: chainage.js has 121 repeated chainage values, and two markers
+  // sharing a value give a zero-length span and therefore no bearing
+  var uniq = [];
+  for (var u = 0; u < pts.length; u++) {
+    if (!uniq.length || pts[u].m > uniq[uniq.length - 1].m) uniq.push(pts[u]);
+  }
+
+  var out = [];
+  for (var k = 0; k < window.WS_BOUNDARIES.length; k++) {
+    var b = window.WS_BOUNDARIES[k];
+    if (uniq.length < 2) break;
+
+    // index of the first marker at or beyond the boundary
+    var hi = 0;
+    while (hi < uniq.length && uniq[hi].m < b.chain_m) hi++;
+    if (hi >= uniq.length) hi = uniq.length - 1;
+    var lo = Math.max(0, hi - 1);
+    if (lo === hi) hi = Math.min(uniq.length - 1, lo + 1);
+
+    // position: interpolate between the bracketing markers
+    var span = uniq[hi].m - uniq[lo].m;
+    var t = span > 0 ? Math.max(0, Math.min(1, (b.chain_m - uniq[lo].m) / span)) : 0;
+    var lon = uniq[lo].lon + (uniq[hi].lon - uniq[lo].lon) * t;
+    var lat = uniq[lo].lat + (uniq[hi].lat - uniq[lo].lat) * t;
+
+    // ⚠️ bearing comes from the markers EITHER SIDE of the boundary, widened by
+    // one where the boundary lands exactly on a marker. Taking it from the
+    // bracketing pair alone gave a zero-length span on an exact hit, and the
+    // first version then silently reused the PREVIOUS tick's bearing — three of
+    // the seven ticks were rotated to a different stretch of railway.
+    var bl = Math.max(0, lo - (t <= 0.001 ? 1 : 0));
+    var bh = Math.min(uniq.length - 1, hi + (t >= 0.999 ? 1 : 0));
+    if (bh <= bl) { bl = Math.max(0, bh - 1); }
+    var brg = bearingBetween([uniq[bl].lon, uniq[bl].lat], [uniq[bh].lon, uniq[bh].lat]);
+
+    out.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lon, lat] },
+      properties: {
+        chain_m: b.chain_m,
+        chain_txt: window.chainText(b.chain_m),
+        bearing: Math.round(brg * 10) / 10,
+        tick_rotate: Math.round(((brg + 90) % 360) * 10) / 10,
+        from_ws: b.from_ws || '',
+        to_ws: b.to_ws || '',
+        label: (b.from_ws || '—') + ' | ' + (b.to_ws || 'Outside A1'),
+        from_ipt: b.from_ipt || '',
+        to_ipt: b.to_ipt || '',
+        provisional: !!b.provisional,
+        note: b.note || '',
+        bearing_span_m: Math.round(uniq[bh].m - uniq[bl].m),
+      },
+    });
+  }
+  window.WS_BOUNDARY_STATS = { built: out.length, expected: window.WS_BOUNDARIES.length };
   return { type: 'FeatureCollection', features: out };
 };
 
