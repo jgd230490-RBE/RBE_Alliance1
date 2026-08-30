@@ -240,7 +240,18 @@ const IPTF = path.join(ROOT, "map", "ipt_segments.js");
 ok("map/ipt_segments.js exists", fs.existsSync(IPTF));
 const iptSrc = fs.existsSync(IPTF) ? fs.readFileSync(IPTF, "utf8") : "";
 
-ok("index.html loads it", /src=["']ipt_segments\.js["']/.test(html));
+ok("index.html loads it", /src=["']ipt_segments\.js(\?v=\d+)?["']/.test(html));
+// ⭐ A browser caches a .js far more stubbornly than it revalidates the .html that
+// loads it, so both files can be uploaded and the OLD one still run — which looks
+// exactly like forgetting to upload it, and cost a debugging round on 2026-08-30.
+ok("⭐ the data file is cache-busted, so a browser cannot serve a stale copy",
+  /src=["']ipt_segments\.js\?v=\d+["']/.test(html));
+ok("and the buster matches the version the page expects",
+  (html.match(/ipt_segments\.js\?v=(\d+)/) || [])[1] ===
+  (code.match(/IPT_INDEX_VERSION = 'v(\d+)'/) || [])[1],
+  `tag v${(html.match(/ipt_segments\.js\?v=(\d+)/) || [])[1]} vs page v${(code.match(/IPT_INDEX_VERSION = 'v(\d+)'/) || [])[1]}`);
+ok("the mismatch banner names the cache first, since that is the likelier cause",
+  /hard reload/i.test(code));
 ok("and loads it AFTER chainage.js, which it reads",
   html.indexOf('data/chainage.js') < html.indexOf('ipt_segments.js'));
 ok("it is a plain script tag, not a new CDN dependency",
@@ -395,6 +406,36 @@ ok("the first-cut greens and ambers are gone",
 ok("and so is the whole indigo/violet run that made three bands unreadable",
   !["#4338ca", "#6d28d9", "#5b21b6"].some(h => bandHexes.includes(h)));
 
+// --- the key must match the map ------------------------------------------------
+// ⚠️ Two ways the sidebar drifted from the map, both found 2026-08-30, both mine.
+ok("⭐ the alignment swatch is GENERATED from the band table, not written into "
+   + "the markup — a hard-coded gradient survived every palette change untouched",
+  /function renderIptSwatch/.test(code) && /id="ipt-swatch"/.test(html));
+ok("and the stale first-palette gradient is gone from the HTML",
+  !/linear-gradient\(90deg,#039E86/.test(html));
+// ⚠️ Scoped to the IPT controls ONLY. The reserved hexes appear all over the
+// sidebar legitimately — inbound teal beside "Laden (out)", brand navy beside
+// "Sites & assets" — and that is those layers labelling THEMSELVES. The fault was
+// a reserved colour standing in for an IPT.
+const iptControl = (html.match(/id="layer-alignment"[\s\S]{0,600}?id="ipt-legend"/) || [""])[0];
+ok("⭐ no route / forecast / selection colour is written into the IPT controls",
+  !RESERVED.some(r => new RegExp(r, "i").test(iptControl)),
+  RESERVED.filter(r => new RegExp(r, "i").test(iptControl)).join(", "));
+ok("and the IPT swatch carries no inline colour at all — JS fills it from the "
+   + "band table, so there is nothing to go stale",
+  /id="ipt-swatch"[^>]*style="[^"]*"/.test(html) &&
+  !/id="ipt-swatch"[^>]*style="[^"]*background:\s*#/.test(html));
+ok("⭐ IPT 6 gets TWO legend rows — the band and the underlay are different "
+   + "things and were sharing one row with the wrong colour",
+  /if \(r\.ipt !== IPT_UNDERLAY_KEY\) return band;/.test(code));
+ok("the band row uses the BAND colour", /colour: r\.colour, muted: r\.muted/.test(code));
+ok("and the underlay row uses the underlay colour",
+  /colour: \(window\.IPT_UNDERLAY \|\| \{\}\)\.colour/.test(code));
+ok("the band row has no checkbox, because that band is always drawn",
+  /box: r\.ipt === IPT_UNDERLAY_KEY \? null : iptCheckboxId\(r\.ipt\)/.test(code));
+ok("and the reason is written down rather than left looking like an oversight",
+  /IPT 6 gets TWO rows/.test(src));
+
 // --- IPT 6 superstructure underlay --------------------------------------------
 ok("there is an underlay layer", code.includes("'id': 'rail-alignment-underlay'"));
 ok("⭐ it is added AFTER survey and BEFORE the civil track, so the package "
@@ -411,8 +452,8 @@ ok("⭐ it runs the whole A1 mainline, not just the northern IPT 6 civil band �
 
 
 // --- per-IPT selection ---------------------------------------------------------
-ok("the legend rows are checkboxes now",
-  /input type="checkbox" id="\$\{iptCheckboxId/.test(code));
+ok("the legend rows are checkboxes",
+  /input type="checkbox" id="\$\{opts\.box\}"/.test(code));
 ok("still generated from IPT_SEGMENTS, not hand-typed",
   code.includes("window.iptLegendRows()"));
 ok("ticking one re-filters rather than rebuilding the GeoJSON",
@@ -429,7 +470,7 @@ ok("⭐ and unchecking it leaves every civil colour where it was — IPT 6 is "
 ok("the reason that asymmetry exists is written down",
   /IPT 6 is NOT in the civil filter/.test(src));
 ok("all boxes start ticked",
-  /type="checkbox" id="\$\{iptCheckboxId\(r\.ipt\)\}" checked/.test(code));
+  /id="\$\{opts\.box\}" checked/.test(code));
 ok("a missing checkbox is treated as ticked, so the filter cannot blank the map "
    + "if the legend failed to render",
   /!el \|\| el\.checked/.test(code));
