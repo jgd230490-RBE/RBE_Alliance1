@@ -267,18 +267,25 @@ ok("it draws at ONE width, not two",
 ok("the old two-width case expression is gone",
   !/\['case',\s*\['==',\s*\['get',\s*'align_type'\],\s*'Main Track'\],\s*2\.5,\s*1\.2\]/.test(code));
 
-// Gap bridges
-ok("there is a bridge layer", code.includes("'id': 'rail-alignment-bridge'"));
-ok("it carries only bridges",
-  /'id': 'rail-alignment-bridge'[\s\S]{0,400}\['==',\s*\['get',\s*'is_bridge'\],\s*true\]/.test(code));
-ok("⭐ drawn at 30% opacity",
-  /'id': 'rail-alignment-bridge'[\s\S]{0,700}'line-opacity':\s*0\.3/.test(code));
-ok("⭐ SOLID, not dashed — a dash reads as a style, a fade reads as less certain",
-  !/'id': 'rail-alignment-bridge'[\s\S]{0,700}line-dasharray/.test(code));
-ok("in the band's own colour, not a neutral grey",
-  /'id': 'rail-alignment-bridge'[\s\S]{0,600}\['get',\s*'ipt_colour'\]/.test(code));
-ok("at the same width as the solid track, so the corridor reads continuous",
-  /'id': 'rail-alignment-bridge'[\s\S]{0,700}'line-width':\s*2\.5/.test(code));
+// Gap bridges — REMOVED 2026-08-30 at the user's request
+// ⚠️ These assertions are reversed rather than deleted. The point they were making
+// — that a gap must not be silently invented, and must not be silently hidden
+// either — still holds; it is now enforced from the other side. The geometry cut
+// itself is untouched.
+ok("⭐ the bridge layer is gone", !code.includes("'id': 'rail-alignment-bridge'"));
+ok("and nothing still tries to toggle or filter it",
+  !/toggleLayer\('rail-alignment-bridge'/.test(code) &&
+  !/setFilter\('rail-alignment-bridge'/.test(code));
+ok("⭐ but the GEOMETRY CUT survives — the 239.5 km of phantom straights stay out",
+  /var GAP_SPLIT = true/.test(iptSrc));
+ok("and the builder still emits the is_bridge flag, so nothing downstream breaks",
+  /p\.is_bridge = /.test(iptSrc));
+ok("the civil layer still excludes bridges, guarding a future reinstatement",
+  /'id': 'rail-alignment',[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
+ok("⭐ the CONSEQUENCE is written down — the corridor reads dashed again",
+  /reads DASHED again/.test(src) && /open question H2/.test(src));
+ok("and the legend says a break is data, not a rendering fault",
+  /not a rendering fault/.test(html));
 
 // Survey layer
 ok("the original continuous alignment survives as its own layer",
@@ -299,28 +306,30 @@ ok("while the IPT layer IS on by default",
   /id="layer-alignment"[^>]*\schecked[\s>]/.test(htmlNoHandlers));
 
 // ⭐ add order is z-order in this file: survey under bridges under solid track
-ok("⭐ the survey layer is added first, so it sits under both IPT layers",
-  code.indexOf("'id': 'rail-alignment-survey'") < code.indexOf("'id': 'rail-alignment-bridge'"));
-ok("⭐ and bridges are added before solid track, so a faint connector never "
-   + "washes over real geometry",
-  code.indexOf("'id': 'rail-alignment-bridge'") < code.indexOf("'id': 'rail-alignment',"));
+ok("⭐ the survey layer is added first, so it sits under the IPT layers",
+  code.indexOf("'id': 'rail-alignment-survey'") < code.indexOf("'id': 'rail-alignment-underlay'"));
+ok("⭐ and the underlay before the solid track, so the package colour reads on top",
+  code.indexOf("'id': 'rail-alignment-underlay'") < code.indexOf("'id': 'rail-alignment',"));
 ok("the reason for that order is written down next to it",
   /ADD ORDER IS THE Z-ORDER/.test(src));
 
 // the three parts of the IPT view move together
-ok("toggling the IPT view hides the bridges too",
-  /function toggleAlignment[\s\S]{0,400}toggleLayer\('rail-alignment-bridge',\s*visible\)/.test(code));
-ok("and both legend blocks", /function toggleAlignment[\s\S]{0,500}'ipt-legend-note'/.test(code));
+ok("toggling the IPT view hides both legend blocks",
+  /function toggleAlignment[\s\S]{0,500}'ipt-legend-note'/.test(code));
 ok("the legend explains what a fainter segment means",
   /id="ipt-legend-note"/.test(html) && /no surveyed Main Track in the alignment file/.test(html));
 
 // clicking a bridge must explain itself
-ok("⭐ the popup answers on the bridge layer too",
-  /\['rail-alignment', 'rail-alignment-bridge'\]\.forEach/.test(code));
-ok("and a bridge popup says there is no surveyed track there",
-  code.includes("No surveyed track here."));
-ok("and that it is not measured or routed on",
-  /not measured or routed on/.test(code));
+ok("⭐ the boundary ticks answer a click too — a mark with no line under it is "
+   + "where an explanation is needed most",
+  /\['ws-boundary-ticks', 'ws-boundary-labels'\]\.forEach/.test(code));
+ok("and that popper is wired ONCE, like the alignment one",
+  /WS_POPUP_WIRED/.test(code) &&
+  /function setupWsBoundaryPopup\(\)\s*\{\s*if\s*\(WS_POPUP_WIRED\)\s*return;/.test(code));
+ok("⭐ it says when there is no surveyed alignment, and how far the nearest is",
+  code.includes("No surveyed alignment here.") && /track_gap_m/.test(code));
+ok("and it names the two sections in full, not just their codes",
+  /window\.WS_NAMES\[c\]/.test(code));
 
 // --- 2026-08-28: the mandated palette ------------------------------------------
 // The rule is that no IPT colour may reuse a hex the map spends on a route, a
@@ -376,10 +385,10 @@ ok("and so is the whole indigo/violet run that made three bands unreadable",
 
 // --- IPT 6 superstructure underlay --------------------------------------------
 ok("there is an underlay layer", code.includes("'id': 'rail-alignment-underlay'"));
-ok("⭐ it is added AFTER survey and BEFORE the bridges and the civil track, so "
-   + "the package colour stays the primary read",
+ok("⭐ it is added AFTER survey and BEFORE the civil track, so the package "
+   + "colour stays the primary read",
   code.indexOf("'id': 'rail-alignment-survey'") < code.indexOf("'id': 'rail-alignment-underlay'") &&
-  code.indexOf("'id': 'rail-alignment-underlay'") < code.indexOf("'id': 'rail-alignment-bridge'"));
+  code.indexOf("'id': 'rail-alignment-underlay'") < code.indexOf("'id': 'rail-alignment',"));
 ok("it is wider than the civil track",
   /'id': 'rail-alignment-underlay'[\s\S]{0,900}'line-width': \(window\.IPT_UNDERLAY/.test(code));
 ok("its colour, width and opacity are one tunable object, not three literals",
@@ -387,11 +396,8 @@ ok("its colour, width and opacity are one tunable object, not three literals",
 ok("⭐ it runs the whole A1 mainline, not just the northern IPT 6 civil band — "
    + "so it is filtered by align_type and scope, never by chainage",
   /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'ipt'\], 'Outside A1'\]/.test(code));
-ok("⭐ and it excludes the gap bridges — a 4.5 px solid line across country "
-   + "with no surveyed track is what the 30% bridges exist to avoid",
+ok("⭐ and it still excludes anything flagged is_bridge",
   /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
-ok("the reason for that exclusion is written next to it",
-  /what the 30% bridges were built to avoid/.test(src));
 
 // --- per-IPT selection ---------------------------------------------------------
 ok("the legend rows are checkboxes now",
@@ -402,8 +408,8 @@ ok("ticking one re-filters rather than rebuilding the GeoJSON",
   code.includes("function applyIptFilter") && !/applyIptFilter[\s\S]{0,600}buildIptAlignment/.test(code));
 ok("the filter is a membership test on ipt",
   /\['in', \['get', 'ipt'\], on\]/.test(code));
-ok("both the solid track and its bridges follow the same checkbox",
-  (code.match(/\['in', \['get', 'ipt'\], on\]/g) || []).length === 2);
+ok("the civil filter is applied in exactly one place now the bridges are gone",
+  (code.match(/\['in', \['get', 'ipt'\], on\]/g) || []).length === 1);
 ok("⭐ the IPT 6 checkbox drives the UNDERLAY, not the civil filter",
   /toggleUnderlay\(this\.checked\)/.test(code) &&
   /function toggleUnderlay[\s\S]{0,140}rail-alignment-underlay/.test(code));

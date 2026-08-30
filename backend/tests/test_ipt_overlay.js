@@ -381,13 +381,21 @@ ok("the tiers are disjoint — no marker is drawn twice",
 // =============================================================================
 // 9. Work-section boundary ticks — the 2026-08-30 slice
 // =============================================================================
-const wsb = window.buildWsBoundaries(window.chainage_global_data);
+const wsb = window.buildWsBoundaries(window.chainage_global_data, fc);
 const B = wsb.features;
 
 ok("⭐ seven boundary ticks, no more and no fewer", B.length === 7, `got ${B.length}`);
 ok("all seven are points", B.every(f => f.geometry.type === "Point"));
 ok("the builder reports what it built against what it was asked for",
   window.WS_BOUNDARY_STATS.built === window.WS_BOUNDARY_STATS.expected);
+
+// --- the version handshake -----------------------------------------------------
+// ⚠️ index.html and ipt_segments.js ship together and half-work if only one is
+// updated. On 2026-08-30 that showed as IPT 6 stuck green, bridges still present
+// and a boundary checkbox that toggled nothing — one cause, three symptoms, and
+// nothing in the console. Both halves now state their version.
+ok("⭐ the data file stamps its version",
+  /^v\d+$/.test(window.IPT_SEGMENTS_VERSION || ""), String(window.IPT_SEGMENTS_VERSION));
 
 // ⭐ The invariant that matters: a tick marks a colour change, so every tick
 // chainage MUST be a boundary in the band table. A tick that drifted off the
@@ -476,6 +484,19 @@ ok("⭐ every tick lands on the drawn corridor — within 70 m of Main Track",
 const inHole = B.filter((f, i) => offSolid[i] > 100).map(f => f.properties.chain_txt);
 ok("DATA FACT: three boundaries fall in holes in the alignment file",
   inHole.length === 3, `got ${inHole.length}: ${inHole.join(", ")}`);
+// ⭐ and the builder must reach the same verdict on its own — the map shows the
+// warning from ITS flag, not from this test's arithmetic
+ok("⭐ the builder flags exactly those three itself",
+  B.filter(f => f.properties.no_surveyed_track).map(f => f.properties.chain_txt).join(",")
+  === "117+278,135+400,142+000",
+  B.filter(f => f.properties.no_surveyed_track).map(f => f.properties.chain_txt).join(","));
+ok("and records how far away the nearest surveyed track is",
+  B.every(f => typeof f.properties.track_gap_m === "number"));
+ok("the stats line reports the count",
+  window.WS_BOUNDARY_STATS.no_surveyed_track === 3);
+ok("⭐ with no alignment passed in, it does not GUESS — it flags nothing",
+  window.buildWsBoundaries(window.chainage_global_data).features
+    .every(f => f.properties.no_surveyed_track === undefined));
 ok("DATA FACT: and they are 117+278, 135+400 and 142+000",
   inHole.join(",") === "117+278,135+400,142+000", inHole.join(","));
 ok("⭐ but every one of them is still within 70 m of the corridor, because the "
