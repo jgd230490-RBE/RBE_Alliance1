@@ -13,7 +13,12 @@
     <script src="data/chainage.js"></script>
     <!-- IPT / Work Section bands for the alignment. Reference geometry only:
          reads nothing from the API and changes no routing behaviour. -->
-    <script src="ipt_segments.js"></script>
+    <!-- ⚠️ The ?v= is not decoration. A browser caches a .js far more stubbornly than
+         it revalidates the .html that loads it, so uploading both files can still
+         leave the OLD ipt_segments.js running under the NEW index.html — which is
+         indistinguishable from forgetting to upload it. Bump this with the version
+         constant below and the browser is forced to refetch. -->
+    <script src="ipt_segments.js?v=8"></script>
     <style>
         :root{
             --navy:#003787; --navy-deep:#0A1446; --ink:#1f2937; --muted:#6b7280;
@@ -147,7 +152,7 @@
              so the swatch is a gradient rather than one colour. The legend below is
              generated from IPT_SEGMENTS so the band table stays the only place the
              colours are defined. -->
-        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" style="background:linear-gradient(90deg,#039E86,#003787,#0E7490,#C6841D,#BF2E55); border-radius:0; width:13px; height:3px;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" id="ipt-swatch" style="border-radius:0; width:13px; height:3px;"></span></div>
         <div id="ipt-legend" style="padding-left:23px;margin:-2px 0 4px;"></div>
         <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Some stretches have no surveyed alignment beneath them — click the line to check.</div>
         <div class="control-item"><label><input type="checkbox" id="layer-ws-bounds" checked onchange="toggleWsBounds(this.checked)"> Work section boundaries</label><span class="color-dot" style="background:#334155; border-radius:0; width:3px; height:13px;"></span></div>
@@ -254,13 +259,13 @@
     // still the polish build, which showed as IPT 6 stuck green, bridges still
     // present, and a "Work section boundaries" checkbox that toggled nothing.
     // One cause, three symptoms, and nothing in the console to say so.
-    const IPT_INDEX_VERSION = 'v7';
+    const IPT_INDEX_VERSION = 'v8';
     function checkOverlayVersion() {
         const got = window.IPT_SEGMENTS_VERSION;
         if (got === IPT_INDEX_VERSION) return true;
         const msg = got
-            ? `map/ipt_segments.js is ${got} but map/index.html is ${IPT_INDEX_VERSION} — extract the whole zip, not one file`
-            : `map/ipt_segments.js is older than ${IPT_INDEX_VERSION} (no version stamp) — extract the whole zip, not one file`;
+            ? `map/ipt_segments.js is ${got} but map/index.html is ${IPT_INDEX_VERSION}`
+            : `map/ipt_segments.js is older than ${IPT_INDEX_VERSION} (no version stamp)`;
         console.error('[IPT] VERSION MISMATCH: ' + msg);
         const host = document.getElementById('ipt-legend');
         if (host) {
@@ -268,7 +273,13 @@
             w.id = 'ipt-version-warning';
             w.style.cssText = 'margin:4px 0;padding:6px 8px;background:#fee2e2;border-left:3px solid #b91c1c;'
                             + 'font-size:10.5px;line-height:1.45;color:#7f1d1d;border-radius:2px;';
-            w.textContent = 'Overlay files out of step: ' + msg;
+            // ⚠️ Order matters here. "You forgot to upload it" is the rarer cause and
+            // was the one this banner used to assert; a stale browser cache produces
+            // exactly the same symptom and is far more common, so it is named first.
+            w.innerHTML = '<b>Overlay files out of step.</b> ' + msg
+                + '<br>Try a hard reload first (Ctrl/Cmd + Shift + R) — a cached copy of '
+                + 'the old file gives exactly this. If it persists, re-upload BOTH files '
+                + 'from the zip.';
             host.parentNode.insertBefore(w, host);
         }
         return false;
@@ -370,20 +381,56 @@
 
     // 'Outside A1' is shown muted rather than hidden — an unexplained grey line
     // reads as a bug.
+    // ⚠️ This swatch used to be a hard-coded gradient of the FIRST palette, written
+    // straight into the markup. It survived every palette change untouched, so the
+    // sidebar was advertising inbound-teal, brand-navy and selection-crimson as IPT
+    // colours long after none of them was. Generated from the band table now, so it
+    // cannot drift again — a colour must never be written in two places.
+    function renderIptSwatch() {
+        const el = document.getElementById('ipt-swatch');
+        if (!el || !window.IPT_SEGMENTS) return;
+        const stops = window.IPT_SEGMENTS.map(b => b.colour);
+        el.style.background = stops.length > 1
+            ? `linear-gradient(90deg, ${stops.join(', ')})`
+            : (stops[0] || '#64748B');
+    }
+
     function renderIptLegend() {
         const el = document.getElementById('ipt-legend');
         if (!el || !window.iptLegendRows) return;
+        // ⚠️ IPT 6 gets TWO rows, and the reason is a bug this fixed.
+        //
+        // IPT 6 is two different things on this map: a civil BAND in the north
+        // (chainage -5000 to 105480, drawn in the band colour) and the corridor-wide
+        // superstructure UNDERLAY (drawn in the underlay colour). One legend row was
+        // showing the underlay colour against the label "IPT 6" — so the key said
+        // lavender and the map drew plum for the same name.
+        //
+        // Two rows, one per thing, each with its own swatch. The band row has no
+        // checkbox because the band is always drawn — that asymmetry was decided
+        // deliberately (see IPT_UNDERLAY_KEY above) and showing it beats hiding it.
+        const row = (opts) =>
+            `<div style="display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:1.7;${opts.muted ? 'opacity:.7;' : ''}" title="${(opts.title || '').replace(/"/g, '&quot;')}">`
+            + (opts.box
+                ? `<input type="checkbox" id="${opts.box}" checked onchange="${opts.handler}" style="margin:0;">`
+                : `<span style="flex:0 0 13px;" title="always shown"></span>`)
+            + `<span style="flex:0 0 14px;height:${opts.h || 3}px;background:${opts.colour};border-radius:0;"></span>`
+            + `<span style="color:#8a9099;">${opts.label}</span></div>`;
+
         el.innerHTML = window.iptLegendRows().map(r => {
-            const under = r.ipt === IPT_UNDERLAY_KEY;
-            const colour = under ? (window.IPT_UNDERLAY || {}).colour || r.colour : r.colour;
-            const label = under
-                ? `<b style="color:#5b6270;">${r.ipt}</b> · Superstructure (corridor underlay)`
-                : `<b style="color:#5b6270;">${r.ipt}</b>${r.ws.length ? ' · ' + r.ws.join(', ') : ''}`;
-            const handler = under ? 'toggleUnderlay(this.checked)' : 'applyIptFilter()';
-            return `<div style="display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:1.7;${r.muted ? 'opacity:.7;' : ''}" title="${r.labels.join(' · ').replace(/"/g, '&quot;')}">`
-                + `<input type="checkbox" id="${iptCheckboxId(r.ipt)}" checked onchange="${handler}" style="margin:0;">`
-                + `<span style="flex:0 0 14px;height:${under ? 4 : 3}px;background:${colour};border-radius:0;"></span>`
-                + `<span style="color:#8a9099;">${label}</span></div>`;
+            const title = r.labels.join(' · ');
+            const band = row({
+                colour: r.colour, muted: r.muted, title,
+                box: r.ipt === IPT_UNDERLAY_KEY ? null : iptCheckboxId(r.ipt),
+                handler: 'applyIptFilter()',
+                label: `<b style="color:#5b6270;">${r.ipt}</b>${r.ws.length ? ' · ' + r.ws.join(', ') : ''}`,
+            });
+            if (r.ipt !== IPT_UNDERLAY_KEY) return band;
+            return band + row({
+                colour: (window.IPT_UNDERLAY || {}).colour || r.colour, h: 4, title,
+                box: iptCheckboxId(r.ipt), handler: 'toggleUnderlay(this.checked)',
+                label: `<b style="color:#5b6270;">${r.ipt}</b> · Superstructure (corridor underlay)`,
+            });
         }).join('');
     }
 
@@ -907,6 +954,7 @@
         applyFilters();
         setupHoverEvents();
         checkOverlayVersion();
+        renderIptSwatch();
         renderIptLegend();
         applyIptFilter();
         setupAlignmentPopup();
