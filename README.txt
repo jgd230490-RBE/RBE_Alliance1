@@ -1,107 +1,94 @@
-rbe-ipt-overlay-v5.zip — WS boundary ticks + work-section popup
+rbe-ipt-overlay-v6.zip — the three reported faults, and a guard so they cannot recur
 2026-08-30. Extract over the repo root.
 
-SUPERSEDES rbe-ipt-polish.zip, v3 and v4. Same four files, later versions.
-Apply AFTER rbe-ipt-overlay.zip. No overlap with rbe-phase45-tenant.zip.
+SUPERSEDES the polish zip, v3, v4 and v5.
 
-FILES (4, all replacements - nothing new, nothing to delete)
-  map/ipt_segments.js                WS_NAMES, ws_primary, WS_BOUNDARIES, chainText
-  map/index.html                     tick layers, toggle, rebuilt popup
-  backend/tests/parse_map.js         212 -> 250 assertions
-  backend/tests/test_ipt_overlay.js   93 -> 135 assertions
-  Full suite 1,230 assertions, 0 failed.
+*** EXTRACT BOTH FILES. That is the whole of fault (1) and (3). ***
 
-=====================================================================
-READ FIRST - the WS table in the spec reproduces a known error
-=====================================================================
-The names came from the IPT Matrix. claude/roadmap.md marks that document
-"second-hand AI output, superseded", and claude/scope-diagram.md - derived from
-the real Appendix E - corrects it. Two of those corrections matter here:
-
-1. ** WS13 (Urge halt) is IPT 2, not IPT 1. **
-   ipt-matrix.md lists "WS 13 (Urge) -> IPT 1" in its OWN table of known errors,
-   and the scope diagram shows the ITP 2 band directly beneath Urge. The spec
-   table repeats the error.
-
-   Worse: the FIRST overlay delivery inherited it. IPT 1's legend row has been
-   reading "WS1, WS12, WS13" since 2026-08-28. Fixed: IPT 1 is WS1, WS12 and
-   IPT 2 is WS2, WS13. That is my bug, not the spec's, and it was shipped.
-
-2. ** WS14 / WS15 ownership is NOT settled, so it is not asserted. **
-   The spec says IPT 6 for both. The scope diagram draws NO IPT band beneath
-   them, and "Which IPT owns WS 14 & 15?" is open question A3.2 - one of the
-   three Appendix E questions still blocking the rest of Phase 2. Both rows
-   carry ipt: null and provisional: true rather than a guess.
-
-Also recorded, not resolved:
-  - WS3's official name "Timmermanni to Papiniidu" overlaps WS2's extent
-    ("Timmermanni to Orasselja"). The scope diagram labels that stretch
-    "Rääma bog". Both are on the row; the popup shows the official name with
-    the diagram's label as a footnote.
-  - The diagram subdivides WS7 into WS 7.1-7.4 along the alignment. This overlay
-    carries a single WS7, so the popup says WS7 for the whole northern band.
-    A simplification, not a finding.
+FILES (4, all replacements)
+  map/ipt_segments.js                version stamp, no_surveyed_track flag
+  map/index.html                     version handshake, bridges removed, font fix
+  backend/tests/parse_map.js         250 assertions
+  backend/tests/test_ipt_overlay.js  140 assertions
+  Full suite 1,235 assertions, 0 failed.
 
 =====================================================================
-WHAT WAS BUILT
+DIAGNOSIS - your three symptoms are ONE cause
 =====================================================================
-1. POPUP on the civil IPT alignment
-   IPT, the work section that OWNS that chainage band, its official name, and
-   the chainage range as an engineer writes it - "105+480 - 117+278", not
-   "105.48 km". Point assets on the same ground (a station, a halt) are listed
-   separately as "also on this ground" rather than presented as owners.
+  "IPT 6 green underlay still exists"
+  "the transparent line is still there"
+  "work section ticks/labels haven't worked, only the filter appears"
 
-   The underlay line appears ONLY when the IPT 6 underlay is actually on and the
-   stretch is inside A1 scope. A provisional band says so in the popup. A
-   disputed WS name carries its dispute.
+map/index.html was at v5 and map/ipt_segments.js was still the POLISH build.
 
-   Handler wired ONCE, as before - a basemap switch cannot stack popups.
+Every delivery ships both files and they are a matched pair. Update one without
+the other and the map does not error - it half-works, silently:
 
-   NOT DONE, deliberately: the "emphasise the clicked segment" option. Mapbox
-   feature-state needs a feature id, and this source has none; adding ids means
-   touching the builder, and the spec marked it optional. Say the word.
+  - IPT 6 green      -> the polish build still had the ORIGINAL palette. v4
+                        made IPT 6 plum #86198F and the underlay lavender.
+  - transparent line -> gap bridges came in the polish build. v5 still had them.
+  - WS checkbox with -> v5's index.html draws the tick layers and adds the
+    nothing behind it    checkbox, but they read window.buildWsBoundaries, which
+                         only exists from v5's ipt_segments.js. Missing function
+                         -> empty FeatureCollection -> a toggle over nothing.
 
-2. SEVEN BOUNDARY TICKS at 105480, 117278, 125000, 130036, 135400, 137685,
-   142000. Neutral slate #334155 - not a route colour and not a package colour,
-   because a tick is neither. Ticks from zoom 11, labels from zoom 13, one
-   toggle for both, on by default.
+VERIFY IN ONE LINE. Open /map/, then in the browser console:
 
-   They are a SYMBOL layer with a rotated glyph, not a line. A fixed ground
-   length would be one pixel at corridor zoom and half the viewport at zoom 16;
-   a rotated glyph turns with the map and stays a constant size on screen.
+    window.IPT_SEGMENTS_VERSION
 
-   ** A BUG WORTH KNOWING ABOUT, since I wrote and then caught it. **
-   The first version took each tick's bearing from the two chainage markers
-   bracketing the boundary. Four of the seven boundaries land exactly on a 100 m
-   marker, which makes that span zero - and the code then silently reused the
-   PREVIOUS tick's bearing. Three of the seven ticks were rotated to a different
-   stretch of railway. Now the bearing is measured from the markers either side,
-   widened by one on an exact hit, and the test asserts all seven bearings are
-   distinct.
+  "v6"       -> the data file is current
+  "v5"/older -> that file did not get replaced
+  undefined  -> it is older than v5
 
-3. ** THREE OF THE SEVEN TICKS SIT ON A GAP BRIDGE, NOT ON SOLID TRACK. **
-   Measured: 117+278 is 1,377 m from the nearest solid Main Track, 142+000 is
-   708 m, 135+400 is 448 m. All seven are within 68 m of the corridor once the
-   faint bridges are counted.
+From v6 the two halves check each other on load. A mismatch prints a console
+error AND puts a red line in the sidebar naming which file is stale. This class
+of confusion should not cost you a debugging session again.
 
-   The ticks are right. chainage.js covers the corridor continuously (2,180
-   markers, all Main Track); alignment.js does not - it has ~60 km of holes,
-   which is open question H2. So those three boundaries fall where there is no
-   surveyed line to draw and their ticks land on a 30%-opacity bridge.
+=====================================================================
+(2) THE TRANSPARENT LINE IS GONE - and what replaced the message
+=====================================================================
+The 30%-opacity gap bridges are removed.
 
-   Flagging it because on the live map it will look like a rendering fault.
+** CONSEQUENCE, and I argued the opposite two days ago, so it is only fair to
+   say it plainly: the corridor now reads DASHED again. ** 31 stretches over
+300 m have no Main Track geometry in alignment.js - about 60 km in total, the
+largest 7.0 km. Every one is now a visible break in the line.
+
+What was KEPT is the information, which is what the bridges were really for:
+
+  - The three package boundaries that fall in a hole now say so ON THEIR LABEL:
+    "WS1 | WS2 / 117+278 / no surveyed alignment here".
+  - Those ticks are drawn in a lighter grey, so the caveat is visible before you
+    read anything.
+  - Clicking a tick gives the full explanation and the measured distance to the
+    nearest drawn track (1,377 m at 117+278; 708 m at 142+000; 448 m at 135+400).
+  - The sidebar note now reads "Breaks in the line = no surveyed Main Track in
+    the alignment file, not a rendering fault."
+
+The flag is MEASURED at build time from the real geometry, not hard-coded, so a
+better alignment file changes the answer instead of leaving a stale warning.
+
+** THE GEOMETRY CUT IS UNCHANGED. ** GAP_SPLIT still removes the 239.5 km of
+phantom straight lines. That is a separate and older decision - do not undo it to
+make the line look continuous again, or the map goes back to drawing 45 km of
+railway that does not exist.
+
+=====================================================================
+(3) A SECOND REASON THE TICKS MIGHT NOT HAVE DRAWN - now removed
+=====================================================================
+The v5 tick layer specified 'text-font': ['Open Sans Bold', 'Arial Unicode MS
+Bold']. It was the ONLY symbol layer on this map with an explicit font, and a
+fontstack the style cannot serve makes a symbol layer render NOTHING, silently.
+Removed - it now inherits the style default like every other label here.
+
+So even on a correctly matched pair, v5's ticks may not have drawn. Both causes
+are fixed; if they still do not appear, tell me and I will take the next step
+rather than guess again.
 
 TO ACTION
   Nothing by hand. No data file touched.
 
-UNVERIFIED
-  No browser in this sandbox. The tick glyph is 'Open Sans Bold' '|' rotated
-  with text-rotation-alignment 'map'; the rotation maths is asserted but how the
-  glyph SITS on the line is not - check the ticks look perpendicular and are not
-  clipped, and that the labels do not collide at zoom 13-14.
-
-STILL OPEN (unchanged)
-  - WS2/WS3 at 125+000 is approximate - now said in the popup as well
-  - ~60 km of Main Track missing from alignment.js - see item 3 above
-  - Two multi-km single-edge Main Track features - real, or placeholders?
-  - WS14/WS15 IPT ownership - open question A3.2
+STILL UNVERIFIED
+  No browser here. Check: ticks perpendicular and not clipped; labels not
+  colliding at zoom 13-14; the three lighter ticks legible; no red version
+  warning in the sidebar.
