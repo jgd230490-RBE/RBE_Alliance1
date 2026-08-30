@@ -31,6 +31,7 @@ import zones
 import haul          # Phase 4 — temporary haul roads
 import restrictions  # Phase 2.5a — Tark Tee restriction layers (proxied, reprojected)
 import streetview    # Phase 2.5a — Google Street View proxy (key stays server-side)
+import gates         # Phase 5a — multiple gates per location, with a direction on each
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -52,12 +53,21 @@ async def lifespan(app: FastAPI):
         db.init_network_db()
         db.init_taxonomy_db()
         db.init_zones_db()          # Phase 3. No seed — zones are drawn, never shipped.
+        db.init_gates_db()          # Phase 5a. Table + the two gate columns on routes.
         # Phase 4.5. Must sit exactly here: init_tenant() migrates a pre-4.5 database by
         # rebuilding each table, copying the columns the table actually has — several of
         # which the init_* calls above add by ALTER. Run it before them and those columns
         # are silently dropped; run it after the seeds below and the seeds write rows into
         # a table that has not got its tenant key yet.
         db.init_tenant()
+        # Phase 5a. AFTER init_tenant(), because it inserts rows and every insert
+        # filters on the tenant key the migration has just put in place. Idempotent:
+        # a location that already has a gate row is skipped, so a restart cannot mint
+        # a second 'Main gate'.
+        try:
+            gates.migrate_legacy_gates()
+        except Exception as e:
+            print("⚠️  Phase 5a: legacy gate migration failed:", e)
         if network.seed_network():
             print("Seeded routing network from V2 (locations + routes).")
         network.backfill_location_roles()
@@ -709,6 +719,103 @@ def update_location(location_id: str, body: LocationIn, token: Optional[str] = N
 def delete_location(location_id: str, token: Optional[str] = None):
     _check_admin(token)
     return network.delete_location(location_id)
+
+
+# ------------------------------------------------------------------ Phase 5a: gates
+#
+# The gate endpoints are admin-only for the same reason Locations and Zones are: a gate
+# moves where HERE routes to, so writing one invalidates cached geometry and spends
+# calls on the re-bake. ⚠️ ADMIN_TOKEN is set on Render (verified 2026-08-28), but the
+# LOGINS dict in the frontend is still client-side with plaintext passwords, so this is
+# an API boundary and not yet a user-permission one. Phase 6.
+class GateIn(BaseModel):
+    location_id: str
+    name: str
+    lat: float
+    lon: float
+    direction: str = "both"                 # 'access' | 'egress' | 'both'
+    # B3: induction is per gate and applies to whatever arrives. No per-vehicle
+    # override — offered and declined; the fix if it ever matters is a nullable
+    # column plus a COALESCE, not a rebuild.
+    safety_minutes: Optional[float] = None
+    # B5(c): the FLAT fallback, used only where no drawn haul road already carries
+    # these minutes in route_geometry.duration_hr. See network.INTERNAL_TRAVEL_SOURCES.
+    internal_travel_minutes: Optional[float] = None
+    is_default: bool = False
+    active: bool = True
+    note: Optional[str] = None
+    gate_id: Optional[str] = None
+
+
+class GatePatch(BaseModel):
+    name: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    direction: Optional[str] = None
+    safety_minutes: Optional[float] = None
+    internal_travel_minutes: Optional[float] = None
+    is_default: Optional[bool] = None
+    active: Optional[bool] = None
+    note: Optional[str] = None
+
+
+class RouteGatesIn(BaseModel):
+    origin_gate_id: Optional[str] = None
+    dest_gate_id: Optional[str] = None
+
+
+@app.get("/api/gates")
+def list_gates(location_id: Optional[str] = None, include_inactive: bool = True):
+    """Readable without a token — the map and the route panels need it, and a gate
+    coordinate is no more sensitive than the location marker already published."""
+    return {"gates": gates.list_gates(location_id, include_inactive=include_inactive)}
+
+
+@app.post("/api/admin/gates")
+def create_gate(body: GateIn, token: Optional[str] = None):
+    _check_admin(token)
+    return gates.create_gate(body.location_id, body.name, body.lat, body.lon,
+                             direction=body.direction,
+                             safety_minutes=body.safety_minutes,
+                             internal_travel_minutes=body.internal_travel_minutes,
+                             is_default=body.is_default, active=body.active,
+                             note=body.note, gate_id=body.gate_id)
+
+
+@app.patch("/api/admin/gates/{gate_id}")
+def update_gate(gate_id: str, body: GatePatch, token: Optional[str] = None):
+    _check_admin(token)
+    # only the fields the client actually sent are written. A PATCH that toggles
+    # `active` must not blank a safety time it knows nothing about — the same trap the
+    # Locations PUT hit when a node drag started wiping salvaged vendor names.
+    sent = set(_fields_set(body))
+    fields = {k: getattr(body, k) for k in sent}
+    out = gates.update_gate(gate_id, **fields)
+    if not out.get("error"):
+        # moving a gate moves the point HERE routed to, so any cached geometry on a
+        # route that uses it is stale. The re-bake is NOT run here — its cost is quoted
+        # in the UI first, as zone and haul-road writes already do.
+        moved = bool({"lat", "lon", "direction", "active"} & sent)
+        out["rebake_needed"] = moved
+        out["routes_affected"] = gates.routes_using(gate_id) if moved else []
+    return out
+
+
+@app.delete("/api/admin/gates/{gate_id}")
+def delete_gate(gate_id: str, token: Optional[str] = None):
+    _check_admin(token)
+    return gates.delete_gate(gate_id)
+
+
+@app.put("/api/admin/routes/{route_id}/gates")
+def set_route_gates(route_id: str, body: RouteGatesIn, token: Optional[str] = None):
+    _check_admin(token)
+    sent = set(_fields_set(body))
+    return gates.set_route_gates(route_id,
+                                 origin_gate_id=body.origin_gate_id,
+                                 dest_gate_id=body.dest_gate_id,
+                                 origin_given="origin_gate_id" in sent,
+                                 dest_given="dest_gate_id" in sent)
 
 
 class RouteIn(BaseModel):

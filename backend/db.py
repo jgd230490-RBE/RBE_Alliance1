@@ -39,12 +39,16 @@ IS_PG = bool(DATABASE_URL)
 
 TENANT_DEFAULT = os.environ.get("TENANT_ID", "default").strip() or "default"
 
-# The eleven tenanted tables. test_tenant_audit.py cross-checks this set against
+# The twelve tenanted tables. test_tenant_audit.py cross-checks this set against
 # every CREATE TABLE in this file, so it cannot drift from the schema.
 TENANTED_TABLES = {
     "forecasts", "locations", "routes", "route_geometry",
     "disciplines", "discipline_materials", "ipts",
     "design_sections", "work_sections", "zones", "route_haul_roads",
+    # Phase 5a. Registered in the same edit that wrote the table, not after:
+    # test_tenant_audit.py fails on a CREATE TABLE this set does not name, which is
+    # what stops a table shipping with the column present and the isolation absent.
+    "location_gates",
 }
 
 # A contextvar rather than a module global, so Phase 6 can make the tenant
@@ -489,6 +493,44 @@ def count_haul_links():
                  (current_tenant(),))[0]["n"]
 
 
+def init_gates_db():
+    """
+    Phase 5a. The gate table, and the two columns on `routes` that point into it.
+
+    Runs after init_network_db() (routes must exist to be ALTERed) and BEFORE
+    init_tenant(), for the reason spelled out on _TENANT_DDL: the SQLite rebuild
+    copies the intersection of the live table's columns with the DDL, so a column
+    added by ALTER after that rebuild would survive, but one added before it and
+    missing from the DDL would be silently dropped. Both new route columns are in
+    _TENANT_DDL["routes"] as well as here.
+
+    The migration of the old single (gate_lat, gate_lon) pair into a real gate row
+    is NOT here — it needs id allocation and lives in gates.migrate_legacy_gates(),
+    called from the lifespan after the tenant migration has run.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        _create_tenanted(cur, "location_gates")
+        conn.commit()
+        for col, typ in (("origin_gate_id", "TEXT"), ("dest_gate_id", "TEXT")):
+            try:
+                if IS_PG:
+                    cur.execute(f"ALTER TABLE routes ADD COLUMN IF NOT EXISTS {col} {typ}")
+                else:
+                    cur.execute(f"ALTER TABLE routes ADD COLUMN {col} {typ}")
+                conn.commit()
+            except Exception:
+                conn.rollback()  # column already present — fine
+    finally:
+        conn.close()
+
+
+def count_gates():
+    return query("SELECT COUNT(*) AS n FROM location_gates WHERE tenant_id = ?",
+                 (current_tenant(),))[0]["n"]
+
+
 # --------------------------------------------------------------------------- #
 #  Phase 4.5 — tenant migration                                                #
 # --------------------------------------------------------------------------- #
@@ -549,6 +591,13 @@ _TENANT_DDL = {
             material_category TEXT,
             ipt               TEXT,
             origin_temp_km    REAL DEFAULT 0,
+            -- Phase 5a: which gate this route uses at each end. NULL = "no explicit
+            -- choice", which resolves to the location's default gate for the
+            -- direction being travelled, and to lat/lon when it has no gates at all.
+            -- Must be listed here as well as ALTERed in init_gates_db(), or the
+            -- SQLite tenant rebuild copies only the intersection and drops them.
+            origin_gate_id    TEXT,
+            dest_gate_id      TEXT,
             PRIMARY KEY (tenant_id, id)
         )
     """,
@@ -660,6 +709,49 @@ _TENANT_DDL = {
             PRIMARY KEY (tenant_id, route_id, zone_id)
         )
     """,
+    # ----------------------------------------------------------------------- #
+    #  Phase 5a — gates                                                        #
+    # ----------------------------------------------------------------------- #
+    # A location may have several gates. Until 5a the access point was a single
+    # nullable (gate_lat, gate_lon) pair on `locations`, which cannot express the
+    # thing every real site does: come in at one gate and leave by another.
+    #
+    #   direction   'access' (entry only) | 'egress' (exit only) | 'both'
+    #               This is the whole reason the pair on `locations` had to go —
+    #               a one-way gate system makes the leg swap in _bake_leg wrong.
+    #   safety_minutes
+    #               B3: induction is PER GATE and applies to whatever arrives.
+    #               No per-vehicle override — offered and declined. NULL/0 means
+    #               no induction time, which is what every migrated gate gets, so
+    #               no existing cycle time moves on the day this ships.
+    #   internal_travel_minutes
+    #               B5(c): the FLAT fallback for gate -> working face travel, used
+    #               only when no drawn haul road already carries those minutes in
+    #               route_geometry.duration_hr. Phase 4 already puts internal travel
+    #               there; adding a flat figure on top of a drawn road counts the
+    #               same minutes twice. Drawn road wins — see network._turnaround_parts.
+    #   is_default  which gate a route with no explicit selection gets, per direction.
+    #   active      a deactivated gate is history, not a delete. B2: a route that
+    #               names one refuses to bake and says which gate.
+    "location_gates": """
+        CREATE TABLE location_gates (
+            tenant_id               TEXT NOT NULL DEFAULT 'default',
+            id                      TEXT NOT NULL,
+            location_id             TEXT NOT NULL,
+            name                    TEXT NOT NULL,
+            direction               TEXT NOT NULL DEFAULT 'both',
+            lat                     REAL NOT NULL,
+            lon                     REAL NOT NULL,
+            safety_minutes          REAL,
+            internal_travel_minutes REAL,
+            is_default              BOOLEAN NOT NULL DEFAULT FALSE,
+            active                  BOOLEAN NOT NULL DEFAULT TRUE,
+            note                    TEXT,
+            created_at              TEXT,
+            updated_at              TEXT,
+            PRIMARY KEY (tenant_id, id)
+        )
+    """,
 }
 
 # The primary key each table ends up with, for the Postgres in-place path.
@@ -675,6 +767,7 @@ _TENANT_PK = {
     "work_sections": "(tenant_id, section_id)",
     "zones": "(tenant_id, id)",
     "route_haul_roads": "(tenant_id, route_id, zone_id)",
+    "location_gates": "(tenant_id, id)",
 }
 
 # Extra UNIQUE constraints that must also take tenant_id. Only forecasts has one.

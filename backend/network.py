@@ -14,6 +14,7 @@ import conversions
 import here_routing
 import zones          # Phase 3 — supplies the avoid[areas] the bake path sends to HERE
 import haul           # Phase 4 — threads temporary haul roads into the bake path
+import gates          # Phase 5a — resolves which gate each leg enters and leaves by
 
 DEFAULT_PROFILE = "Artic Tipper (44t)"
 _SEED = os.path.join(os.path.dirname(__file__), "seed_data", "v2_network.json")
@@ -249,20 +250,36 @@ LEGS = ("loaded", "return")
 ALTERNATIVES = 3
 
 
-def _waypoint(loc):
+def _waypoint_full(loc, role="entry", gate_id=None, gate_list=None):
     """
-    The coordinate HERE should actually route to for a location.
+    Which gate answers for this location in one DIRECTION, and why.
 
-    Sites will eventually have a gate — the access/egress point on the public road,
-    which is not the same as the marker in the middle of the compound. Until one is
-    recorded, the node's own coordinate stands in. Nothing else in the codebase needs
-    to know which of the two it got.
+    Phase 5a made the access point per-leg and asymmetric. Before it a location had one
+    access point used both ways; now it may have several with a direction on each, so
+    the question is no longer "where is this site" but "where does a truck ARRIVE here
+    (role='entry') / LEAVE here (role='exit')".
+
+    ⚠️ This is the change `_bake_leg` had to absorb. It builds the return leg by
+    swapping the endpoints, which is right for one symmetric point per location and
+    wrong the moment a gate is one-way: the swap on its own sends the empty truck back
+    out through the entry gate. The swap still happens — what flips with it is which
+    ROLE each end is asked for.
+
+    The resolution order lives in gates.resolve(), and its last two steps are the legacy
+    (gate_lat, gate_lon) pair and the node's own lat/lon. A database with no gate rows
+    therefore resolves to exactly the coordinate this returned before 5a, which is what
+    keeps every already-baked leg valid on the day this ships.
+
+    `gate_list` is the pre-fetched gate list for this location. The batch bake resolves
+    two ends for up to 107 routes; passing it in keeps that one query rather than 214.
     """
-    lat = loc.get("gate_lat")
-    lon = loc.get("gate_lon")
-    if lat is not None and lon is not None:
-        return float(lat), float(lon)
-    return float(loc["lat"]), float(loc["lon"])
+    return gates.resolve(loc, role, gate_id, gates=gate_list)
+
+
+def _waypoint(loc, role="entry", gate_id=None, gate_list=None):
+    """The coordinate only. Most call sites want the pair and nothing else."""
+    r = _waypoint_full(loc, role, gate_id, gate_list)
+    return r["lat"], r["lon"]
 
 
 def _upsert_geom(route_id, profile, geometry, dist, dur, error, leg="loaded", alt_index=0,
@@ -353,7 +370,7 @@ def active_avoid():
 
 
 def _bake_leg(r, o, d, profile, leg, factors, alternatives=ALTERNATIVES,
-              avoid=None, zone_tag=None):
+              avoid=None, zone_tag=None, gates_by_loc=None):
     """
     Route one direction of one route and cache every alternative HERE offers.
 
@@ -365,12 +382,25 @@ def _bake_leg(r, o, d, profile, leg, factors, alternatives=ALTERNATIVES,
     matching zone ids stamped onto every row written. Callers that pass neither get
     today's zones resolved for them — but a batch should resolve once and pass them in,
     so every leg in the run is baked against the same set.
+
+    ⚠️ Phase 5a: the endpoint swap below is no longer sufficient on its own. `a` and `b`
+    still swap for the return leg, but each end is now asked for a different ROLE and a
+    different route-selected gate, so a one-way gate system routes out of the exit and
+    into the entry in both directions. Getting this wrong is invisible in the numbers —
+    the route still bakes, it just uses the wrong side of the site.
     """
     if avoid is None and zone_tag is None:
         avoid, zone_tag = active_avoid()
-    a, b = (o, d) if leg == "loaded" else (d, o)
-    a_lat, a_lon = _waypoint(a)
-    b_lat, b_lon = _waypoint(b)
+    o_gate, d_gate = r.get("origin_gate_id"), r.get("dest_gate_id")
+    if leg == "loaded":
+        a, a_role, a_gate = o, "exit", o_gate      # leaves the origin
+        b, b_role, b_gate = d, "entry", d_gate     # arrives at the destination
+    else:
+        a, a_role, a_gate = d, "exit", d_gate      # leaves the destination
+        b, b_role, b_gate = o, "entry", o_gate     # arrives back at the origin
+    gbl = gates_by_loc if gates_by_loc is not None else {}
+    a_lat, a_lon = _waypoint(a, a_role, a_gate, gbl.get(a.get("id")))
+    b_lat, b_lon = _waypoint(b, b_role, b_gate, gbl.get(b.get("id")))
 
     # Phase 4: which haul roads this leg runs through, in traversal order. Empty for
     # every route nobody has attached one to, and route_with_haul() then reduces to the
@@ -438,9 +468,16 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
                                         (db.current_tenant(),))}
     factors = conversions.load_factors()
     avoid, zone_tag = active_avoid()
+    # Phase 5a: one query for every gate in the tenant, resolved per leg below. Asking
+    # per route would be 214 queries a run for data that fits in one.
+    try:
+        gates_by_loc = gates.gates_by_location()
+    except Exception:
+        gates_by_loc = {}   # location_gates may not exist yet on a cold database
     baked = errors = 0
-    haul_legs = here_calls = 0
+    haul_legs = here_calls = refused = 0
     samples = []
+    blocked_routes = []
     for r, leg in todo[:limit]:
         o = locs.get(r["origin_id"]); d = locs.get(r["dest_id"])
         if not o or not d:
@@ -449,9 +486,24 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
                          zones_applied=zone_tag)
             errors += 1
             continue
+        # B2: a route whose selected gate has been deactivated is refused, and the
+        # refusal names the gate. Written into route_geometry.error rather than merely
+        # skipped, so the route list shows it as unbakeable with a reason instead of
+        # looking like it was simply never reached in the batch.
+        blockers = gates.bake_blockers(r, o, d, gates_by_loc)
+        if blockers:
+            msg = "gate unavailable: " + "; ".join(blockers)
+            _upsert_geom(r["id"], profile, None, None, None, msg[:300], leg=leg,
+                         alt_index=0, zones_applied=zone_tag)
+            refused += 1
+            if r["id"] not in blocked_routes:
+                blocked_routes.append(r["id"])
+            if len(samples) < 5:
+                samples.append(f"{r['id']}/{leg}: {msg[:100]}")
+            continue
         here_calls += haul._here_calls_for([(r["id"], profile, leg)])
         n, err = _bake_leg(r, o, d, profile, leg, factors, alternatives,
-                           avoid=avoid, zone_tag=zone_tag)
+                           avoid=avoid, zone_tag=zone_tag, gates_by_loc=gates_by_loc)
         if err:
             errors += 1
             if len(samples) < 5:
@@ -468,6 +520,11 @@ def bake_batch(profile=DEFAULT_PROFILE, limit=25, legs=LEGS, alternatives=ALTERN
             "remaining": remaining, "legs": list(legs), "error_samples": samples,
             "zones_applied": [z for z in zone_tag.split(",") if z],
             "avoid_areas": avoid,
+            # Phase 5a (B2): legs not attempted because a selected gate is deactivated
+            # or gone. Counted apart from `errors` — a refusal is a state someone can
+            # fix in the UI, a HERE failure is not, and lumping them together loses that.
+            "gate_refused": refused,
+            "gate_blocked_routes": blocked_routes,
             # Phase 4: `limit` still counts LEGS, but a leg is no longer one HERE call.
             # A spliced haul road costs one extra call per road on that leg, so this
             # batch may have spent more requests than it baked legs. Reported rather
@@ -515,8 +572,15 @@ def routes_geojson(profile=DEFAULT_PROFILE, leg="loaded", alt_index=0):
             # flagged failed, for the frontend to draw dashed.
             props.update({"distance_km": None, "duration_hr": None,
                           "failed": True, "error": g["error"]})
-            a_lat, a_lon = _waypoint(o)
-            b_lat, b_lon = _waypoint(d)
+            # drawn in this leg's own direction, so the failed line starts and ends at
+            # the gates the bake would actually have used rather than at a symmetric
+            # pair that may be on the wrong side of both sites
+            if leg == "loaded":
+                a_lat, a_lon = _waypoint(o, "exit", r.get("origin_gate_id"))
+                b_lat, b_lon = _waypoint(d, "entry", r.get("dest_gate_id"))
+            else:
+                a_lat, a_lon = _waypoint(d, "exit", r.get("dest_gate_id"))
+                b_lat, b_lon = _waypoint(o, "entry", r.get("origin_gate_id"))
             feats.append({"type": "Feature", "properties": props,
                           "geometry": {"type": "LineString",
                                        "coordinates": [[a_lon, a_lat], [b_lon, b_lat]]}})
@@ -561,6 +625,10 @@ def public_map_data(profile=None):
 
     locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
                                         (db.current_tenant(),))}
+    try:
+        map_gates = gates.gates_by_location()
+    except Exception:
+        map_gates = {}   # location_gates may not exist yet on a cold database
 
     # every primary-option geometry, in one query rather than per route
     geo = {}
@@ -599,7 +667,15 @@ def public_map_data(profile=None):
         if loaded and loaded["duration_hr"]:
             out_hr = loaded["duration_hr"]
             back_hr = (ret["duration_hr"] if ret and ret["duration_hr"] else out_hr)
-            cycle_hr = out_hr + back_hr + (load_m + unload_m) / 60.0
+            # the public map's cycle must be the SAME total route_analysis() computes,
+            # from the same function. Two places adding up the same components is the
+            # exact shape of the 125% disagreement recorded at main.py:588.
+            has_drawn_road = bool((loaded.get("haul_zones") or "")
+                                  or (ret is not None and (ret.get("haul_zones") or "")))
+            cycle_hr = out_hr + back_hr + _turnaround_parts(
+                used, factors, origin=o, dest=d, route=r,
+                has_drawn_road=has_drawn_road,
+                gates_by_loc=map_gates)["turnaround_hr"]
             trips = int(shift_hr // cycle_hr) if cycle_hr > 0 else 0
 
         for leg_name, g in (("loaded", loaded), ("return", ret)):
@@ -663,7 +739,10 @@ def public_map_data(profile=None):
             aux += f"<p style='margin:4px 0;'><b>Vendor:</b> {l['vendor']}</p>"
         if l.get("detail"):
             aux += f"<p style='margin:4px 0;'><b>Detail:</b> {l['detail']}</p>"
-        lat, lon = _waypoint(l)
+        # the marker is drawn at the point trucks arrive by, which is what the popup's
+        # "routes via" line has always meant. With no gates recorded this is the legacy
+        # pair and then the node itself, exactly as before 5a.
+        lat, lon = _waypoint(l, "entry")
         feats.append({
             "type": "Feature",
             "properties": {
@@ -949,13 +1028,30 @@ def bake_route(route_id, profile=DEFAULT_PROFILE, legs=None, alternatives=ALTERN
                          zones_applied=zone_tag)
         return {"error": "missing origin/destination", "route_id": route_id}
 
+    # B2: refuse the whole route rather than half of it. A gate deactivated at one end
+    # breaks one leg's arrival and the other's departure, so baking the leg that still
+    # resolves would leave a route with one fresh and one stale direction — which reads
+    # on the map as a working route.
+    try:
+        gates_by_loc = gates.gates_by_location()
+    except Exception:
+        gates_by_loc = {}   # location_gates may not exist yet on a cold database
+    blockers = gates.bake_blockers(r, o, d, gates_by_loc)
+    if blockers:
+        msg = "gate unavailable: " + "; ".join(blockers)
+        for leg in legs:
+            _upsert_geom(route_id, profile, None, None, None, msg[:300], leg=leg,
+                         alt_index=0, zones_applied=zone_tag)
+        return {"error": msg, "route_id": route_id, "gate_blocked": True,
+                "blockers": blockers}
+
     factors = conversions.load_factors()
     out = {"route_id": route_id, "profile": profile, "legs": {},
            "zones_applied": [z for z in zone_tag.split(",") if z]}
     errs = []
     for leg in legs:
         n, err = _bake_leg(r, o, d, profile, leg, factors, alternatives,
-                           avoid=avoid, zone_tag=zone_tag)
+                           avoid=avoid, zone_tag=zone_tag, gates_by_loc=gates_by_loc)
         if err:
             errs.append(f"{leg}: {err[:120]}")
             out["legs"][leg] = {"baked": False, "error": err[:200]}
@@ -1023,6 +1119,11 @@ def routes_status():
     except Exception:
         pass          # table not created yet on a database that predates Phase 4
 
+    try:
+        gates_by_loc = gates.gates_by_location()
+    except Exception:
+        gates_by_loc = {}     # location_gates may not exist yet on a cold database
+
     out = []
     for r in db.query("SELECT * FROM routes WHERE tenant_id = ? ORDER BY id",
                       (db.current_tenant(),)):
@@ -1044,6 +1145,14 @@ def routes_status():
             # drawings change. On a route with no haul road attached it is 0.
             "origin_temp_km": r["origin_temp_km"],
             "haul_roads": [l["zone_id"] for l in haul_links.get(r["id"], [])],
+            # Phase 5a. B2 says a route whose gate has been deactivated refuses to bake
+            # AND is flagged by name — a refusal nobody can see is a silent failure with
+            # extra steps, which is what promote_alternative() was fixed for in Phase 4.
+            # `gate_blockers` is a list of sentences naming the gate, empty on a healthy
+            # route, and it is what makes the route table able to show the reason.
+            "origin_gate_id": r.get("origin_gate_id"),
+            "dest_gate_id": r.get("dest_gate_id"),
+            "gate_blockers": gates.bake_blockers(r, o, d, gates_by_loc),
             "profiles": profs,
         })
     return out
@@ -1292,7 +1401,12 @@ def factors_diagnostics():
             "gross_weight_kg": (v.get("routing", {}) or {}).get("gross_weight_kg"),
             "tare_weight_kg": here_routing.tare_weight_kg(prof, factors) if matched else None,
             "load_minutes": load_m, "unload_minutes": unload_m,
-            "turnaround_hr": round((load_m + unload_m) / 60.0, 3),
+            # ⚠️ the UNLOADING component only. This diagnostic catalogues vehicles, and
+            # a vehicle has no route, so it has no gates and therefore no induction or
+            # internal-travel time. Naming it turnaround_hr here would invite exactly
+            # the comparison that must never be made — this figure and a route's
+            # turnaround are different quantities from Phase 5a onward.
+            "unloading_hr": round((load_m + unload_m) / 60.0, 3),
             "truck_params_laden": here_routing._truck_params(prof, factors, laden=True),
             "truck_params_unladen": here_routing._truck_params(prof, factors, laden=False),
         })
@@ -1339,20 +1453,42 @@ def route_diagnostics(route_id, profile=DEFAULT_PROFILE, probe=False):
     if not o or not d:
         return {"error": "missing origin/destination", "route_id": route_id}
 
-    o_lat, o_lon = _waypoint(o)
-    d_lat, d_lon = _waypoint(d)
+    # Phase 5a: four resolutions, not two. Each end is entered and left, and with
+    # one-way gates those are different points — which is exactly what this diagnostic
+    # exists to show, because nothing else in the system makes it visible.
+    o_exit = _waypoint_full(o, "exit", r.get("origin_gate_id"))
+    o_entry = _waypoint_full(o, "entry", r.get("origin_gate_id"))
+    d_entry = _waypoint_full(d, "entry", r.get("dest_gate_id"))
+    d_exit = _waypoint_full(d, "exit", r.get("dest_gate_id"))
+    o_lat, o_lon = o_exit["lat"], o_exit["lon"]      # the loaded leg starts here
+    d_lat, d_lon = d_entry["lat"], d_entry["lon"]    # and ends here
+
+    def _end(loc, sel, leave, arrive):
+        return {
+            "id": loc["id"], "name": loc["name"],
+            "marker": [loc["lat"], loc["lon"]],
+            # the pre-5a pair, kept so a mismatch between it and the migrated gate is
+            # visible rather than inferred
+            "gate": [loc.get("gate_lat"), loc.get("gate_lon")],
+            "selected_gate_id": sel,
+            "leaves_by": {"gate_id": leave["gate_id"], "name": leave["gate_name"],
+                          "point": [leave["lat"], leave["lon"]],
+                          "source": leave["source"], "blocked": leave["blocked"]},
+            "arrives_by": {"gate_id": arrive["gate_id"], "name": arrive["gate_name"],
+                           "point": [arrive["lat"], arrive["lon"]],
+                           "source": arrive["source"], "blocked": arrive["blocked"]},
+            "asymmetric": (leave["lat"], leave["lon"]) != (arrive["lat"], arrive["lon"]),
+            "using_gate": leave["source"] in ("selected", "default")
+                          or arrive["source"] in ("selected", "default"),
+        }
+
     out = {
         "route_id": route_id, "profile": profile,
-        "origin": {"id": o["id"], "name": o["name"],
-                   "marker": [o["lat"], o["lon"]],
-                   "gate": [o.get("gate_lat"), o.get("gate_lon")],
-                   "routed_to": [o_lat, o_lon],
-                   "using_gate": (o.get("gate_lat") is not None and o.get("gate_lon") is not None)},
-        "destination": {"id": d["id"], "name": d["name"],
-                        "marker": [d["lat"], d["lon"]],
-                        "gate": [d.get("gate_lat"), d.get("gate_lon")],
-                        "routed_to": [d_lat, d_lon],
-                        "using_gate": (d.get("gate_lat") is not None and d.get("gate_lon") is not None)},
+        "origin": dict(_end(o, r.get("origin_gate_id"), o_exit, o_entry),
+                       routed_to=[o_lat, o_lon]),
+        "destination": dict(_end(d, r.get("dest_gate_id"), d_exit, d_entry),
+                            routed_to=[d_lat, d_lon]),
+        "gate_blockers": gates.bake_blockers(r, o, d),
         "cached": [
             {"leg": g["leg"], "alt_index": g["alt_index"], "distance_km": g["distance_km"],
              "duration_hr": g["duration_hr"], "has_geometry": bool(g["geometry"]),
@@ -1374,13 +1510,23 @@ def route_diagnostics(route_id, profile=DEFAULT_PROFILE, probe=False):
             # answers a different question from the one being diagnosed
             "loaded": here_routing.probe(o_lat, o_lon, d_lat, d_lon, profile, factors,
                                          avoid_areas=(_probe_avoid or None), laden=True),
-            "return": here_routing.probe(d_lat, d_lon, o_lat, o_lon, profile, factors,
+            # the return leg leaves the destination and arrives at the origin, so it is
+            # d_exit -> o_entry and NOT the loaded pair reversed. Probing the reversed
+            # pair would compare two routes that no bake will ever produce.
+            "return": here_routing.probe(d_exit["lat"], d_exit["lon"],
+                                         o_entry["lat"], o_entry["lon"], profile, factors,
                                          avoid_areas=(_probe_avoid or None), laden=False),
         }
         L, R = out["probe"]["loaded"], out["probe"]["return"]
         ld = (L.get("summaries") or [{}])[0].get("distance_km")
         rd = (R.get("summaries") or [{}])[0].get("distance_km")
         out["probe"]["legs_differ"] = (ld is not None and rd is not None and ld != rd)
+        # ⚠️ with asymmetric gates the legs differ for TWO reasons at once — different
+        # roads and different endpoints. Said here so a distance gap is not read as a
+        # routing finding when it is a gate placement.
+        out["probe"]["endpoints_differ"] = (
+            (o_exit["lat"], o_exit["lon"]) != (o_entry["lat"], o_entry["lon"])
+            or (d_entry["lat"], d_entry["lon"]) != (d_exit["lat"], d_exit["lon"]))
     return out
 
 
@@ -1404,8 +1550,9 @@ def compare_profiles(route_id, profiles=None, probe=False):
     o, d = locs.get(r["origin_id"]), locs.get(r["dest_id"])
     if not o or not d:
         return {"error": "missing origin/destination", "route_id": route_id}
-    o_lat, o_lon = _waypoint(o)
-    d_lat, d_lon = _waypoint(d)
+    # the loaded leg's real endpoints: out of the origin, into the destination
+    o_lat, o_lon = _waypoint(o, "exit", r.get("origin_gate_id"))
+    d_lat, d_lon = _waypoint(d, "entry", r.get("dest_gate_id"))
 
     _probe_avoid, _zone_tag = active_avoid()
     rows = []
@@ -1500,8 +1647,8 @@ def zones_diagnostics(route_id=None, profile=DEFAULT_PROFILE, probe=False):
         if not o or not d:
             out["probe_error"] = "missing origin/destination"
             return out
-        o_lat, o_lon = _waypoint(o)
-        d_lat, d_lon = _waypoint(d)
+        o_lat, o_lon = _waypoint(o, "exit", r.get("origin_gate_id"))
+        d_lat, d_lon = _waypoint(d, "entry", r.get("dest_gate_id"))
         factors = conversions.load_factors()
         out["probe"] = {
             "route_id": route_id, "profile": profile,
@@ -1534,6 +1681,92 @@ def _turnaround_minutes(profile, factors):
     return float(load or 0), float(unload or 0)
 
 
+#: B5, answered 2026-08-30: **(c) — both, drawn road wins.**
+#:
+#: Internal travel had two homes and they overlap. Phase 4 substitutes a drawn haul
+#: road's assigned speed into route_geometry.duration_hr, and route_analysis() reads
+#: duration_hr for cycle time — so a route with a drawn internal road ALREADY carries
+#: its internal minutes. B4 then asked for an internal-travel component inside
+#: turnaround_hr. Adding both counts the same minutes twice, and a cycle time that is
+#: too long makes every fleet-size number too big — wrong in the direction that looks
+#: cautious, which is the hardest kind to notice.
+#:
+#: The rule, and it is a rule rather than a default:
+#:   * a route with any attached haul road takes its internal travel from the geometry
+#:     and gets NO flat figure;
+#:   * a route with none takes the flat per-gate figure;
+#:   * `internal_travel_source` says which happened, on every row.
+#:
+#: ⚠️ The precedence is per ROUTE, not per end, because in 5a nothing says which end a
+#: haul road belongs to — route_haul_roads records the route and the traversal order,
+#: not the site. A route with a drawn road at the origin and a flat figure owed at the
+#: destination therefore under-counts. 5b's gate<->area links are what make this
+#: per-end, and this note is the reason they have to.
+INTERNAL_TRAVEL_SOURCES = ("drawn_road", "flat", "none")
+
+
+def _turnaround_parts(profile, factors, origin=None, dest=None, route=None,
+                      has_drawn_road=False, gates_by_loc=None):
+    """
+    B4: turnaround as three named components instead of one number.
+
+      unloading       load_minutes + unload_minutes, per vehicle, from factors.json.
+                      Unchanged from pre-5a — this IS the old turnaround.
+      safety          B3 induction, per GATE, applied to whatever arrives. Charged at
+                      the gate the truck ARRIVES by at each end, once per cycle each.
+      internal travel the flat per-gate figure, or nothing when a drawn road already
+                      carries it. See INTERNAL_TRAVEL_SOURCES above.
+
+    🔴 THE INVARIANT THIS FUNCTION MUST KEEP. On a database with no gate rows — or with
+    gates whose two new minute fields are NULL, which is exactly what the legacy
+    migration creates — safety and internal travel are both 0.0 and `total_minutes`
+    equals load + unload to the digit. That is what makes the split observably not a
+    change to anybody's numbers on the day it ships. test_phase5a.py asserts it across
+    every vehicle profile in factors.json, and it is the assertion the kickoff note
+    demanded before any number moves.
+    """
+    load_m, unload_m = _turnaround_minutes(profile, factors)
+    safety_m = 0.0
+    flat_internal_m = 0.0
+    gbl = gates_by_loc or {}
+    route = route or {}
+    for loc, gate_id in ((origin, route.get("origin_gate_id")),
+                         (dest, route.get("dest_gate_id"))):
+        if not loc:
+            continue
+        # the ARRIVAL gate at each end: induction happens on the way in, and the flat
+        # internal-travel figure is the run from that gate to the working face
+        try:
+            r = gates.resolve(loc, "entry", gate_id, gates=gbl.get(loc.get("id")))
+        except Exception:
+            continue     # location_gates may not exist yet on a cold database
+        safety_m += float(r.get("safety_minutes") or 0.0)
+        flat_internal_m += float(r.get("internal_travel_minutes") or 0.0)
+
+    if has_drawn_road:
+        internal_m, source = 0.0, "drawn_road"
+    elif flat_internal_m > 0:
+        internal_m, source = flat_internal_m, "flat"
+    else:
+        internal_m, source = 0.0, "none"
+
+    total = load_m + unload_m + safety_m + internal_m
+    return {
+        "load_minutes": load_m,
+        "unload_minutes": unload_m,
+        "unloading_minutes": load_m + unload_m,
+        "safety_minutes": safety_m,
+        "internal_travel_minutes": internal_m,
+        "internal_travel_source": source,
+        # what the flat figure WOULD have been, kept even when the drawn road won. A
+        # number that vanished silently is how someone later concludes the gate field
+        # was never wired up.
+        "internal_travel_flat_available": flat_internal_m,
+        "total_minutes": total,
+        "turnaround_hr": total / 60.0,
+    }
+
+
 
 def route_analysis(route_id, profiles=None):
     """
@@ -1559,6 +1792,19 @@ def route_analysis(route_id, profiles=None):
     veh = factors.get("vehicles", {}) or {}
     default_veh = veh.get("_default", {}) or {}
 
+    # Phase 5a: the two ends and their gates, for the turnaround split. Resolved once
+    # per route rather than per (profile x alternative) row — the gates do not vary
+    # with the vehicle, and B3 says induction does not either.
+    route_row = r[0]
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
+    o_loc = locs.get(route_row.get("origin_id"))
+    d_loc = locs.get(route_row.get("dest_id"))
+    try:
+        gates_by_loc = gates.gates_by_location()
+    except Exception:
+        gates_by_loc = {}   # location_gates may not exist yet on a cold database
+
     rows_by = {}
     for g in db.query("SELECT * FROM route_geometry WHERE tenant_id = ? AND route_id = ?",
                       (db.current_tenant(), route_id)):
@@ -1576,7 +1822,6 @@ def route_analysis(route_id, profiles=None):
                            or default_veh.get("emissions_kg_co2e_per_km") or 0)
         # turnaround varies by vehicle — a flatbed strapping a load is not a tipper
         load_m, unload_m = _turnaround_minutes(prof, factors)
-        turnaround_hr = (load_m + unload_m) / 60.0
         for alt in sorted(loaded):
             lg = loaded[alt]
             if not lg["geometry"]:
@@ -1589,6 +1834,16 @@ def route_analysis(route_id, profiles=None):
             l_hr = lg["duration_hr"] or 0.0
             r_km = (rg["distance_km"] if rg else l_km) or 0.0
             r_hr = (rg["duration_hr"] if rg else l_hr) or 0.0
+            # B5(c): the drawn road wins. `has_drawn_road` is read off the geometry
+            # rows actually being costed, not off route_haul_roads — an attachment that
+            # has not been baked yet contributes nothing to duration_hr, so charging it
+            # as "already counted" would drop the flat figure for minutes nobody has.
+            has_drawn_road = bool((lg.get("haul_zones") or "")
+                                  or (rg is not None and (rg.get("haul_zones") or "")))
+            parts = _turnaround_parts(prof, factors, origin=o_loc, dest=d_loc,
+                                      route=route_row, has_drawn_road=has_drawn_road,
+                                      gates_by_loc=gates_by_loc)
+            turnaround_hr = parts["turnaround_hr"]
             cycle_hr = l_hr + r_hr + turnaround_hr
             trips = int(shift_hr // cycle_hr) if cycle_hr > 0 else 0
             total_km = round(l_km + r_km, 2)
@@ -1606,7 +1861,20 @@ def route_analysis(route_id, profiles=None):
                 "payload_t": payload_t,
                 "co2_kg_per_km": co2_per_km,
                 "load_minutes": load_m, "unload_minutes": unload_m,
+                # B4: the total AND its three parts. The total is what every surface
+                # must display — the dashboard once computed its own and disagreed with
+                # this one by 125% (main.py:588). The parts are here so the total can be
+                # explained, not so anyone can re-add them.
                 "turnaround_hr": round(turnaround_hr, 3),
+                "turnaround_parts": {
+                    "unloading_minutes": round(parts["unloading_minutes"], 3),
+                    "internal_travel_minutes": round(parts["internal_travel_minutes"], 3),
+                    "safety_minutes": round(parts["safety_minutes"], 3),
+                    "internal_travel_source": parts["internal_travel_source"],
+                    "internal_travel_flat_available":
+                        round(parts["internal_travel_flat_available"], 3),
+                    "total_minutes": round(parts["total_minutes"], 3),
+                },
                 "return_estimated": rg is None,
                 # Phase 4: how much of this cycle is drawn haul road, and what the cycle
                 # would have been on HERE's own timing. Surfaced rather than folded in
