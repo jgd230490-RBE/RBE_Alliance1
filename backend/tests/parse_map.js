@@ -322,6 +322,108 @@ ok("and a bridge popup says there is no surveyed track there",
 ok("and that it is not measured or routed on",
   /not measured or routed on/.test(code));
 
+// --- 2026-08-28: the mandated palette ------------------------------------------
+// The rule is that no IPT colour may reuse a hex the map spends on a route, a
+// forecast, a selection or temporary haul — otherwise "this stretch is IPT 6"
+// and "this route is laden" become the same colour, and the route layers are
+// the ones carrying money. Checked against the real source both ways.
+const RESERVED = ["#039E86", "#f59e0b", "#C2790B", "#3398DB", "#BF2E55", "#003787", "#0A1446"];
+// only the hexes inside IPT_SEGMENTS — IPT_UNDERLAY and IPT_DEFAULT declare
+// their own and are checked separately
+const segBlock = iptSrc.slice(iptSrc.indexOf("window.IPT_SEGMENTS = ["),
+                              iptSrc.indexOf("window.IPT_RESERVED_COLOURS"));
+const bandHexes = (segBlock.match(/colour: '(#[0-9A-Fa-f]{6})'/g) || [])
+  .map(x => x.split("'")[1].toLowerCase());
+ok("the band table declares a colour for every band", bandHexes.length === 8,
+  `got ${bandHexes.length}`);
+ok("⭐ NO IPT colour reuses a reserved route / forecast / selection hex",
+  RESERVED.every(r => !bandHexes.includes(r.toLowerCase())),
+  `clash: ${RESERVED.filter(r => bandHexes.includes(r.toLowerCase())).join(", ")}`);
+ok("and the underlay colour is clear of them too",
+  !RESERVED.map(r => r.toLowerCase()).includes(
+    ((iptSrc.match(/colour: '(#[0-9A-Fa-f]{6})',\s+\/\/ as specified/) || [])[1] || "").toLowerCase()));
+ok("the reserved list is in the source, with its usage counts, so a future "
+   + "palette edit has something to check against",
+  /IPT_RESERVED_COLOURS/.test(iptSrc) && /inbound \(laden\)/.test(iptSrc));
+ok("⭐ the measured separation is recorded, not left to opinion",
+  /weakest adjacent pair/.test(iptSrc) && /ΔE2000/.test(iptSrc));
+ok("⭐ the colour-blind figure is recorded — it is what condemned the first palette",
+  /deuteranopia/.test(iptSrc) && /colour-blind/.test(iptSrc));
+ok("and the ceiling is named, so nobody re-shuffles these hoping for more room",
+  /is the CEILING/.test(iptSrc));
+ok("the six hue families are written down, so an edit keeps the property",
+  /plum, oxblood, stone, bronze, teal blue/.test(iptSrc));
+ok("⭐ the #6D28D9 collision is GONE, not just documented",
+  !/colour: '#6D28D9'/.test(iptSrc));
+// ⭐ Six DIFFERENT hue families, one per band. The failure being guarded against is
+// not "a wrong hex" but "two bands drifting back into the same family", which is
+// exactly what the first palette did and what no single-colour assertion catches.
+for (const [ipt, hex] of [["IPT 6", "#86198F"], ["IPT 1", "#7F1D1D"], ["IPT 2", "#78716C"],
+                          ["IPT 3", "#854D0E"], ["IPT 4", "#155E75"], ["IPT 5", "#166534"]]) {
+  ok(`${ipt} is ${hex}`, segBlock.includes(hex));
+}
+ok("⭐ all six band colours are distinct — no two share a hex",
+  new Set(bandHexes).size === 7,
+  `${new Set(bandHexes).size} distinct of ${bandHexes.length} (IPT 4 appears twice)`);
+ok("the underlay is a LIGHT wash, not a seventh deep colour competing for hue",
+  /colour: '#C4B5FD'/.test(iptSrc));
+ok("the first-cut greens and ambers are gone",
+  !iptSrc.includes("#C6841D") && !/colour: '#039E86'/.test(iptSrc));
+// ⚠️ Test the declared COLOURS, not the block text — the comment above the table
+// names the old hexes on purpose, as the record of what changed and why.
+ok("and so is the whole indigo/violet run that made three bands unreadable",
+  !["#4338ca", "#6d28d9", "#5b21b6"].some(h => bandHexes.includes(h)));
+
+// --- IPT 6 superstructure underlay --------------------------------------------
+ok("there is an underlay layer", code.includes("'id': 'rail-alignment-underlay'"));
+ok("⭐ it is added AFTER survey and BEFORE the bridges and the civil track, so "
+   + "the package colour stays the primary read",
+  code.indexOf("'id': 'rail-alignment-survey'") < code.indexOf("'id': 'rail-alignment-underlay'") &&
+  code.indexOf("'id': 'rail-alignment-underlay'") < code.indexOf("'id': 'rail-alignment-bridge'"));
+ok("it is wider than the civil track",
+  /'id': 'rail-alignment-underlay'[\s\S]{0,900}'line-width': \(window\.IPT_UNDERLAY/.test(code));
+ok("its colour, width and opacity are one tunable object, not three literals",
+  /window\.IPT_UNDERLAY = \{[\s\S]{0,300}colour:[\s\S]{0,200}width:[\s\S]{0,120}opacity:/.test(iptSrc));
+ok("⭐ it runs the whole A1 mainline, not just the northern IPT 6 civil band — "
+   + "so it is filtered by align_type and scope, never by chainage",
+  /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'ipt'\], 'Outside A1'\]/.test(code));
+ok("⭐ and it excludes the gap bridges — a 4.5 px solid line across country "
+   + "with no surveyed track is what the 30% bridges exist to avoid",
+  /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
+ok("the reason for that exclusion is written next to it",
+  /what the 30% bridges were built to avoid/.test(src));
+
+// --- per-IPT selection ---------------------------------------------------------
+ok("the legend rows are checkboxes now",
+  /input type="checkbox" id="\$\{iptCheckboxId/.test(code));
+ok("still generated from IPT_SEGMENTS, not hand-typed",
+  code.includes("window.iptLegendRows()"));
+ok("ticking one re-filters rather than rebuilding the GeoJSON",
+  code.includes("function applyIptFilter") && !/applyIptFilter[\s\S]{0,600}buildIptAlignment/.test(code));
+ok("the filter is a membership test on ipt",
+  /\['in', \['get', 'ipt'\], on\]/.test(code));
+ok("both the solid track and its bridges follow the same checkbox",
+  (code.match(/\['in', \['get', 'ipt'\], on\]/g) || []).length === 2);
+ok("⭐ the IPT 6 checkbox drives the UNDERLAY, not the civil filter",
+  /toggleUnderlay\(this\.checked\)/.test(code) &&
+  /function toggleUnderlay[\s\S]{0,140}rail-alignment-underlay/.test(code));
+ok("⭐ and unchecking it leaves every civil colour where it was — IPT 6 is "
+   + "always in the civil set",
+  /const on = \[IPT_UNDERLAY_KEY\]/.test(code));
+ok("the reason that asymmetry exists is written down",
+  /IPT 6 is NOT in the civil filter/.test(src));
+ok("all boxes start ticked",
+  /type="checkbox" id="\$\{iptCheckboxId\(r\.ipt\)\}" checked/.test(code));
+ok("a missing checkbox is treated as ticked, so the filter cannot blank the map "
+   + "if the legend failed to render",
+  /!el \|\| el\.checked/.test(code));
+ok("the checkbox id is derived, not hand-listed per IPT",
+  /function iptCheckboxId/.test(code));
+ok("hiding the whole alignment hides the underlay too",
+  /function toggleAlignment[\s\S]{0,500}rail-alignment-underlay/.test(code));
+ok("the underlay legend row says what it is",
+  /Superstructure \(corridor underlay\)/.test(code));
+
 // --- chainage, zoom-synced -----------------------------------------------------
 ok("the chainage source carries the step tiers",
   /addSource\('chainage-source',\s*\{\s*type:\s*'geojson',\s*data:\s*chainageStepData\(\)/.test(code));
@@ -330,8 +432,22 @@ ok("which is memoised like the alignment build",
 ok("⭐ marker density is driven by zoom", /'circle-radius':\s*\['step',\s*\['zoom'\]/.test(code));
 ok("⭐ starting with the 10 km ticks alone at corridor zoom",
   /CH_TIER\(10000\)/.test(code));
-ok("then 5 km, then 1 km, then everything",
-  /10,\s*CH_TIER\(5000\)[\s\S]{0,120}12,\s*CH_TIER\(1000\)[\s\S]{0,120}13\.5,\s*3/.test(code));
+ok("then 5 km at zoom 9, 1 km at 11, 500 m at 13, everything at 15",
+  /9,\s*CH_TIER\(5000\)[\s\S]{0,120}11,\s*CH_TIER\(1000\)[\s\S]{0,120}13,\s*CH_TIER\(500\)[\s\S]{0,120}15,\s*3/.test(code));
+ok("⭐ labels stop at the 500 m tier even at maximum zoom — a number every 94 m "
+   + "is the same smear made of text",
+  /15,\s*CH_LBL\(500\)/.test(code) && !/15,\s*\['get', 'chaintxt'\]/.test(code));
+ok("the label ladder starts one zoom level behind the circles",
+  /9,\s*CH_LBL\(10000\)/.test(code));
+ok("the 500 m tier exists in the step table",
+  /CHAINAGE_STEPS = \[10000, 5000, 1000, 500, 100\]/.test(iptSrc));
+ok("⭐ the on-tick test handles NEGATIVE chainage — this corridor starts at "
+   + "-3982.3 and the spec's formula could never match a negative tick",
+  /\(\(m % step\) \+ step\) % step/.test(iptSrc));
+ok("and why the spec's version was not used is recorded",
+  /WRONG for negative chainage/.test(iptSrc));
+ok("the chainage toggle is off by default",
+  !/id="layer-chainage"[^>]*\schecked[\s>]/.test(htmlNoHandlers));
 ok("the old flat radius of 3 is gone",
   !/'id': 'chainage-global'[\s\S]{0,400}'circle-radius':\s*3,/.test(code));
 ok("⭐ labels are off entirely at corridor zoom",
@@ -369,7 +485,7 @@ ok("the legend is generated from IPT_SEGMENTS, not hand-typed",
   code.includes("window.iptLegendRows()") && !/IPT 6[\s\S]{0,80}IPT 1[\s\S]{0,80}IPT 2/.test(html.replace(iptSrc, "")));
 ok("and it is rendered on load", code.includes("renderIptLegend()"));
 ok("hiding the alignment hides its legend too",
-  /function toggleAlignment[\s\S]{0,300}ipt-legend[\s\S]{0,120}display/.test(code));
+  /function toggleAlignment[\s\S]{0,700}ipt-legend[\s\S]{0,160}display/.test(code));
 
 ok("⭐ the built collection is memoised, so a basemap switch does not rebuild it",
   /IPT_ALIGNMENT\s*=\s*null/.test(code) && /if\s*\(IPT_ALIGNMENT\)\s*return IPT_ALIGNMENT/.test(code));
@@ -400,8 +516,17 @@ ok("the reason midpoint stamping was rejected is recorded with its numbers",
 // The route filter must not be pointed at the alignment layer
 ok("⭐ the sector-IPT route filter still applies to route layers only",
   /filterArr\.push\(\['==',\s*\['get',\s*'ipt'\],\s*i\]\)/.test(code));
-ok("and rail-alignment is never given a filter",
-  !/setFilter\('rail-alignment'/.test(code));
+// ⚠️ This assertion used to read "rail-alignment is never given a filter". The
+// 2026-08-28 per-IPT selection filters it deliberately, so the guard is restated
+// rather than deleted: what it was ever protecting is that the ROUTE filter
+// (#filter-ipt, which means "the IPT that owns the delivery") must never drive
+// the ALIGNMENT layer (whose ipt means "the works package this ground is in").
+ok("⭐ the alignment filter is driven by the IPT checkboxes, not by #filter-ipt",
+  /setFilter\('rail-alignment',[\s\S]{0,300}checkedIpts\(\)|applyIptFilter[\s\S]{0,900}setFilter\('rail-alignment'/.test(code));
+ok("⭐ and #filter-ipt is never read by the alignment code",
+  !/function applyIptFilter[\s\S]{0,900}filter-ipt/.test(code));
+ok("the two meanings are still written down where they can be confused",
+  /NAMING COLLISION/.test(iptSrc));
 
 console.log();
 for (const f of fail) console.log("  FAIL:", f);

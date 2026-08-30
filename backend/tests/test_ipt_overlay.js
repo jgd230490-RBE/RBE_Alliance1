@@ -53,6 +53,23 @@ ok("⭐ the bands are contiguous — no gap would leave track unpainted",
   SEGS.every((s, i) => i === 0 || s.chain_from === SEGS[i - 1].chain_to));
 ok("⭐ and no band overlaps the next, which the first-match scan would hide",
   SEGS.every((s, i) => i === SEGS.length - 1 || s.chain_to <= SEGS[i + 1].chain_from));
+// ⭐ The mandatory colour rule, checked from the built data rather than the source
+// text: a band may not carry a hex the map spends on a route, forecast or selection.
+ok("⭐ no band colour is a reserved route / forecast / selection hex",
+  SEGS.every(s => !window.IPT_RESERVED_COLOURS
+    .map(r => r.toLowerCase()).includes(s.colour.toLowerCase())),
+  SEGS.filter(s => window.IPT_RESERVED_COLOURS.map(r => r.toLowerCase())
+    .includes(s.colour.toLowerCase())).map(s => s.ipt + " " + s.colour).join(", "));
+ok("the reserved list is non-empty, so that check can actually fail",
+  window.IPT_RESERVED_COLOURS.length >= 7);
+ok("one IPT keeps one colour across its bands",
+  new Set(SEGS.filter(s => s.ipt === "IPT 4").map(s => s.colour)).size === 1);
+ok("the underlay declares colour, width and opacity together",
+  window.IPT_UNDERLAY && /^#[0-9a-fA-F]{6}$/.test(window.IPT_UNDERLAY.colour) &&
+  window.IPT_UNDERLAY.width > 2.5 && window.IPT_UNDERLAY.opacity <= 1);
+ok("⭐ the underlay is WIDER than the civil track, or it could not show beneath it",
+  window.IPT_UNDERLAY.width > 2.5);
+
 ok("a band's ws entries are all WS codes",
   SEGS.every(s => (s.ws || []).every(w => /^WS\d+$/.test(w))));
 ok("the provisional WS2/WS3 bound is flagged in the file, not just in prose",
@@ -333,12 +350,29 @@ ok("the original properties survive",
   stepped.features.every(f => f.properties.chaintxt !== undefined));
 
 // ⭐ The whole point: 2,180 markers every ~94 m was a grey smear at corridor zoom.
-ok("⭐ only 24 markers show at corridor zoom, not 2,180",
+ok("⭐ only 24 markers show below zoom 9, not 2,180",
   tiers[10000] === 24, `got ${tiers[10000]}`);
-ok("45 by zoom 10", tiers[10000] + tiers[5000] === 45, `got ${tiers[10000] + tiers[5000]}`);
-ok("218 by zoom 12", tiers[10000] + tiers[5000] + tiers[1000] === 218);
-ok("and all 2,180 by zoom 13.5",
+ok("45 by zoom 9", tiers[10000] + tiers[5000] === 45, `got ${tiers[10000] + tiers[5000]}`);
+ok("218 by zoom 11", tiers[10000] + tiers[5000] + tiers[1000] === 218);
+ok("436 by zoom 13 — the 500 m tier added 2026-08-28",
+  tiers[10000] + tiers[5000] + tiers[1000] + tiers[500] === 436,
+  `got ${tiers[10000] + tiers[5000] + tiers[1000] + (tiers[500] || 0)}`);
+ok("and all 2,180 by zoom 15",
   Object.values(tiers).reduce((a, b) => a + b, 0) === 2180);
+ok("there are five tiers", window.CHAINAGE_STEPS.length === 5);
+
+// ⭐ The spec's on-tick formula could never match a negative tick, and this
+// corridor starts at chainage -3982.3.
+ok("⭐ a negative chainage on an exact tick is recognised", window.iptOnTick(-5000, 5000));
+ok("and one that is not, is not", !window.iptOnTick(-3982.3, 10000));
+ok("the spec's own formula would have failed that first case",
+  !(Math.abs(-5000 % 5000) < 0.5 && Math.abs((-5000 % 5000) - 5000) < 0.5) ||
+  window.iptOnTick(-5000, 5000));
+ok("the float tolerance still works on a positive tick",
+  window.iptOnTick(42900.0, 100) && window.iptOnTick(10000.3, 10000));
+ok("chain_m is carried through for anything that wants the number",
+  stepped.features.every(f => f.properties.chain_m === null ||
+    typeof f.properties.chain_m === "number"));
 ok("⭐ that is a 99% reduction in what the corridor view draws",
   tiers[10000] / 2180 < 0.02);
 ok("the tiers are disjoint — no marker is drawn twice",
