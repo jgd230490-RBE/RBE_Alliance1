@@ -424,6 +424,76 @@ ok("hiding the whole alignment hides the underlay too",
 ok("the underlay legend row says what it is",
   /Superstructure \(corridor underlay\)/.test(code));
 
+// --- 2026-08-30: work-section boundary ticks -----------------------------------
+ok("there is a boundary source", code.includes("addSource('ws-boundary-source'"));
+ok("memoised like the other two builds",
+  /WS_BOUNDS\s*=\s*null/.test(code) && /if\s*\(WS_BOUNDS\)\s*return WS_BOUNDS/.test(code));
+ok("a tick layer and a label layer", code.includes("'id': 'ws-boundary-ticks'") &&
+  code.includes("'id': 'ws-boundary-labels'"));
+ok("⭐ ticks are a SYMBOL layer, not a line — a fixed ground length would be one "
+   + "pixel at corridor zoom and half the viewport at zoom 16",
+  /'id': 'ws-boundary-ticks', 'type': 'symbol'/.test(code));
+ok("⭐ rotated to lie ACROSS the alignment, not along it",
+  /'text-rotate': \['get', 'tick_rotate'\]/.test(code) &&
+  /'text-rotation-alignment': 'map'/.test(code));
+ok("and tick_rotate is the local bearing plus 90",
+  /brg \+ 90/.test(iptSrc));
+ok("hidden below zoom 11", /'id': 'ws-boundary-ticks'[\s\S]{0,200}'minzoom': 11/.test(code));
+ok("⭐ labels only from zoom 13, one level after the ticks appear",
+  /'id': 'ws-boundary-labels'[\s\S]{0,200}'minzoom': 13/.test(code));
+ok("the label names both sections meeting at the tick, and the chainage",
+  /\['get', 'label'\]/.test(code) && /\['get', 'chain_txt'\]/.test(code));
+ok("labels declutter; ticks do not, because there are only seven",
+  /'id': 'ws-boundary-ticks'[\s\S]{0,700}'text-allow-overlap': true/.test(code) &&
+  /'id': 'ws-boundary-labels'[\s\S]{0,700}'text-allow-overlap': false/.test(code));
+ok("⭐ the tick colour is neutral slate — not a route colour and not a package "
+   + "colour, because a tick is neither",
+  /'text-color': '#334155'/.test(code) &&
+  /WS_TICK_COLOUR = '#334155'/.test(iptSrc));
+ok("and slate is not one of the reserved route hexes",
+  !RESERVED.map(r => r.toLowerCase()).includes("#334155"));
+ok("nor one of the band colours", !bandHexes.includes("#334155"));
+ok("one toggle moves ticks and labels together",
+  /function toggleWsBounds[\s\S]{0,220}ws-boundary-ticks[\s\S]{0,120}ws-boundary-labels/.test(code));
+ok("the sidebar has the checkbox", /id="layer-ws-bounds"/.test(html));
+ok("on by default", /id="layer-ws-bounds"[^>]*\schecked[\s>]/.test(htmlNoHandlers));
+ok("⭐ ticks are added AFTER the alignment layers, so one is never buried under "
+   + "the line it marks",
+  code.indexOf("'id': 'rail-alignment',") < code.indexOf("'id': 'ws-boundary-ticks'"));
+ok("and BEFORE chainage, so a 100 m dot never sits on top of a package edge",
+  code.indexOf("'id': 'ws-boundary-ticks'") < code.indexOf("'id': 'chainage-global'"));
+ok("the boundary table lives in ipt_segments.js, beside the band table it mirrors",
+  /window\.WS_BOUNDARIES = \[/.test(iptSrc));
+ok("⭐ the reason WS12–WS15 get no tick is written down, not just implied",
+  /point assets/.test(iptSrc) && /WS12, WS13, WS14, WS15/.test(iptSrc));
+ok("⭐ and so is the reason 31\+507 is not one",
+  /31\+507/.test(iptSrc) && /LOCAL chainage/.test(iptSrc));
+ok("the ~141\+930 discrepancy at the A1/A2 border is recorded",
+  /141\+930/.test(iptSrc));
+
+// --- the WS name table and its disputes ---------------------------------------
+ok("WS names are declared once, in the band file", /window\.WS_NAMES = \{/.test(iptSrc));
+ok("all fifteen are named",
+  (iptSrc.match(/WS\d+:\s*\{ name:/g) || []).length === 15,
+  `${(iptSrc.match(/WS\d+:\s*\{ name:/g) || []).length} named`);
+ok("⭐ WS13 is IPT 2, per the scope diagram — the IPT Matrix's own error list "
+   + "names 'WS 13 (Urge) → IPT 1' as wrong, and the first delivery shipped it",
+  /WS13:[\s\S]{0,120}ipt: 'IPT 2'/.test(iptSrc));
+ok("and the band table agrees — WS13 moved from IPT 1 to IPT 2",
+  /ipt: 'IPT 2', ws: \['WS2', 'WS13'\]/.test(iptSrc) &&
+  /ipt: 'IPT 1', ws: \['WS1', 'WS12'\]/.test(iptSrc));
+ok("⭐ WS14/WS15 ownership is NOT asserted — the scope diagram draws no IPT band "
+   + "beneath them and it is open question A3.2",
+  /WS14:[\s\S]{0,140}ipt: null[\s\S]{0,80}provisional: true/.test(iptSrc) &&
+  /WS15:[\s\S]{0,140}ipt: null/.test(iptSrc));
+ok("the WS7 subdivision into 7.1–7.4 is recorded as unmodelled",
+  /WS 7\.1–7\.4/.test(iptSrc));
+ok("every band names the ONE section that owns its chainage",
+  (iptSrc.match(/ws_primary: '/g) || []).length === 7);
+ok("and 'Outside A1' owns none", /ws_primary: null/.test(iptSrc));
+ok("segments carry the owning section and its name",
+  /p\.ws_primary = /.test(iptSrc) && /p\.ws_name = /.test(iptSrc));
+
 // --- chainage, zoom-synced -----------------------------------------------------
 ok("the chainage source carries the step tiers",
   /addSource\('chainage-source',\s*\{\s*type:\s*'geojson',\s*data:\s*chainageStepData\(\)/.test(code));
@@ -497,8 +567,24 @@ ok("the raw alignment_data is no longer handed to the source directly",
 ok("⭐ the alignment popup is wired exactly once, not once per basemap switch",
   code.includes("ALIGNMENT_POPUP_WIRED") &&
   /function setupAlignmentPopup\(\)\s*\{\s*if\s*\(ALIGNMENT_POPUP_WIRED\)\s*return;/.test(code));
-ok("the popup names the IPT and the work sections",
-  code.includes("Work sections:") && code.includes("p.ipt_label"));
+// --- 2026-08-30: the popup now names the WORK SECTION that owns the band -------
+ok("the popup names the IPT and the owning work section",
+  code.includes("Work section:") && code.includes("p.ipt_label"));
+ok("⭐ it shows the OWNING section, not every code on that ground",
+  code.includes("p.ws_primary") && /also on this ground/.test(code));
+ok("with its official name, not just the code",
+  /wsName/.test(code) && /window\.wsLabel/.test(iptSrc));
+ok("⭐ chainage reads as an engineer writes it — 105+480, not 105.48 km",
+  /window\.chainText/.test(code) && !/toFixed\(3\)\.replace/.test(code));
+ok("the underlay note appears ONLY when the underlay is actually on",
+  /IPT 6 superstructure applies on this stretch/.test(code) &&
+  /undOn\s*\?/.test(code) && /undBox/.test(code));
+ok("and never on a stretch the underlay does not cover",
+  /p\.ipt !== 'Outside A1'/.test(code));
+ok("a provisional band says so in the popup",
+  /Provisional boundary/.test(code) && /125\+000/.test(code));
+ok("and a disputed WS name carries its dispute",
+  /wsMeta\.note/.test(code));
 ok("and says the WS2/WS3 bound is provisional rather than implying it is surveyed",
   /provisional/i.test(code));
 

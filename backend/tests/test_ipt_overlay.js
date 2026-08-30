@@ -379,7 +379,148 @@ ok("the tiers are disjoint — no marker is drawn twice",
   Object.values(tiers).reduce((a, b) => a + b, 0) === stepped.features.length);
 
 // =============================================================================
-// 9. Degenerate inputs
+// 9. Work-section boundary ticks — the 2026-08-30 slice
+// =============================================================================
+const wsb = window.buildWsBoundaries(window.chainage_global_data);
+const B = wsb.features;
+
+ok("⭐ seven boundary ticks, no more and no fewer", B.length === 7, `got ${B.length}`);
+ok("all seven are points", B.every(f => f.geometry.type === "Point"));
+ok("the builder reports what it built against what it was asked for",
+  window.WS_BOUNDARY_STATS.built === window.WS_BOUNDARY_STATS.expected);
+
+// ⭐ The invariant that matters: a tick marks a colour change, so every tick
+// chainage MUST be a boundary in the band table. A tick that drifted off the
+// band edge would point at nothing.
+const bandEdges = new Set(SEGS.slice(1).map(s => s.chain_from));
+ok("⭐ every tick sits exactly on a band boundary from IPT_SEGMENTS",
+  B.every(f => bandEdges.has(f.properties.chain_m)),
+  B.filter(f => !bandEdges.has(f.properties.chain_m)).map(f => f.properties.chain_m).join(", "));
+ok("⭐ and every band boundary has a tick — none is missed",
+  [...bandEdges].every(e => B.some(f => f.properties.chain_m === e)),
+  [...bandEdges].filter(e => !B.some(f => f.properties.chain_m === e)).join(", "));
+
+ok("the ticks are the seven chainages the spec listed",
+  B.map(f => f.properties.chain_m).join(",") ===
+  "105480,117278,125000,130036,135400,137685,142000",
+  B.map(f => f.properties.chain_m).join(","));
+ok("⭐ NOT 31507 — that is local chainage and this map is global throughout",
+  !B.some(f => f.properties.chain_m === 31507));
+ok("and no tick for WS12, WS13, WS14 or WS15 — they are point assets, not bands",
+  !B.some(f => ["WS12", "WS13", "WS14", "WS15"]
+    .includes(f.properties.from_ws) || ["WS12", "WS13", "WS14", "WS15"]
+    .includes(f.properties.to_ws)));
+
+// ⭐ The bug this caught. The first version took the bearing from the two markers
+// bracketing the boundary — which is a zero-length span when the boundary lands
+// exactly on a 100 m marker, and it then silently reused the PREVIOUS tick's
+// bearing. Three of the seven were rotated to a different stretch of railway.
+const brs = B.map(f => f.properties.bearing);
+ok("⭐ every tick has its OWN bearing — none reuses its neighbour's",
+  new Set(brs).size === 7, `${new Set(brs).size} distinct of ${brs.length}`);
+ok("no two consecutive ticks share a bearing",
+  brs.every((b, i) => i === 0 || b !== brs[i - 1]));
+ok("every bearing is measured over a real span of line",
+  B.every(f => f.properties.bearing_span_m > 0));
+ok("bearings are in range", brs.every(b => b >= 0 && b < 360));
+ok("⭐ the tick lies ACROSS the alignment: rotate is bearing + 90",
+  B.every(f => Math.abs(((f.properties.bearing + 90) % 360) - f.properties.tick_rotate) < 0.2));
+
+ok("each tick names both sections meeting there",
+  B.every(f => f.properties.label.includes("|")));
+ok("the last one hands over to Outside A1 rather than naming a section",
+  B[6].properties.to_ws === "" && /Outside A1/.test(B[6].properties.label));
+ok("the provisional boundary is flagged on the feature, not only in prose",
+  B.filter(f => f.properties.provisional).length === 1 &&
+  B.find(f => f.properties.provisional).properties.chain_m === 125000);
+ok("the A1/A2 tick carries the ~141+930 discrepancy",
+  /141\+930/.test(B[6].properties.note));
+ok("chainage is rendered as an engineer writes it",
+  B[0].properties.chain_txt === "105+480" && B[6].properties.chain_txt === "142+000");
+
+// ticks must land on the corridor, not somewhere in the Baltic
+const onCorridor = (f) => {
+  const [lon, lat] = f.geometry.coordinates;
+  return lon > 23.5 && lon < 25.5 && lat > 58.0 && lat < 59.8;
+};
+ok("⭐ every tick lands on the Estonian corridor, not off in the sea",
+  B.every(onCorridor),
+  B.filter(f => !onCorridor(f)).map(f => f.properties.chain_txt).join(", "));
+
+// ⭐ A tick has to sit on the line it marks. Two measurements, because they say
+// different things: against the SOLID track, and against the corridor including
+// the faint gap bridges.
+function distTo(pt, set) {
+  let best = Infinity;
+  for (const f of set) for (const c of f.geometry.coordinates) {
+    const d = metres(pt, c);
+    if (d < best) best = d;
+  }
+  return best;
+}
+const mainAll = feats.filter(f => f.properties.align_type === "Main Track");
+const mainSolid = mainAll.filter(f => f.properties.is_bridge !== true);
+const offCorridor = B.map(f => distTo(f.geometry.coordinates, mainAll));
+const offSolid = B.map(f => distTo(f.geometry.coordinates, mainSolid));
+
+ok("⭐ every tick lands on the drawn corridor — within 70 m of Main Track",
+  offCorridor.every(d => d < 70), `worst ${Math.round(Math.max(...offCorridor))} m`);
+
+// ⚠️ DATA FACT, and it will look like a bug on the map if nobody says it first.
+// The ticks are positioned from chainage.js, whose 2,180 markers are all
+// align_type 'Main Track' and cover the corridor continuously. alignment.js does
+// NOT — it has ~60 km of holes. So three of the seven package boundaries fall
+// where there is no surveyed track to draw, and their ticks will appear on a
+// 30%-opacity gap bridge rather than on a solid line. The tick is right; the
+// alignment file is short. See open-questions.md §H2.
+const inHole = B.filter((f, i) => offSolid[i] > 100).map(f => f.properties.chain_txt);
+ok("DATA FACT: three boundaries fall in holes in the alignment file",
+  inHole.length === 3, `got ${inHole.length}: ${inHole.join(", ")}`);
+ok("DATA FACT: and they are 117+278, 135+400 and 142+000",
+  inHole.join(",") === "117+278,135+400,142+000", inHole.join(","));
+ok("⭐ but every one of them is still within 70 m of the corridor, because the "
+   + "gap bridges carry it across",
+  B.every((f, i) => offCorridor[i] < 70));
+ok("the four that are not in a hole sit essentially on the solid line",
+  B.filter((f, i) => offSolid[i] <= 100).every((f, i2) => true) &&
+  offSolid.filter(d => d <= 100).every(d => d < 20),
+  `worst ${Math.round(Math.max(...offSolid.filter(d => d <= 100)))} m`);
+
+// --- the WS name table ---------------------------------------------------------
+ok("fifteen work sections are named", Object.keys(window.WS_NAMES).length === 15);
+ok("every entry has a name", Object.values(window.WS_NAMES).every(w => w.name));
+ok("⭐ WS13 (Urge) is IPT 2 — the IPT Matrix's own error list calls IPT 1 wrong",
+  window.WS_NAMES.WS13.ipt === "IPT 2");
+ok("and the band table moved it too",
+  SEGS.find(s => s.ipt === "IPT 2").ws.includes("WS13") &&
+  !SEGS.find(s => s.ipt === "IPT 1").ws.includes("WS13"));
+ok("⭐ WS14 and WS15 assert NO ipt — the scope diagram draws no band beneath them",
+  window.WS_NAMES.WS14.ipt === null && window.WS_NAMES.WS15.ipt === null);
+ok("and they say so on the row", window.WS_NAMES.WS14.provisional === true &&
+  /A3\.2/.test(window.WS_NAMES.WS14.note || ""));
+ok("the disputed rows carry their dispute",
+  ["WS3", "WS7", "WS13"].every(k => (window.WS_NAMES[k].note || "").length > 10));
+ok("every band names the ONE section owning its chainage",
+  SEGS.filter(s => s.ipt !== "Outside A1").every(s => /^WS\d+$/.test(s.ws_primary)));
+ok("and that section is one of the codes on the band",
+  SEGS.filter(s => s.ipt !== "Outside A1").every(s => s.ws.includes(s.ws_primary)));
+ok("Outside A1 owns no section",
+  SEGS.find(s => s.ipt === "Outside A1").ws_primary === null);
+ok("every painted segment carries the owning section and its name",
+  feats.filter(f => f.properties.ipt !== "Outside A1")
+       .every(f => /^WS\d+$/.test(f.properties.ws_primary) && f.properties.ws_name.length > 3));
+ok("and the name matches the table",
+  feats.filter(f => f.properties.ws_primary)
+       .every(f => f.properties.ws_name === window.WS_NAMES[f.properties.ws_primary].name));
+
+// chainText
+ok("chainText formats a boundary", window.chainText(105480) === "105+480");
+ok("it pads the metres", window.chainText(130036) === "130+036");
+ok("it handles the negative start of the corridor", window.chainText(-3982) === "-3+982");
+ok("and null rather than throwing", window.chainText(null) === "–");
+
+// =============================================================================
+// 10. Degenerate inputs
 // =============================================================================
 const empty = window.buildIptAlignment({ type: "FeatureCollection", features: [] }, window.chainage_global_data);
 ok("an empty alignment builds to an empty collection", empty.features.length === 0);
@@ -389,6 +530,12 @@ ok("⭐ with no chainage markers it returns the alignment UNCHANGED rather than 
 ok("a null alignment is handled", window.buildIptAlignment(null, window.chainage_global_data) === null);
 ok("a null chainage collection is handled by the step builder",
   window.buildChainageSteps(null) === null);
+ok("and the boundary builder returns an empty collection rather than throwing",
+  window.buildWsBoundaries(null).features.length === 0);
+ok("a chainage collection with one point cannot make a bearing, and says nothing",
+  window.buildWsBoundaries({ type: "FeatureCollection", features: [
+    { type: "Feature", geometry: { type: "Point", coordinates: [24.5, 58.5] },
+      properties: { chain: "100000.00" } }] }).features.length === 0);
 ok("a chainage point with no chain value falls to the finest tier rather than throwing",
   window.buildChainageSteps({ type: "FeatureCollection", features: [
     { type: "Feature", geometry: { type: "Point", coordinates: [24, 58] }, properties: {} }] }
