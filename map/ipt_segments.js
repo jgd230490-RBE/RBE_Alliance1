@@ -47,6 +47,24 @@
 // the route filter must never be pointed at this layer.
 // ===========================================================================
 
+// ---------------------------------------------------------------------------
+// VERSION HANDSHAKE — read this if something on the map "hasn't worked"
+// ---------------------------------------------------------------------------
+// Every delivery ships BOTH map/index.html and map/ipt_segments.js, and they are
+// a matched pair: index.html draws layers from data this file builds. If only
+// one of the two is updated, the map does not error — it half-works, silently.
+//
+// That happened on 2026-08-30 and produced three symptoms at once: IPT 6 still
+// green, faint bridges present, and a "Work section boundaries" checkbox that
+// toggled nothing. All three are one fact — index.html was at v5 and this file
+// was still the polish build, so window.buildWsBoundaries did not exist and the
+// tick source fell back to an empty collection.
+//
+// So the two halves now announce their version to each other. A mismatch prints
+// a console error AND puts a red line in the sidebar, because a silent
+// half-upgrade costs more to diagnose than it does to prevent.
+window.IPT_SEGMENTS_VERSION = 'v6';
+
 // --- The bands -------------------------------------------------------------
 // Contiguous by construction: each chain_to is the next chain_from. Asserted
 // in backend/tests/parse_map.js — a gap would leave unpainted track and an
@@ -670,6 +688,12 @@ window.WS_BOUNDARIES = [
 
 window.WS_TICK_COLOUR = '#334155';   // neutral slate: not a route, not a package
 
+// A boundary further than this from any drawn Main Track is sitting over one of
+// the alignment file's holes. 100 m is comfortably beyond survey noise (the
+// nearest-marker residual is under 50 m everywhere) and far below the smallest
+// real hole, which is 400 m.
+var NO_TRACK_M = 100;
+
 function bearingBetween(a, b) {
   var y = Math.sin((b[0] - a[0]) * Math.PI / 180) * Math.cos(b[1] * Math.PI / 180);
   var x = Math.cos(a[1] * Math.PI / 180) * Math.sin(b[1] * Math.PI / 180) -
@@ -681,7 +705,7 @@ function bearingBetween(a, b) {
 // Points, not lines. The tick is drawn as a rotated glyph in a symbol layer so
 // it stays a constant SIZE ON SCREEN: a fixed ground length would be one pixel
 // at corridor zoom and half the viewport at zoom 16.
-window.buildWsBoundaries = function (chainageFC) {
+window.buildWsBoundaries = function (chainageFC, alignmentFC) {
   if (!chainageFC || !chainageFC.features) return { type: 'FeatureCollection', features: [] };
   var pts = [];
   for (var i = 0; i < chainageFC.features.length; i++) {
@@ -748,7 +772,44 @@ window.buildWsBoundaries = function (chainageFC) {
       },
     });
   }
-  window.WS_BOUNDARY_STATS = { built: out.length, expected: window.WS_BOUNDARIES.length };
+  // ⭐ Which of these boundaries has no surveyed track under it?
+  //
+  // The ticks are positioned from chainage.js, whose 2,180 markers are all
+  // align_type 'Main Track' and cover the corridor continuously. alignment.js
+  // does NOT — it has ~60 km of holes. Three of the seven package edges fall in
+  // one, so there is genuinely no drawn line for the tick to sit on.
+  //
+  // Measured here rather than hard-coded, so a refreshed alignment file changes
+  // the answer instead of leaving a stale warning on the map.
+  var flagged = 0;
+  if (alignmentFC && alignmentFC.features) {
+    var solid = [];
+    for (var q = 0; q < alignmentFC.features.length; q++) {
+      var af = alignmentFC.features[q];
+      if (af.properties && af.properties.align_type === 'Main Track' &&
+          af.properties.is_bridge !== true) solid.push(af.geometry.coordinates);
+    }
+    for (var o = 0; o < out.length; o++) {
+      var pt = out[o].geometry.coordinates;
+      var best = Infinity;
+      for (var r2 = 0; r2 < solid.length; r2++) {
+        var cs = solid[r2];
+        for (var c2 = 0; c2 < cs.length; c2++) {
+          var dd = metres(pt, cs[c2]);
+          if (dd < best) best = dd;
+        }
+      }
+      out[o].properties.track_gap_m = Math.round(best);
+      out[o].properties.no_surveyed_track = best > NO_TRACK_M;
+      if (best > NO_TRACK_M) flagged++;
+    }
+  }
+
+  window.WS_BOUNDARY_STATS = {
+    built: out.length,
+    expected: window.WS_BOUNDARIES.length,
+    no_surveyed_track: flagged,
+  };
   return { type: 'FeatureCollection', features: out };
 };
 

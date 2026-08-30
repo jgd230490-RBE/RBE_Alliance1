@@ -149,7 +149,7 @@
              colours are defined. -->
         <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" style="background:linear-gradient(90deg,#039E86,#003787,#0E7490,#C6841D,#BF2E55); border-radius:0; width:13px; height:3px;"></span></div>
         <div id="ipt-legend" style="padding-left:23px;margin:-2px 0 4px;"></div>
-        <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Fainter segments = no surveyed Main Track in the alignment file.</div>
+        <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Breaks in the line = no surveyed Main Track in the alignment file, not a rendering fault.</div>
         <div class="control-item"><label><input type="checkbox" id="layer-ws-bounds" checked onchange="toggleWsBounds(this.checked)"> Work section boundaries</label><span class="color-dot" style="background:#334155; border-radius:0; width:3px; height:13px;"></span></div>
         <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">7 package edges · ticks from zoom 11, labels from 13</span></div>
         <!-- The alignment as it was drawn before the IPT overlay: every track type, one
@@ -248,6 +248,32 @@
     const alignment_data = window.alignment_data;
     const chainage_global_data = window.chainage_global_data;
 
+    // ⚠️ index.html and ipt_segments.js are a MATCHED PAIR and ship together in
+    // every delivery. Update one without the other and the map does not error, it
+    // half-works: on 2026-08-30 this file was at v5 while ipt_segments.js was
+    // still the polish build, which showed as IPT 6 stuck green, bridges still
+    // present, and a "Work section boundaries" checkbox that toggled nothing.
+    // One cause, three symptoms, and nothing in the console to say so.
+    const IPT_INDEX_VERSION = 'v6';
+    function checkOverlayVersion() {
+        const got = window.IPT_SEGMENTS_VERSION;
+        if (got === IPT_INDEX_VERSION) return true;
+        const msg = got
+            ? `map/ipt_segments.js is ${got} but map/index.html is ${IPT_INDEX_VERSION} — extract the whole zip, not one file`
+            : `map/ipt_segments.js is older than ${IPT_INDEX_VERSION} (no version stamp) — extract the whole zip, not one file`;
+        console.error('[IPT] VERSION MISMATCH: ' + msg);
+        const host = document.getElementById('ipt-legend');
+        if (host) {
+            const w = document.createElement('div');
+            w.id = 'ipt-version-warning';
+            w.style.cssText = 'margin:4px 0;padding:6px 8px;background:#fee2e2;border-left:3px solid #b91c1c;'
+                            + 'font-size:10.5px;line-height:1.45;color:#7f1d1d;border-radius:2px;';
+            w.textContent = 'Overlay files out of step: ' + msg;
+            host.parentNode.insertBefore(w, host);
+        }
+        return false;
+    }
+
     // IPT / Work Section colouring. The alignment file carries no chainage of its
     // own, so every vertex is matched to the nearest chainage marker and the line
     // is CUT where the IPT band changes — a single stamp per feature would have
@@ -282,7 +308,7 @@
     function wsBoundaryData() {
         if (WS_BOUNDS) return WS_BOUNDS;
         WS_BOUNDS = window.buildWsBoundaries
-            ? window.buildWsBoundaries(chainage_global_data)
+            ? window.buildWsBoundaries(chainage_global_data, iptAlignmentData())
             : { type: 'FeatureCollection', features: [] };
         return WS_BOUNDS;
     }
@@ -330,12 +356,6 @@
                 ['==', ['get', 'align_type'], 'Main Track'],
                 ['in', ['get', 'ipt'], on]]);
         }
-        if (map.getLayer('rail-alignment-bridge')) {
-            map.setFilter('rail-alignment-bridge', ['all',
-                ['==', ['get', 'is_bridge'], true],
-                ['==', ['get', 'align_type'], 'Main Track'],
-                ['in', ['get', 'ipt'], on]]);
-        }
     }
 
     function toggleUnderlay(visible) {
@@ -363,7 +383,6 @@
 
     function toggleAlignment(visible) {
         toggleLayer('rail-alignment', visible);
-        toggleLayer('rail-alignment-bridge', visible);
         toggleLayer('rail-alignment-underlay', visible && (function () {
             const el = document.getElementById(iptCheckboxId(IPT_UNDERLAY_KEY));
             return !el || el.checked;
@@ -697,22 +716,26 @@
             },
         });
 
-        // 2. Gap bridges: solid, not dashed, at 30% opacity in the band's own colour.
-        //    A dashed line reads as a style; a fainter line reads as less certain,
-        //    which is the truth — there is no surveyed Main Track under these.
-        //    They are banded and cut like everything else, so a bridge crossing an
-        //    IPT boundary changes colour rather than committing to one package.
-        map.addLayer({
-            'id': 'rail-alignment-bridge', 'type': 'line', 'source': 'alignment-source',
-            'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' },
-            'filter': ['all', ['==', ['get', 'is_bridge'], true],
-                              ['==', ['get', 'align_type'], 'Main Track']],
-            'paint': {
-                'line-color': ['coalesce', ['get', 'ipt_colour'], '#64748B'],
-                'line-width': 2.5,
-                'line-opacity': 0.3,
-            },
-        });
+        // 2. ⚠️ THE GAP BRIDGES ARE GONE (user decision, 2026-08-30).
+        //
+        //    A 30%-opacity connector was drawn across each cut gap so the corridor
+        //    read continuously. Removed at the user's request: they did not want a
+        //    transparent line on the map.
+        //
+        //    ⚠️ CONSEQUENCE, since the opposite was argued for two days earlier:
+        //    the corridor now reads DASHED again. 31 stretches over 300 m have no
+        //    Main Track geometry — about 60 km in total, the largest 7.0 km — and
+        //    every one of them is now a visible break. That is the truth of the
+        //    data (open question H2) but it will look like missing rendering.
+        //
+        //    ⭐ What was kept is the INFORMATION, which is what the bridges were
+        //    really carrying: the three package boundaries that fall in a hole say
+        //    so on their own label and in their popup. Nothing is asserted about
+        //    ground the survey does not cover; it is simply named.
+        //
+        //    The geometry cut itself is UNCHANGED — GAP_SPLIT still removes the
+        //    239.5 km of phantom straights, which is a separate and much older
+        //    decision. Do not undo that to make the line look continuous again.
 
         // 3. The IPT layer proper. `coalesce` keeps it drawable if ipt_segments.js
         //    failed to load — it falls back to neutral slate rather than to nothing.
@@ -756,7 +779,10 @@
             'layout': {
                 'visibility': document.getElementById('layer-ws-bounds').checked ? 'visible' : 'none',
                 'text-field': '|',
-                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+                // ⚠️ NO text-font. It is the only symbol layer on this map that had
+                // one, and a fontstack the style cannot serve makes a symbol layer
+                // render NOTHING, silently. Inheriting the style default is what
+                // every other label here does and what is known to work.
                 'text-size': ['interpolate', ['linear'], ['zoom'], 11, 18, 16, 30],
                 'text-rotate': ['get', 'tick_rotate'],
                 'text-rotation-alignment': 'map',
@@ -764,7 +790,10 @@
                 'text-ignore-placement': true,
             },
             'paint': {
-                'text-color': '#334155',
+                // a boundary with no surveyed track under it is drawn lighter, so
+                // the tick itself carries the caveat even before you read the label
+                'text-color': ['case', ['==', ['get', 'no_surveyed_track'], true],
+                                       '#94a3b8', '#334155'],
                 'text-halo-color': '#ffffff',
                 'text-halo-width': 1.6,
             },
@@ -774,7 +803,13 @@
             'minzoom': 13,
             'layout': {
                 'visibility': document.getElementById('layer-ws-bounds').checked ? 'visible' : 'none',
-                'text-field': ['concat', ['get', 'label'], '\n', ['get', 'chain_txt']],
+                // ⭐ Where the alignment file has no surveyed Main Track under a
+                // boundary, the label says so. This is what the 30% gap bridges used
+                // to carry: the bridges are gone, the information is not.
+                'text-field': ['concat',
+                    ['get', 'label'], '\n', ['get', 'chain_txt'],
+                    ['case', ['==', ['get', 'no_surveyed_track'], true],
+                        '\n⚠ no surveyed alignment here', '']],
                 'text-size': 10.5,
                 'text-offset': [0, -1.6],
                 'text-anchor': 'bottom',
@@ -852,9 +887,11 @@
 
         applyFilters();
         setupHoverEvents();
+        checkOverlayVersion();
         renderIptLegend();
         applyIptFilter();
         setupAlignmentPopup();
+        setupWsBoundaryPopup();
         // zones ride on style.load like everything else, so a basemap switch re-adds them
         if (ZONES.loaded) ensureZoneLayers(); else loadZones();
         // and so do the Tark Tee restriction layers. Already-fetched data is re-added
@@ -871,11 +908,10 @@
     function setupAlignmentPopup() {
         if (ALIGNMENT_POPUP_WIRED) return;
         ALIGNMENT_POPUP_WIRED = true;
-        // Both the solid track and the faint bridges answer the click. A bridge is
-        // where someone is MOST likely to want an explanation — a fainter line with
-        // no obvious cause — so it must not be the one thing on the layer that says
-        // nothing when clicked.
-        ['rail-alignment', 'rail-alignment-bridge'].forEach(lId => {
+        // The alignment answers the click. The bridge layer it used to share this
+        // handler with was removed on 2026-08-30 — the gaps are now simply absent,
+        // and what is said about them moved to the boundary ticks.
+        ['rail-alignment'].forEach(lId => {
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
             map.on('click', lId, (e) => {
@@ -885,7 +921,6 @@
                 const ch = (v) => (v == null || v === '') ? '–'
                     : (window.chainText ? window.chainText(Number(v)) : String(v));
                 const ws = p.ws ? String(p.ws).split(',').filter(Boolean) : [];
-                const bridge = p.is_bridge === true || p.is_bridge === 'true';
                 // ⭐ The work section that OWNS this chainage band. The other codes
                 // in p.ws are point assets — a station, a halt, a depot — sitting on
                 // the same ground without owning it, so naming them here would say
@@ -905,7 +940,7 @@
                     .setHTML(
                         `<div style="font:13px/1.45 system-ui,sans-serif;min-width:190px;">`
                         + `<div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;">`
-                        + `<span style="flex:0 0 14px;height:4px;background:${p.ipt_colour || '#64748B'};${bridge ? 'opacity:.35;' : ''}"></span>`
+                        + `<span style="flex:0 0 14px;height:4px;background:${p.ipt_colour || '#64748B'};"></span>`
                         + `<b>${p.ipt || 'Unknown'}</b></div>`
                         + `<div style="color:#475569;margin-bottom:5px;">${p.ipt_label || 'Unassigned'}</div>`
                         + (wsCode
@@ -929,12 +964,49 @@
                         + (wsMeta.note
                             ? `<div style="margin-top:5px;font-size:10.5px;color:#8a9099;">⚠ ${wsMeta.note}.</div>`
                             : '')
-                        + (bridge
-                            ? `<div style="margin-top:6px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`
-                              + `<b>No surveyed track here.</b> The alignment file has no Main Track geometry across this stretch. `
-                              + `The connector is drawn so the corridor reads continuously; it is not measured or routed on.</div>`
-                            : '')
                         + `<div style="margin-top:6px;font-size:10.5px;color:#8a9099;">Reference geometry. Band boundaries from the scope diagram.</div>`
+                        + `</div>`
+                    )
+                    .addTo(map);
+            });
+        });
+    }
+
+    // Clicking a boundary tick says which packages meet there, at what chainage,
+    // and — the point of keeping this after the bridges went — whether there is any
+    // surveyed alignment under it at all.
+    let WS_POPUP_WIRED = false;
+    function setupWsBoundaryPopup() {
+        if (WS_POPUP_WIRED) return;
+        WS_POPUP_WIRED = true;
+        ['ws-boundary-ticks', 'ws-boundary-labels'].forEach(lId => {
+            map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
+            map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
+            map.on('click', lId, (e) => {
+                const p = (e.features && e.features[0] && e.features[0].properties) || {};
+                const gone = p.no_surveyed_track === true || p.no_surveyed_track === 'true';
+                const nameOf = (c) => (window.WS_NAMES && window.WS_NAMES[c])
+                    ? `${c} — ${window.WS_NAMES[c].name}` : (c || 'Outside A1');
+                new mapboxgl.Popup({ closeButton: true })
+                    .setLngLat(e.lngLat)
+                    .setHTML(
+                        `<div style="font:13px/1.45 system-ui,sans-serif;min-width:210px;">`
+                        + `<b>Work section boundary</b>`
+                        + `<div style="color:#475569;margin:4px 0 6px;">${p.chain_txt || ''}</div>`
+                        + `<div><b>From:</b> ${nameOf(p.from_ws)}</div>`
+                        + `<div><b>To:</b> ${nameOf(p.to_ws)}</div>`
+                        + (gone
+                            ? `<div style="margin-top:6px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`
+                              + `<b>No surveyed alignment here.</b> The nearest drawn Main Track is `
+                              + `${p.track_gap_m} m away — this boundary falls in one of the gaps in `
+                              + `the alignment file, so there is no line to mark. The chainage is right; `
+                              + `the survey data is short.</div>`
+                            : '')
+                        + (p.provisional === true || p.provisional === 'true'
+                            ? `<div style="margin-top:6px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`
+                              + `<b>Provisional.</b> This boundary is approximate and awaits the design drawings.</div>`
+                            : '')
+                        + (p.note ? `<div style="margin-top:6px;font-size:10.5px;color:#8a9099;">⚠ ${p.note}.</div>` : '')
                         + `</div>`
                     )
                     .addTo(map);
