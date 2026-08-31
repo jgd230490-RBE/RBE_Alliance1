@@ -1573,8 +1573,95 @@ function RouteRestrictions({ routeId }){
   );
 }
 
+// Phase 5a — which gate this route uses at each end.
+//
+// Null means "no explicit choice", which resolves to the location's default gate for
+// the direction being travelled, then to the legacy pair, then to the marker. That
+// chain is why a route that has never been touched here keeps routing exactly where it
+// did before 5a. Changing a selection invalidates the cached geometry, so the re-bake
+// is offered rather than performed — the same contract as a zone or haul-road write.
+function RouteGates({ routeId, originId, destId, token, blockers, onChanged }){
+  const [gates, setGates] = useState(null);
+  const [sel, setSel] = useState({ origin_gate_id: "", dest_gate_id: "" });
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    Promise.all([
+      fetch(`${API}/gates`).then(r => r.json()),
+      fetch(`${API}/routes/status`).then(r => r.json()),
+    ]).then(([g, st]) => {
+      if(!live) return;
+      setGates(g.gates || []);
+      const row = (st || []).find(x => x.id === routeId) || {};
+      setSel({ origin_gate_id: row.origin_gate_id || "", dest_gate_id: row.dest_gate_id || "" });
+    }).catch(e => { if(live){ setGates([]); setMsg(e.message); } });
+    return () => { live = false; };
+  }, [routeId]);
+
+  const write = async (key, value) => {
+    setSel(s => ({ ...s, [key]: value }));
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    setMsg("Saving…");
+    try {
+      const res = await fetch(`${API}/admin/routes/${encodeURIComponent(routeId)}/gates${qs}`,
+        { method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [key]: value || null }) });
+      const j = await res.json();
+      if(!res.ok || j.error) throw new Error(j.error || res.status);
+      setMsg(j.rebake_needed
+        ? "Saved — this route's cached geometry now points at the old gate. Re-bake it."
+        : "Saved.");
+      if(j.rebake_needed && onChanged) onChanged();
+    } catch(e){ setMsg("Couldn't save: " + e.message); }
+  };
+
+  if(gates === null) return null;
+  const forLoc = (lid) => (gates || []).filter(g => g.location_id === lid);
+  if(!forLoc(originId).length && !forLoc(destId).length && !(blockers || []).length) return null;
+
+  const pick = (label, lid, key) => (
+    <label className="block">
+      <span className="text-[11px] uppercase tracking-wide text-slate-400">{label}</span>
+      <select value={sel[key] || ""} onChange={e => write(key, e.target.value)}
+        className="mt-1 w-full border border-slate-300 rounded-lg px-2 py-1.5 text-xs bg-white">
+        <option value="">Default for this site</option>
+        {forLoc(lid).map(g => (
+          <option key={g.id} value={g.id}>
+            {g.name} · {g.direction === "access" ? "in only"
+              : g.direction === "egress" ? "out only" : "in + out"}
+            {g.active ? "" : " · DEACTIVATED"}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
+  return (
+    <div className="mb-3 rounded-lg border border-slate-200 bg-white p-2.5">
+      <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1.5">Gates</div>
+      {!!(blockers || []).length && (
+        <p className="text-xs mb-2 font-semibold" style={{ color: "var(--red)" }}>
+          This route will not bake: {(blockers || []).join("; ")}.
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        {pick("Origin gate", originId, "origin_gate_id")}
+        {pick("Destination gate", destId, "dest_gate_id")}
+      </div>
+      <p className="text-[11px] text-slate-400 mt-1.5">
+        A one-way gate is used only for the direction it serves; the other direction falls
+        back to the site&rsquo;s default. Changing a gate moves where HERE routes to, so the
+        cached geometry has to be re-baked before the distances mean anything.
+      </p>
+      {msg && <p className="text-[11px] text-slate-500 mt-1">{msg}</p>}
+    </div>
+  );
+}
+
+
 function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting, leg,
-                        haulRoads, token, onHaulChanged }){
+                        haulRoads, token, onHaulChanged, originId, destId, gateBlockers }){
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
 
@@ -1594,6 +1681,8 @@ function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting
   return (
     <tr className="bg-slate-50/70">
       <td colSpan={colSpan} className="px-4 py-3">
+        <RouteGates routeId={routeId} originId={originId} destId={destId} token={token}
+          blockers={gateBlockers} onChanged={onHaulChanged} />
         <HaulRoads routeId={routeId} haulRoads={haulRoads} token={token} onChanged={onHaulChanged} />
         <RouteRestrictions routeId={routeId} />
         {err && <p className="text-xs" style={{ color: "var(--red)" }}>Couldn't load analysis: {err}</p>}
@@ -1647,8 +1736,24 @@ function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting
                     <td className={cell} title={r.return_estimated ? "Return leg not baked — assumed same as outbound" : undefined}>
                       {r.return_km}{r.return_estimated ? "*" : ""}
                     </td>
-                    <td className={cell} title={`${r.load_minutes} min load + ${r.unload_minutes} min unload`}>
+                    <td className={cell} title={(() => {
+                      // B4: the total is the backend's, and the tooltip explains it from
+                      // the backend's own parts. Nothing here re-adds them — the dashboard
+                      // computing its own version of this number is how it once disagreed
+                      // with the backend by 125% on an Artic Flatbed.
+                      const tp = r.turnaround_parts || {};
+                      const bits = [`${r.load_minutes} min load + ${r.unload_minutes} min unload`];
+                      if(tp.safety_minutes) bits.push(`${tp.safety_minutes} min induction at the gates`);
+                      if(tp.internal_travel_minutes) bits.push(`${tp.internal_travel_minutes} min gate to face`);
+                      if(tp.internal_travel_source === "drawn_road")
+                        bits.push(`internal travel comes from the drawn haul road, not a flat allowance` +
+                                  (tp.internal_travel_flat_available
+                                    ? ` (the ${tp.internal_travel_flat_available} min flat figure is deliberately not added on top)` : ""));
+                      return bits.join(" · ");
+                    })()}>
                       {Math.round((r.turnaround_hr || 0) * 60)}m
+                      {(r.turnaround_parts && (r.turnaround_parts.safety_minutes
+                        || r.turnaround_parts.internal_travel_minutes)) ? "‡" : ""}
                     </td>
                     <td className={cell}
                       title={r.haul_speed_applied
@@ -1677,8 +1782,9 @@ function RouteAnalysis({ routeId, colSpan, active, onFocus, onPromote, promoting
               </tbody>
             </table>
             <p className="text-[11px] text-slate-400 mt-2">
-              Cycle = out + back + turnaround, where turnaround is the vehicle's own load and
-              unload time from factors.json. Trips/day assumes a {data.planning.shift_hours_per_day} h
+              Cycle = out + back + turnaround. Turnaround is the vehicle's own load and unload
+              time from factors.json, plus — where gates record them — induction at each gate
+              and gate-to-face travel (‡). Trips/day assumes a {data.planning.shift_hours_per_day} h
               shift; t/month assumes {data.planning.working_days_per_month} working days.
               {data.rows.some(r => r.return_estimated) && " * return leg not baked — assumed to mirror the outbound."}
             </p>
@@ -1793,7 +1899,11 @@ function Diagnostics({ token, routeId }){
                   <th className="text-right font-semibold px-1">CO₂/km</th>
                   <th className="text-right font-semibold px-1">Laden</th>
                   <th className="text-right font-semibold px-1">Tare</th>
-                  <th className="text-right font-semibold px-1">Turn</th>
+                  {/* the UNLOADING half only. A vehicle has no route, so it has no gates
+                      and therefore no induction or gate-to-face time — this figure and a
+                      route's turnaround are different quantities from Phase 5a onward,
+                      and the header says so rather than inviting the comparison. */}
+                  <th className="text-right font-semibold px-1" title="Load + unload for this vehicle. A route's turnaround also includes gate induction and gate-to-face travel.">Load/unload</th>
                 </tr>
               </thead>
               <tbody>
@@ -1808,7 +1918,7 @@ function Diagnostics({ token, routeId }){
                     <td className="text-right tabular-nums px-1">{v.emissions_kg_co2e_per_km}</td>
                     <td className="text-right tabular-nums px-1">{v.gross_weight_kg ? (v.gross_weight_kg/1000)+"t" : "—"}</td>
                     <td className="text-right tabular-nums px-1">{v.tare_weight_kg ? (v.tare_weight_kg/1000)+"t" : "—"}</td>
-                    <td className="text-right tabular-nums px-1">{Math.round((v.turnaround_hr||0)*60)}m</td>
+                    <td className="text-right tabular-nums px-1">{Math.round((v.unloading_hr||0)*60)}m</td>
                   </tr>
                 ))}
               </tbody>
@@ -1943,12 +2053,23 @@ function DataManagement({ meta, who }){
   const [drawPts, setDrawPts] = useState([]);
   const zoneDrawRef = useRef(false);
   useEffect(() => { zoneDrawRef.current = zoneDraw; }, [zoneDraw]);
+  // Phase 5a: gate placement is a third click mode. A ref rather than state for the
+  // same reason the other two are — the map's click handler is registered once, at
+  // init, and closes over whatever it can see then.
+  const gatePlaceRef = useRef(false);
 
   // ---- location management (Phase 1) ----
   const [mode, setMode] = useState("view");        // 'view' | 'add' | 'edit'
   const [form, setForm] = useState(null);          // {id?, name, role, loc_type, supplies[], receives[], lat, lon}
   const [savingLoc, setSavingLoc] = useState(false);
   const [locMsg, setLocMsg] = useState("");
+  // ---- Phase 5a: gates ----
+  // A location may have several, each with a direction. `gateForm` is the one being
+  // added or edited; `gatePlace` is on while the next map click sets its coordinate.
+  const [gateList, setGateList] = useState([]);
+  const [gateForm, setGateForm] = useState(null);
+  const [gatePlace, setGatePlace] = useState(false);
+  const [gateMsg, setGateMsg] = useState("");
   // refs so once-bound map handlers always read current values
   const modeRef = useRef("view");
   const tokenRef = useRef(token);
@@ -2088,6 +2209,9 @@ function DataManagement({ meta, who }){
       // is on, a click must never also select a route underneath the shape being drawn.
       m.on("click", (e) => {
         if(zoneDrawRef.current){ (cbRef.current.addVertex || (()=>{}))(e.lngLat.lng, e.lngLat.lat); return; }
+        // Phase 5a: placing a gate takes the click before node/route selection, so a
+        // gate can be dropped on top of the site it belongs to without selecting it
+        if(gatePlaceRef.current){ (cbRef.current.placeGateAt || (()=>{}))(e.lngLat.lng, e.lngLat.lat); return; }
         if(modeRef.current === "add"){ (cbRef.current.placeAt || (()=>{}))(e.lngLat.lng, e.lngLat.lat); return; }
         if(justDragged.current) return;
         const box = [[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]];
@@ -2393,6 +2517,102 @@ function DataManagement({ meta, who }){
     setSavingLoc(false);
   };
 
+  // ------------------------------------------------------------------ Phase 5a
+  // Gates. Loaded per location when the editor opens, written one at a time through
+  // /api/admin/gates. Moving a gate moves the point HERE routes to, so a write that
+  // changes lat/lon/direction/active is followed by a re-bake of the routes that use
+  // it — the same contract zone and haul-road writes already have, and the same
+  // rebakeAffected() helper.
+  useEffect(() => { gatePlaceRef.current = gatePlace; }, [gatePlace]);
+
+  const loadGates = async (locId) => {
+    if(!locId){ setGateList([]); return; }
+    try {
+      const res = await fetch(`${API}/gates?location_id=${encodeURIComponent(locId)}`);
+      const j = await res.json();
+      setGateList(j.gates || []);
+    } catch(e){ setGateList([]); setGateMsg("Couldn't load gates: " + e.message); }
+  };
+
+  useEffect(() => {
+    setGateForm(null); setGatePlace(false); setGateMsg("");
+    loadGates(form && form.id);
+  }, [form && form.id]);
+
+  // leaving Locations abandons a half-placed gate, so map clicks stop dropping one
+  useEffect(() => { if(subTab !== "locations") setGatePlace(false); }, [subTab]);
+
+  const newGate = () => setGateForm({
+    id: null, name: "", direction: "both", lat: "", lon: "",
+    safety_minutes: "", internal_travel_minutes: "", is_default: !gateList.length,
+    active: true, note: "" });
+
+  const editGate = (g) => setGateForm({
+    id: g.id, name: g.name || "", direction: g.direction || "both",
+    lat: g.lat, lon: g.lon,
+    safety_minutes: g.safety_minutes == null ? "" : g.safety_minutes,
+    internal_travel_minutes: g.internal_travel_minutes == null ? "" : g.internal_travel_minutes,
+    is_default: !!g.is_default, active: !!g.active, note: g.note || "" });
+
+  const numOrNull = (v) => (v === "" || v == null) ? null : Number(v);
+
+  const saveGate = async () => {
+    if(!gateForm || !form || !form.id) return;
+    if(!gateForm.name.trim()){ setGateMsg("Give the gate a name — it is what a refused bake will say."); return; }
+    const lat = parseFloat(gateForm.lat), lon = parseFloat(gateForm.lon);
+    if(!isFinite(lat) || !isFinite(lon)){ setGateMsg("Place the gate on the map, or type its coordinates."); return; }
+    try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    setGateMsg(gateForm.id ? "Saving gate…" : "Creating gate…");
+    const payload = {
+      name: gateForm.name.trim(), direction: gateForm.direction, lat, lon,
+      safety_minutes: numOrNull(gateForm.safety_minutes),
+      internal_travel_minutes: numOrNull(gateForm.internal_travel_minutes),
+      is_default: !!gateForm.is_default, active: !!gateForm.active,
+      note: gateForm.note || null,
+    };
+    try {
+      const url = gateForm.id
+        ? `${API}/admin/gates/${encodeURIComponent(gateForm.id)}${qs}`
+        : `${API}/admin/gates${qs}`;
+      const res = await fetch(url, {
+        method: gateForm.id ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(gateForm.id ? payload : { ...payload, location_id: form.id }) });
+      const j = await res.json();
+      if(!res.ok || j.error) throw new Error(j.error || res.status);
+      await loadGates(form.id);
+      setGateForm(null);
+      // the cost is quoted, then spent — a gate move invalidates cached geometry
+      const affected = j.routes_affected || [];
+      if(affected.length && confirm(
+          `Moving this gate changes where routes start or end.\n\n` +
+          `${affected.length} baked route(s) use it: ${affected.join(", ")}.\n\n` +
+          `Re-bake them now? Each costs HERE calls.`)){
+        const { rebaked } = await rebakeAffected(affected);
+        await reloadNetwork();
+        setGateMsg(`Saved — re-baked ${rebaked} route(s).`);
+      } else {
+        setGateMsg(affected.length
+          ? `Saved. ${affected.length} route(s) still hold geometry baked to the old point.`
+          : "Saved.");
+      }
+    } catch(e){ setGateMsg("Couldn't save gate: " + e.message); }
+  };
+
+  const deleteGate = async (gid) => {
+    if(!confirm(`Delete gate ${gid}? Deactivating it instead keeps the history.`)) return;
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    try {
+      const res = await fetch(`${API}/admin/gates/${encodeURIComponent(gid)}${qs}`, { method: "DELETE" });
+      const j = await res.json();
+      if(!res.ok || j.error) throw new Error(
+        (j.error || res.status) + (j.routes ? ` (${j.routes.join(", ")})` : ""));
+      await loadGates(form.id);
+      setGateMsg(`Deleted ${gid}.`);
+    } catch(e){ setGateMsg("Delete failed: " + e.message); }
+  };
+
   const deleteLoc = async () => {
     if(!form || !form.id) return;
     if(!confirm(`Delete ${form.name || form.id}? This also removes any routes that use it.`)) return;
@@ -2458,6 +2678,10 @@ function DataManagement({ meta, who }){
   cbRef.current.selectNode = (id) => { setSubTab("locations"); openEditForNode(id); };
   cbRef.current.selectRoute = (id) => { setSubTab("routes"); selectRoute(id); };
   cbRef.current.commitMove = commitMove;
+  cbRef.current.placeGateAt = (lng, lat) => {
+    setGateForm(g => g ? { ...g, lat: +(+lat).toFixed(6), lon: +(+lng).toFixed(6) } : g);
+    setGatePlace(false);
+  };
 
   // ---- route authoring: derived option validity (invalid shown but disabled) ----
   const locById = useMemo(() => Object.fromEntries(locs.map(l => [l.id, l])), [locs]);
@@ -2861,8 +3085,8 @@ function DataManagement({ meta, who }){
   // cursor reflects add mode
   useEffect(() => {
     const m = mapObj.current; if(!m || !mapReady) return;
-    try { m.getCanvas().style.cursor = (mode === "add" || zoneDraw) ? "crosshair" : ""; } catch(e){}
-  }, [mode, zoneDraw, mapReady]);
+    try { m.getCanvas().style.cursor = (mode === "add" || zoneDraw || gatePlace) ? "crosshair" : ""; } catch(e){}
+  }, [mode, zoneDraw, gatePlace, mapReady]);
 
   // sub-tab switch: re-lean the shared map
   useEffect(() => {
@@ -3101,6 +3325,149 @@ function DataManagement({ meta, who }){
                     Changing it re-routes everything touching this location.
                   </p>
                 </div>
+
+                {/* ---------------------------------------------------------------
+                    Phase 5a — gates. A site may have several, each one-way or both.
+                    The single pair above is the pre-5a model and stays as the
+                    fallback: with no gates recorded, routing uses it exactly as
+                    before. Once a gate exists here, it wins.
+                    ------------------------------------------------------------ */}
+                {form.id && (
+                <div className="rounded-lg border border-slate-200 p-2.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">Gates</span>
+                    {!gateForm && (
+                      <button onClick={newGate}
+                        className="text-[11px] font-semibold text-[color:var(--blue)] hover:underline">
+                        + Add gate
+                      </button>
+                    )}
+                  </div>
+
+                  {!gateList.length && !gateForm && (
+                    <p className="text-[11px] text-slate-400 mt-1.5">
+                      No gates recorded. Routing falls back to the access gate above, then to the
+                      marker — the same behaviour as before gates existed.
+                    </p>
+                  )}
+
+                  {gateList.length > 0 && (
+                    <ul className="mt-1.5 space-y-1">
+                      {gateList.map(g => (
+                        <li key={g.id}
+                          className={"flex items-center gap-2 text-xs rounded px-1.5 py-1 " +
+                                     (g.active ? "hover:bg-slate-50" : "opacity-60 bg-slate-50")}>
+                          <span className="font-medium text-slate-700">{g.name}</span>
+                          <span className="text-slate-400">{g.id}</span>
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                            style={{ background: "rgba(31,86,168,.1)", color: "var(--blue)" }}>
+                            {g.direction === "access" ? "in only"
+                              : g.direction === "egress" ? "out only" : "in + out"}
+                          </span>
+                          {g.is_default && <span className="text-[10px] text-slate-500">default</span>}
+                          {!g.active && <span className="text-[10px]" style={{ color: "var(--red)" }}>deactivated</span>}
+                          {g.safety_minutes ? <span className="text-[10px] text-slate-500"
+                            title="Induction time, applied to whatever arrives at this gate">
+                            {g.safety_minutes}m induction</span> : null}
+                          {g.internal_travel_minutes ? <span className="text-[10px] text-slate-500"
+                            title="Flat gate-to-face travel. Ignored on a route that has a drawn haul road — that road already carries these minutes.">
+                            {g.internal_travel_minutes}m internal</span> : null}
+                          <span className="ml-auto flex gap-2">
+                            <button onClick={() => editGate(g)}
+                              className="text-[11px] text-slate-500 hover:underline">Edit</button>
+                            <button onClick={() => deleteGate(g.id)}
+                              className="text-[11px] text-slate-400 hover:underline">Delete</button>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {gateForm && (
+                    <div className="mt-2 border-t border-slate-200 pt-2 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input value={gateForm.name}
+                          onChange={e => setGateForm(g => ({ ...g, name: e.target.value }))}
+                          placeholder="Gate name, e.g. Weighbridge in"
+                          className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                        <select value={gateForm.direction}
+                          onChange={e => setGateForm(g => ({ ...g, direction: e.target.value }))}
+                          className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm bg-white">
+                          <option value="both">In and out</option>
+                          <option value="access">Entry only</option>
+                          <option value="egress">Exit only</option>
+                        </select>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <input value={gateForm.lat}
+                          onChange={e => setGateForm(g => ({ ...g, lat: e.target.value }))}
+                          inputMode="decimal" placeholder="Lat"
+                          className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+                        <input value={gateForm.lon}
+                          onChange={e => setGateForm(g => ({ ...g, lon: e.target.value }))}
+                          inputMode="decimal" placeholder="Lon"
+                          className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+                        <button onClick={() => setGatePlace(v => !v)}
+                          className={"rounded-lg px-2 py-1.5 text-xs font-semibold border " +
+                            (gatePlace ? "text-white border-transparent" : "border-slate-300 text-slate-600 hover:bg-slate-50")}
+                          style={gatePlace ? { background: "var(--blue)" } : undefined}>
+                          {gatePlace ? "Click the map…" : "Place on map"}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">Induction (min)</span>
+                          <input value={gateForm.safety_minutes}
+                            onChange={e => setGateForm(g => ({ ...g, safety_minutes: e.target.value }))}
+                            inputMode="decimal" placeholder="0"
+                            className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+                        </label>
+                        <label className="block">
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">Gate → face (min)</span>
+                          <input value={gateForm.internal_travel_minutes}
+                            onChange={e => setGateForm(g => ({ ...g, internal_travel_minutes: e.target.value }))}
+                            inputMode="decimal" placeholder="0"
+                            className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs text-slate-600">
+                        <label className="flex items-center gap-1.5">
+                          <input type="checkbox" checked={!!gateForm.is_default}
+                            onChange={e => setGateForm(g => ({ ...g, is_default: e.target.checked }))} />
+                          Default gate
+                        </label>
+                        <label className="flex items-center gap-1.5">
+                          <input type="checkbox" checked={!!gateForm.active}
+                            onChange={e => setGateForm(g => ({ ...g, active: e.target.checked }))} />
+                          Active
+                        </label>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Induction is charged once per arrival at this gate. <strong>Gate → face</strong> is a
+                        flat allowance and is <em>ignored</em> on a route that runs through a drawn haul
+                        road — that road already carries the time, and counting both would inflate every
+                        cycle. Deactivating a gate a route has selected makes that route refuse to bake,
+                        by name.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button onClick={saveGate}
+                          className="px-3 py-1.5 rounded-lg text-white font-semibold text-xs"
+                          style={{ background: "var(--navy)" }}>
+                          {gateForm.id ? "Save gate" : "Create gate"}
+                        </button>
+                        <button onClick={() => { setGateForm(null); setGatePlace(false); }}
+                          className="px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 text-xs">Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                  {gateMsg && <p className="text-[11px] text-slate-500 mt-1.5">{gateMsg}</p>}
+                </div>
+                )}
+                {!form.id && (
+                  <p className="text-[11px] text-slate-400">
+                    Gates can be added once the location has been created.
+                  </p>
+                )}
 
                 <div className="flex items-center gap-2">
                   <button onClick={saveLoc} disabled={savingLoc}
@@ -3561,6 +3928,13 @@ function DataManagement({ meta, who }){
                     </td>
                     <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">
                       {r.id}
+                      {!!(r.gate_blockers || []).length && (
+                        <span title={(r.gate_blockers || []).join("; ")}
+                          className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                          style={{ background: "rgba(197,48,48,.12)", color: "var(--red)" }}>
+                          gate blocked
+                        </span>
+                      )}
                       {!!(r.haul_roads || []).length && (
                         <span title={`Routed through ${(r.haul_roads || []).length} temporary haul road(s): ${(r.haul_roads || []).join(", ")}. Expand the row to edit.`}
                           className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap"
@@ -3587,6 +3961,8 @@ function DataManagement({ meta, who }){
                     </td>
                   </tr>
                   {open && <RouteAnalysis routeId={r.id} colSpan={7}
+                    originId={r.origin_id} destId={r.dest_id}
+                    gateBlockers={r.gate_blockers}
                     active={selected === r.id ? activeGeom : null}
                     leg={showLeg}
                     onFocus={selected === r.id ? focusGeom : (p, a) => { selectRoute(r.id); focusGeom(p, a); }}
