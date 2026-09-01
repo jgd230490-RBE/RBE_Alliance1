@@ -49,6 +49,10 @@ TENANTED_TABLES = {
     # test_tenant_audit.py fails on a CREATE TABLE this set does not name, which is
     # what stops a table shipping with the column present and the isolation absent.
     "location_gates",
+    # Week 1, 2026-09-01. Same rule, same edit. forecast_weeks hangs off a forecast
+    # LINE and stockpile_weeks off a location; both are per-client data and both are
+    # written by endpoints a second tenant would reach.
+    "forecast_weeks", "stockpile_weeks",
 }
 
 # A contextvar rather than a module global, so Phase 6 can make the tenant
@@ -531,6 +535,49 @@ def count_gates():
                  (current_tenant(),))[0]["n"]
 
 
+def init_weeks_db():
+    """
+    Week 1, 2026-09-01. The four-week look-ahead, typed actuals, and stockpile storage.
+
+    Two new tables plus three columns on `locations`. Runs after init_network_db()
+    (locations must exist to be ALTERed) and BEFORE init_tenant(), for the reason
+    spelled out on _TENANT_DDL and learned in Phase 5a: the SQLite tenant rebuild
+    copies the INTERSECTION of the live table's columns with the DDL, so a column
+    added by ALTER after that rebuild survives, but one added before it and missing
+    from the DDL is silently dropped. All three are in _TENANT_DDL["locations"] as
+    well as here.
+
+    ⚠️ capacity_unit gets no DEFAULT in the DDL. The build list says the default is
+    't', but a column default would make an unset capacity_unit indistinguishable from
+    one somebody chose — and 'no capacity recorded' has to stay distinguishable,
+    because that is the case where `remaining` reports null rather than a number. The
+    't' default is applied when a capacity is WRITTEN, in stockpiles.set_capacity().
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        for col, typ in (("capacity_qty", "REAL"), ("capacity_unit", "TEXT"),
+                         ("opening_qty", "REAL")):
+            try:
+                if IS_PG:
+                    cur.execute(f"ALTER TABLE locations ADD COLUMN IF NOT EXISTS {col} {typ}")
+                else:
+                    cur.execute(f"ALTER TABLE locations ADD COLUMN {col} {typ}")
+                conn.commit()
+            except Exception:
+                conn.rollback()  # column already present — fine
+        _create_tenanted(cur, "forecast_weeks")
+        _create_tenanted(cur, "stockpile_weeks")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_forecast_weeks():
+    return query("SELECT COUNT(*) AS n FROM forecast_weeks WHERE tenant_id = ?",
+                 (current_tenant(),))[0]["n"]
+
+
 # --------------------------------------------------------------------------- #
 #  Phase 4.5 — tenant migration                                                #
 # --------------------------------------------------------------------------- #
@@ -578,6 +625,18 @@ _TENANT_DDL = {
             detail             TEXT,
             gate_lat           REAL,
             gate_lon           REAL,
+            -- Week 1 (Task D2): storage ON a location. NOT the haul/gate capacity
+            -- model, which is Phase 5a/5b and lives on routes and gates.
+            --   capacity_qty  max live stock. NULL = not recorded, and the balance
+            --                 still computes — `remaining` reports null, not 0.
+            --   capacity_unit 'm3' | 't', default 't'.
+            --   opening_qty   stock at the start of month_index 1.
+            -- Listed here as well as ALTERed in init_weeks_db(), or the SQLite tenant
+            -- rebuild copies only the intersection and drops them — the same trap
+            -- Phase 5a's two route gate columns had to avoid.
+            capacity_qty       REAL,
+            capacity_unit      TEXT,
+            opening_qty        REAL,
             PRIMARY KEY (tenant_id, id)
         )
     """,
@@ -752,6 +811,90 @@ _TENANT_DDL = {
             PRIMARY KEY (tenant_id, id)
         )
     """,
+    # ----------------------------------------------------------------------- #
+    #  Week 1 (Task C/D) — the four-week look-ahead                            #
+    # ----------------------------------------------------------------------- #
+    # ⭐ This sits ON the month line; it does NOT widen `forecasts`. The key is the
+    # forecast line's own key plus week_index, so a week row can only ever exist for a
+    # line that exists, and the monthly UNIQUE constraint is untouched. Adding a
+    # week_index to `forecasts` instead would have multiplied every existing row by
+    # four and broken the public map's monthly aggregation.
+    #
+    #   discipline / section_id are NOT NULL DEFAULT '' for the same reason they are on
+    #   `forecasts`: NULLs compare distinct inside a key in both backends, so a
+    #   nullable column would leave the row unconstrained and the upsert would silently
+    #   insert duplicates instead of updating.
+    #
+    #   status      'derived' | 'edited' | 'confirmed'. A `derived` week is refreshed
+    #               when its parent month is re-approved; the other two are not. That
+    #               is the whole reason the column exists rather than a boolean.
+    #   weather / wetness / traffic / other
+    #               free TEXT, optional, empty string allowed. NO scores, no APIs, no
+    #               colour-as-logic — they are notes a person types at confirm time.
+    #   actual_*    ⭐ Task D's columns, created HERE with the table rather than added
+    #               a day later. A second ALTER against the live Postgres is a second
+    #               chance to get a migration wrong, for no benefit.
+    "forecast_weeks": """
+        CREATE TABLE forecast_weeks (
+            tenant_id    TEXT NOT NULL DEFAULT 'default',
+            route_id     TEXT NOT NULL,
+            month_index  INTEGER NOT NULL,
+            discipline   TEXT NOT NULL DEFAULT '',
+            section_id   TEXT NOT NULL DEFAULT '',
+            week_index   INTEGER NOT NULL,
+            planned_qty  REAL,
+            unit         TEXT,
+            status       TEXT NOT NULL DEFAULT 'derived',
+            -- ⚠️ NOT in the build list's column list, and here on purpose. "If the
+            -- parent month qty changes and is re-approved ... show 'parent month
+            -- changed'" cannot be answered without it: an `edited` week always differs
+            -- from parent/4 (that is what editing means), so comparing the two would
+            -- flag every edited week forever. This holds the parent quantity AS AT the
+            -- moment the row was last written, so parent_changed is an exact equality
+            -- test. Refreshing a `derived` row re-stamps it; an `edited` or `confirmed`
+            -- row keeps its old value, which is what raises the flag, and editing or
+            -- confirming again re-stamps it, which is what clears it.
+            parent_qty   REAL,
+            weather      TEXT,
+            wetness      TEXT,
+            traffic      TEXT,
+            other        TEXT,
+            confirmed_by TEXT,
+            confirmed_at TEXT,
+            actual_qty   REAL,
+            actual_note  TEXT,
+            actual_by    TEXT,
+            actual_at    TEXT,
+            created_at   TEXT,
+            updated_at   TEXT,
+            PRIMARY KEY (tenant_id, route_id, month_index, discipline, section_id,
+                         week_index)
+        )
+    """,
+    # ----------------------------------------------------------------------- #
+    #  Week 1 (Task D2) — typed weekly consumption from a stockpile            #
+    # ----------------------------------------------------------------------- #
+    # Consumption only. The BALANCE is a read model computed in stockpiles.py and is
+    # deliberately not stored: inbound comes from forecast_weeks.actual_qty, which
+    # changes whenever someone types an actual, and a stored balance would be a second
+    # copy that drifts the moment it does.
+    #
+    # Same week buckets as forecast_weeks. Typed only — there is no file, no importer
+    # and no upload endpoint anywhere in this system.
+    "stockpile_weeks": """
+        CREATE TABLE stockpile_weeks (
+            tenant_id    TEXT NOT NULL DEFAULT 'default',
+            location_id  TEXT NOT NULL,
+            month_index  INTEGER NOT NULL,
+            week_index   INTEGER NOT NULL,
+            consumed_qty REAL,
+            unit         TEXT,
+            note         TEXT,
+            updated_by   TEXT,
+            updated_at   TEXT,
+            PRIMARY KEY (tenant_id, location_id, month_index, week_index)
+        )
+    """,
 }
 
 # The primary key each table ends up with, for the Postgres in-place path.
@@ -768,6 +911,9 @@ _TENANT_PK = {
     "zones": "(tenant_id, id)",
     "route_haul_roads": "(tenant_id, route_id, zone_id)",
     "location_gates": "(tenant_id, id)",
+    "forecast_weeks": "(tenant_id, route_id, month_index, discipline, section_id, "
+                      "week_index)",
+    "stockpile_weeks": "(tenant_id, location_id, month_index, week_index)",
 }
 
 # Extra UNIQUE constraints that must also take tenant_id. Only forecasts has one.
@@ -793,9 +939,45 @@ def _columns_of(cur, table):
 
 
 def _ddl_columns(ddl):
-    """The column names declared in one of the _TENANT_DDL blocks."""
+    """
+    The column names declared in one of the _TENANT_DDL blocks.
+
+    🔴 THE `--` COMMENTS HAVE TO GO FIRST, AND THAT IS NOT COSMETIC.
+    ---------------------------------------------------------------
+    This splits the body on top-level commas and takes the first token of each
+    piece. Several of the DDL blocks carry `-- …` comments explaining a column,
+    and prose contains commas. One comma inside a comment splits a fragment in
+    the middle of that prose, so the piece that actually declares the NEXT column
+    begins with comment text and its first token is an English word. The column
+    is then absent from the returned list.
+
+    That list is `want` in _migrate_table_to_tenant(), and the SQLite rebuild
+    copies only `[c for c in want if c in have]`. A column missing from it is
+    DROPPED, with its data, silently.
+
+    ⚠️ FOUND 2026-09-01, AND IT WAS ALREADY LIVE. `routes.origin_gate_id` —
+    Phase 5a — had been invisible to this parser since the day it shipped, while
+    `dest_gate_id` survived because it happened to start its own fragment. A
+    SQLite database migrating through 4.5 would have lost a route's ORIGIN gate
+    selection and kept its destination one. Nothing would have errored:
+    gates.resolve() falls back to the location's default gate and then to the
+    legacy lat/lon pair, so the route would simply have started routing from the
+    wrong side of the site. "A fallback chain is what makes a schema change
+    invisible", exactly as roadmap.md warns.
+
+    ⚠️ The LIVE Postgres was never exposed: the Postgres branch of
+    _migrate_table_to_tenant() uses ADD COLUMN and constraint swaps and never
+    calls this. And 4.5 ran there on 2026-08-30, before 5a added the columns.
+    The exposure was local SQLite, and any database that still needs the 4.5
+    migration.
+
+    test_week1.py asserts that every column literally declared in every
+    _TENANT_DDL block comes back from here, so a future comment cannot re-open it.
+    """
     cols = []
     body = ddl[ddl.index("(") + 1:ddl.rindex(")")]
+    # strip `-- …` to end of line before anything else looks at a comma
+    body = "\n".join(l.split("--", 1)[0] for l in body.splitlines())
     depth = 0
     line = ""
     for ch in body:

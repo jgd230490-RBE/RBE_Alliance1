@@ -48,6 +48,27 @@ def vehicle_names(factors):
     return [k for k in factors.get("vehicles", {}) if not k.startswith("_")]
 
 
+def planning_vehicle_names(factors):
+    """
+    The four EU-named planning vehicles, in the order factors.json lists them.
+
+    Two sources on purpose, and they have to agree: the top-level `planning_vehicles`
+    array carries the ORDER, and `planning_vehicle: true` on the entry itself is the
+    FLAG. A name in the array that is not a real vehicle key is DROPPED rather than
+    returned — it would otherwise reach a picker as an option that silently resolves to
+    _default (20 t, 0.90 kg/km), which is the failure factors_diagnostics() exists to
+    catch. An entry that is flagged but missing from the array is appended, so flagging
+    a fifth vehicle is one edit and forgetting the array is visible, not silent.
+    """
+    vs = factors.get("vehicles", {}) or {}
+    known = [k for k in vs if not k.startswith("_")]
+    out = [n for n in (factors.get("planning_vehicles") or []) if n in known]
+    for k in known:
+        if k not in out and (vs.get(k) or {}).get("planning_vehicle"):
+            out.append(k)
+    return out
+
+
 def flat_factors(factors):
     """
     Backward-compatible flat maps for clients that read the old shape

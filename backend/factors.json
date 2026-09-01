@@ -7,6 +7,8 @@
       "default_unit": "m3",
       "volume_convertible": true,
       "vehicles": [
+        "N3 lorry (BA) 4-axle TPMLM 32 t tipper",
+        "N3 tractor (BC) + O4 tipping semi (DA) GCW 40/44 t",
         "Rigid 8-wheeler (32t)",
         "Artic Tipper (44t)",
         "Rigid 6-wheeler (26t)"
@@ -17,6 +19,8 @@
       "default_unit": "m3",
       "volume_convertible": true,
       "vehicles": [
+        "N3 lorry (BA) 4-axle TPMLM 32 t tipper",
+        "N3 tractor (BC) + O4 tipping semi (DA) GCW 40/44 t",
         "Rigid 8-wheeler (32t)",
         "Artic Tipper (44t)"
       ]
@@ -26,6 +30,8 @@
       "default_unit": "t",
       "volume_convertible": true,
       "vehicles": [
+        "N3 lorry (BA) 4-axle TPMLM 32 t tipper",
+        "N3 tractor (BC) + O4 tipping semi (DA) GCW 40/44 t",
         "Rigid 8-wheeler (32t)",
         "Artic Tipper (44t)"
       ]
@@ -35,6 +41,8 @@
       "default_unit": "t",
       "volume_convertible": true,
       "vehicles": [
+        "N3 lorry (BA) 4-axle mixer 32 t",
+        "N3 tractor (BC) + O4 semi (DA) GCW 40 t",
         "Artic Flatbed (44t)",
         "Rigid 8-wheeler (32t)"
       ]
@@ -44,6 +52,7 @@
       "default_unit": "t",
       "volume_convertible": false,
       "vehicles": [
+        "N3 tractor (BC) + O4 semi (DA) GCW 40 t",
         "Artic Flatbed (44t)"
       ]
     },
@@ -52,6 +61,8 @@
       "default_unit": "t",
       "volume_convertible": false,
       "vehicles": [
+        "N3 tractor (BC) + O4 semi (DA) GCW 40 t",
+        "N3 tractor (BC) + O4 tipping semi (DA) GCW 40/44 t",
         "Artic Flatbed (44t)",
         "Artic Tipper (44t)"
       ]
@@ -61,6 +72,7 @@
       "default_unit": "t",
       "volume_convertible": true,
       "vehicles": [
+        "N3 lorry (BA) 4-axle TPMLM 32 t tipper",
         "Rigid 8-wheeler (32t)"
       ]
     }
@@ -163,6 +175,91 @@
       "load_minutes": 25,
       "unload_minutes": 20
     },
+    "N3 lorry (BA) 4-axle TPMLM 32 t tipper": {
+      "code": "V07",
+      "planning_vehicle": true,
+      "eu_category": "N3",
+      "body_code": "BA",
+      "licence": "C",
+      "gvw_t": 32,
+      "payload_t": 18,
+      "_payload_basis": "18 t is the conservative planning payload given in the 2026-09-01 build list. The pre-existing 'Rigid 8-wheeler (32t)' entry is the same chassis class and carries 20 t. Both are in this file on purpose; neither was changed.",
+      "emissions_kg_co2e_per_km": 0.95,
+      "_emissions_basis": "NOT given in the build list. Copied from 'Rigid 8-wheeler (32t)' - same EU category, axle count and GVW, and the DEFRA/BEIS 2025 basis the rest of this file uses. Replace with a measured figure if you have one.",
+      "aliases": [
+        "8x4 tipper"
+      ],
+      "_aliases_note": "'8x4 tipper' is the trade name given in the build list. Nothing reads `aliases` yet - it is stored so the roster's own wording survives.",
+      "routing": {
+        "gross_weight_kg": 32000,
+        "axle_count": 4
+      },
+      "_routing_note": "height_cm / width_cm / length_cm are ABSENT because the build list does not give them. here_routing._truck_params() sends only the keys present, so HERE routes this on weight and axle count alone - it does not borrow another vehicle's dimensions."
+    },
+    "N3 lorry (BA) 4-axle mixer 32 t": {
+      "code": "V10",
+      "planning_vehicle": true,
+      "eu_category": "N3",
+      "body_code": "BA",
+      "licence": "C",
+      "gvw_t": 32,
+      "payload_m3": 8,
+      "payload_t": 19.2,
+      "_payload_basis": "THE BUILD LIST GIVES 8 m3, NOT A TONNAGE. payload_m3 holds that figure verbatim. payload_t = 8 m3 x 2.4 t/m3, the 'Precast / concrete' density already in this file - DERIVED, not sourced. It is very likely too high as a MASS payload: 19.2 t of concrete plus the drum exceeds what a 32 t GVW 4-axle can legally carry. conversions.py reads payload_t only, so a forecast entered in 'vehicles' on this profile converts on 19.2. Correct it the moment the roster gives a mass figure. Recorded in claude/open-questions.md.",
+      "emissions_kg_co2e_per_km": 0.95,
+      "_emissions_basis": "NOT given in the build list. Copied from 'Rigid 8-wheeler (32t)' - same EU category, axle count and GVW, DEFRA/BEIS 2025 basis.",
+      "aliases": [
+        "8x4 mixer"
+      ],
+      "_aliases_note": "'8x4 mixer' is a restatement of '4-axle mixer', not a trade name taken from the roster. Correct it if the roster words it differently.",
+      "routing": {
+        "gross_weight_kg": 32000,
+        "axle_count": 4
+      },
+      "_routing_note": "Dimensions absent - not given. See the V07 note."
+    },
+    "N3 tractor (BC) + O4 semi (DA) GCW 40 t": {
+      "code": "V11",
+      "planning_vehicle": true,
+      "eu_category": "N3 + O4",
+      "body_code": "BC + DA",
+      "licence": "C+E",
+      "gvw_t": 40,
+      "payload_t": 25.5,
+      "_payload_basis": "25.5 t is the conservative planning payload given in the 2026-09-01 build list. gvw_t 40 is the GCW it quotes, so tare works out at 14.5 t - which here_routing.tare_weight_kg() uses for the unladen return leg.",
+      "emissions_kg_co2e_per_km": 0.89,
+      "_emissions_basis": "NOT given in the build list. Copied from the two 44 t artic entries in this file, DEFRA/BEIS 2025 basis. A 40 t combination is lighter than a 44 t one, so this is if anything slightly high.",
+      "aliases": [
+        "40 t artic",
+        "tractor + semi-trailer"
+      ],
+      "_aliases_note": "Restatements of the EU description, NOT trade names taken from the roster. Correct if the roster words them differently.",
+      "routing": {
+        "gross_weight_kg": 40000
+      },
+      "_routing_note": "axle_count is ABSENT as well as the dimensions: the build list says 'tractor (BC) + semi (DA)' with no axle count, and a 40 t combination is 5 or 6 axles depending on configuration. Guessing it would change which roads HERE allows."
+    },
+    "N3 tractor (BC) + O4 tipping semi (DA) GCW 40/44 t": {
+      "code": "V12",
+      "planning_vehicle": true,
+      "eu_category": "N3 + O4",
+      "body_code": "BC + DA",
+      "licence": "C+E",
+      "gvw_t": 40,
+      "payload_t": 26,
+      "_payload_basis": "26 t is the conservative planning payload given in the 2026-09-01 build list. The list quotes '40/44 t'; gvw_t is stored as 40 because that is the base GCW and 44 t applies only in specific combined-transport configurations. Tare therefore works out at 14 t. If 44 t is right for your operation, change gvw_t AND routing.gross_weight_kg together - they are read by different code paths.",
+      "emissions_kg_co2e_per_km": 0.89,
+      "_emissions_basis": "NOT given in the build list. Copied from the two 44 t artic entries in this file, DEFRA/BEIS 2025 basis.",
+      "aliases": [
+        "artic tipper",
+        "tipping semi"
+      ],
+      "_aliases_note": "Restatements of the EU description, NOT trade names from the roster. Note 'artic tipper' is only an ALIAS - it is not the pre-existing 'Artic Tipper (44t)' key, which is a different entry with a 29 t payload.",
+      "routing": {
+        "gross_weight_kg": 40000
+      },
+      "_routing_note": "axle_count and dimensions absent - not given. See the V11 note."
+    },
     "_default": {
       "payload_t": 20,
       "emissions_kg_co2e_per_km": 0.9,
@@ -170,6 +267,13 @@
       "unload_minutes": 8
     }
   },
+  "_planning_vehicles_note": "The four EU-named entries above carry planning_vehicle: true and are listed FIRST in every picker. The six pre-existing entries are kept, unchanged, and listed after them as legacy. That is deliberate: every baked route_geometry row is keyed on vehicle_profile, network.DEFAULT_PROFILE is 'Artic Tipper (44t)', and every material category's `vehicles` list names them - remove one and its routes' payload, CO2 and trips/day fall through to _default (20 t, 0.90 kg/km) and every affected route then reports identical figures. Decided 2026-09-01: add four, keep six. None of the four carries load_minutes / unload_minutes, so all four fall back to planning.load_minutes 12 + planning.unload_minutes 8 = a 20-minute turnaround, which is stated rather than invented.",
+  "planning_vehicles": [
+    "N3 lorry (BA) 4-axle TPMLM 32 t tipper",
+    "N3 lorry (BA) 4-axle mixer 32 t",
+    "N3 tractor (BC) + O4 semi (DA) GCW 40 t",
+    "N3 tractor (BC) + O4 tipping semi (DA) GCW 40/44 t"
+  ],
   "_planning_note": "Used to estimate haul-cycle turnaround, trips/day and fleet size. load_minutes and unload_minutes here are the fallback only; a vehicle's own values take precedence.",
   "planning": {
     "avg_haul_speed_kmh": 45,
@@ -204,5 +308,6 @@
       "message": "Winter conditions: check road access and allow longer cycle times on this corridor."
     }
   ],
-  "_routing_note": "vehicles[].routing holds HGV dimensions for HERE truck routing (weight kg, sizes cm, axle count)."
+  "_routing_note": "vehicles[].routing holds HGV dimensions for HERE truck routing (weight kg, sizes cm, axle count).",
+  "_materials_vehicles_note": "Which of the four new planning vehicles each category lists is CLAUDE'S INFERENCE, 2026-09-01, not sourced from the build list: V07/V12 tippers on soil and aggregates, V10 mixer on concrete, V11 flat semi on concrete/steel/general. It had to be decided because the Submit Forecast picker DISABLES a vehicle a category does not list, so an unlisted planning vehicle would be unselectable. The join is advisory in the UI, not enforced - correct any line of it freely."
 }

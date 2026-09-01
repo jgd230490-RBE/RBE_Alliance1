@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import db
 import conversions
 import here_routing
+import stockpiles   # Week 1, Task D2 — the stockpile balance read model
 import zones          # Phase 3 — supplies the avoid[areas] the bake path sends to HERE
 import haul           # Phase 4 — threads temporary haul roads into the bake path
 import gates          # Phase 5a — resolves which gate each leg enters and leaves by
@@ -72,7 +73,12 @@ def _ensure_location_columns():
     if _cols_ensured:
         return
     for col, typ in (("role", "TEXT"), ("materials", "TEXT"), ("supplies", "TEXT"),
-                     ("receives", "TEXT"), ("gate_lat", "REAL"), ("gate_lon", "REAL")):
+                     ("receives", "TEXT"), ("gate_lat", "REAL"), ("gate_lon", "REAL"),
+                     # Week 1, Task D2 - storage on a location. Written only through
+                     # stockpiles.set_capacity(); listed here so a live database whose
+                     # `locations` predates that migration cannot 500 an admin write.
+                     ("capacity_qty", "REAL"), ("capacity_unit", "TEXT"),
+                     ("opening_qty", "REAL")):
         try:
             if db.IS_PG:
                 db.execute(f"ALTER TABLE locations ADD COLUMN IF NOT EXISTS {col} {typ}")
@@ -94,11 +100,23 @@ def _coord_or_none(v):
     return f if -180.0 <= f <= 180.0 else None
 
 
+# Week 1, Task E/D2. Two new types.
+#
+#   Rail head   an ORIGIN, exactly like a quarry or a port — material arrives by rail
+#               and leaves by road. map/index.html's filterByNode() has the matching
+#               rule, and the two must agree or the public map's origin filter and the
+#               route authoring disagree about the same location.
+#   Stockpile   a DESTINATION by default. It can be switched to 'both' in the form —
+#               a pile that feeds onward hauls is an origin too — but a pile nobody
+#               has thought about is somewhere material lands.
+#
+# This is a DEFAULT for a newly created location, not a constraint: role is a column
+# and the form always wins.
 def _role_for(loc_type):
     t = (loc_type or "").strip().lower()
-    if t in ("quarry", "port"):
+    if t in ("quarry", "port", "rail head"):
         return "origin"
-    if t in ("compound", "site"):
+    if t in ("compound", "site", "stockpile"):
         return "destination"
     return "both"
 
@@ -730,6 +748,33 @@ def public_map_data(profile=None):
     except Exception:
         pass   # zones/route_haul_roads may not exist yet on a cold database
 
+    # Week 1, Task D2 — the stock figure the public map's popup shows.
+    #
+    # ONE balances() call for the current month, mapped by location, rather than one per
+    # marker: popup_summary() re-reads every table each time it is called and 27 of those
+    # on a page load is 27 passes over forecast_weeks for a two-number string.
+    #
+    # ⚠️ Both numbers or neither. The popup prints 'Stock 1 240 t / 3 000 t' only when a
+    # capacity has been recorded — half that sentence reads as a pile with no limit.
+    stock = {}
+    try:
+        import datetime as _dt
+        _mi = ((_dt.date.today().year - stockpiles.START_YEAR) * 12
+               + _dt.date.today().month)
+        if _mi >= 1:
+            for sp in stockpiles.balances(_mi, _mi)["stockpiles"]:
+                if sp["capacity_qty"] is None or not sp["weeks"]:
+                    continue
+                last = sp["weeks"][-1]
+                stock[sp["location_id"]] = {
+                    "capacity_qty": sp["capacity_qty"],
+                    "capacity_unit": sp["capacity_unit"],
+                    "stock_balance": last["balance_end"],
+                    "stock_over": last["over"],
+                }
+    except Exception:
+        pass   # forecast_weeks / stockpile_weeks may not exist yet on a cold database
+
     # location markers. aux_info keeps the shape the map's popup already expects, and is
     # now built from the vendor/detail salvaged out of a1_data.js before it was retired.
     for l in db.query("SELECT * FROM locations WHERE tenant_id = ? ORDER BY id",
@@ -764,6 +809,8 @@ def public_map_data(profile=None):
                 "ipt": "",
                 "vendor": l.get("vendor") or "",
                 "aux_info": aux,
+                # absent unless a capacity is recorded — see the note above
+                **stock.get(l["id"], {}),
             },
             "geometry": {"type": "Point", "coordinates": [lon, lat]},
         })
@@ -886,7 +933,13 @@ def locations_geojson():
                            "lat": l["lat"], "lon": l["lon"],
                            # null until an access gate is surveyed; routing falls back
                            # to lat/lon and the panel shows the field empty
-                           "gate_lat": l.get("gate_lat"), "gate_lon": l.get("gate_lon")},
+                           "gate_lat": l.get("gate_lat"), "gate_lon": l.get("gate_lon"),
+                           # Week 1, Task D2. Null capacity is "not recorded", which is
+                           # NOT zero — the admin form shows an empty box and the
+                           # balance reports remaining as unknown.
+                           "capacity_qty": l.get("capacity_qty"),
+                           "capacity_unit": l.get("capacity_unit"),
+                           "opening_qty": l.get("opening_qty")},
             "geometry": {"type": "Point", "coordinates": [l["lon"], l["lat"]]},
         })
     return {"type": "FeatureCollection", "features": feats}

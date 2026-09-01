@@ -32,6 +32,8 @@ import haul          # Phase 4 — temporary haul roads
 import restrictions  # Phase 2.5a — Tark Tee restriction layers (proxied, reprojected)
 import streetview    # Phase 2.5a — Google Street View proxy (key stays server-side)
 import gates         # Phase 5a — multiple gates per location, with a direction on each
+import weeks         # Week 1 — the 4-week look-ahead and typed actuals (Tasks C, D)
+import stockpiles    # Week 1 — stockpile capacity and typed consumption (Task D2)
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -39,6 +41,11 @@ SEED_DIR = HERE / "seed_data"
 
 START_YEAR = 2026          # month_index 1 == Jan 2026
 MONTH_COUNT = 60           # 5-year horizon
+
+# One definition of the epoch, not two. stockpiles.py needs it for the public-map
+# popup and cannot import main (circular), so it carries a default that this
+# overwrites at import time — and test_week1.py asserts the two agree.
+stockpiles.START_YEAR = START_YEAR
 
 
 # ------------------------------------------------------------------ startup
@@ -54,6 +61,10 @@ async def lifespan(app: FastAPI):
         db.init_taxonomy_db()
         db.init_zones_db()          # Phase 3. No seed — zones are drawn, never shipped.
         db.init_gates_db()          # Phase 5a. Table + the two gate columns on routes.
+        # Week 1. forecast_weeks + stockpile_weeks, and the three capacity columns on
+        # locations. Must sit HERE — after init_network_db(), which creates the table
+        # those columns are ALTERed onto, and before init_tenant(), which rebuilds it.
+        db.init_weeks_db()
         # Phase 4.5. Must sit exactly here: init_tenant() migrates a pre-4.5 database by
         # rebuilding each table, copying the columns the table actually has — several of
         # which the init_* calls above add by ALTER. Run it before them and those columns
@@ -164,7 +175,16 @@ def meta():
     return {
         "units": conversions.UNITS,
         "materials": conversions.material_names(factors),
+        # every vehicle, unchanged. The four EU-named planning vehicles added on
+        # 2026-09-01 are IN this list, not instead of it: baked geometry is keyed on
+        # vehicle_profile and every existing route names one of the older six, so a
+        # picker that could not offer them would strand those routes.
         "vehicles": conversions.vehicle_names(factors),
+        # ...and which of them are the four to lead with. A NAME LIST, not a re-ordering
+        # of `vehicles` — the map, the dashboard and every saved forecast index into
+        # `vehicles` and `factors.vehicle_payload_t` by name, so the full set has to stay
+        # complete and in its existing order.
+        "planning_vehicles": conversions.planning_vehicle_names(factors),
         # rich taxonomy for the new submission matrix (Commit 2)
         "material_categories": strip(factors.get("material_categories", {})),
         "vehicle_details": strip(factors.get("vehicles", {})),
@@ -430,8 +450,224 @@ def set_route_status(route_id: str, req: StatusUpdate,
     db.execute(f"UPDATE forecasts SET status = ?, reject_reason = ? "
                f"WHERE tenant_id = ? AND {where}",
                tuple([req.status, req.reject_reason, db.current_tenant()] + params))
+
+    # Week 1, Task C: approving a month line is what materialises its four weeks.
+    #
+    # Driven off the rows that are now Approved rather than off the request, because
+    # an unscoped call updates every line on the route and each of them needs its own
+    # four weeks. A re-approval refreshes the `derived` weeks and leaves `edited` and
+    # `confirmed` ones alone — see weeks.materialise_line().
+    #
+    # ⚠️ Rejecting or reopening deletes NOTHING. A confirmed week with an actual typed
+    # against it is a record of what happened on site; dropping it because a planner
+    # reopened the month would destroy that.
+    materialised = None
+    if req.status == "Approved":
+        try:
+            done = {"created": 0, "refreshed": 0, "kept": 0}
+            lines = db.query(
+                "SELECT DISTINCT discipline, section_id FROM forecasts "
+                "WHERE tenant_id = ? AND route_id = ? AND status = 'Approved'",
+                (db.current_tenant(), route_id))
+            for l in lines:
+                r = weeks.materialise_line(route_id, l["discipline"], l["section_id"])
+                for k in done:
+                    done[k] += r[k]
+            materialised = done
+        except Exception as e:
+            # a failure here must not undo an approval that has already committed
+            print("⚠️  Week 1: week materialisation failed for", route_id, e)
+
     return {"status": "success", "route_id": route_id, "new_status": req.status,
-            "scoped_to_line": scoped, "rows": existing[0]["n"]}
+            "scoped_to_line": scoped, "rows": existing[0]["n"],
+            "weeks": materialised}
+
+
+# ------------------------------------------------ look-ahead (Week 1, Tasks C + D)
+#
+# NOT under /api/admin. Until Task F lands, visibility is exactly the same as
+# /api/forecasts — everyone on staff sees every line — and these endpoints inherit
+# that rather than inventing a narrower rule that Task F would then have to undo.
+# ⚠️ That means anyone who can reach the staff app can confirm a week and type an
+# actual. Task F is what scopes it; do not describe this as access-controlled.
+class WeekKey(BaseModel):
+    """The forecast LINE plus a week. Same shape every write below takes."""
+    route_id: str
+    month_index: int
+    discipline: str = ""
+    section_id: str = ""
+    week_index: int
+
+
+class WeekEdit(WeekKey):
+    planned_qty: Optional[float] = None
+    # the four flags are free text and every one may be empty
+    weather: Optional[str] = None
+    wetness: Optional[str] = None
+    traffic: Optional[str] = None
+    other: Optional[str] = None
+    edited_by: Optional[str] = None
+
+
+class WeekConfirm(WeekEdit):
+    confirmed_by: Optional[str] = None
+
+
+class WeekActual(WeekKey):
+    actual_qty: Optional[float] = None
+    actual_note: Optional[str] = None
+    actual_by: Optional[str] = None
+
+
+class WeekCalibrate(WeekKey):
+    # a typed figure INSTEAD of the variance formula, not on top of it
+    override_qty: Optional[float] = None
+    by: Optional[str] = None
+
+
+def _flags_of(body):
+    """Only the flag fields the client actually sent — an absent one is not a blank."""
+    sent = set(_fields_set(body))
+    return {k: getattr(body, k) for k in weeks.FLAG_FIELDS if k in sent}
+
+
+@app.get("/api/forecast-weeks")
+def list_forecast_weeks(from_month: int = Query(1, ge=1, le=MONTH_COUNT),
+                        to_month: int = Query(MONTH_COUNT, ge=1, le=MONTH_COUNT),
+                        route_id: Optional[str] = None):
+    """
+    The week rows in a month window, plus what the UI needs to label them.
+
+    Reading materialises: a line approved before this shipped has no week rows, and an
+    empty Look-ahead for an approved line reads as a broken feature rather than a
+    missing migration. See weeks.list_weeks().
+    """
+    rows = weeks.list_weeks(from_month, to_month, route_id=route_id)
+    nm, nw = weeks.editable_week(START_YEAR)
+    return {"from": min(from_month, to_month), "to": max(from_month, to_month),
+            "weeks": rows,
+            # which cell the UI lets you edit and confirm. Computed server-side so the
+            # browser's clock and time zone cannot move it.
+            "next_week": {"month_index": nm, "week_index": nw},
+            "statuses": list(weeks.WEEK_STATUSES),
+            "flag_fields": list(weeks.FLAG_FIELDS),
+            "summary": weeks.summary()}
+
+
+@app.put("/api/forecast-weeks")
+def edit_forecast_week(body: WeekEdit):
+    """Edit one week's planned quantity and/or flags. Sets status `edited`."""
+    res = weeks.set_week(body.route_id, body.month_index, body.discipline,
+                         body.section_id, body.week_index,
+                         planned_qty=body.planned_qty, flags=_flags_of(body),
+                         by=body.edited_by)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    return res
+
+
+@app.post("/api/forecast-weeks/confirm")
+def confirm_forecast_week(body: WeekConfirm):
+    """Confirm one week, with the four optional flags. Sets status `confirmed`."""
+    res = weeks.confirm_week(body.route_id, body.month_index, body.discipline,
+                             body.section_id, body.week_index,
+                             by=body.confirmed_by, flags=_flags_of(body))
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    return res
+
+
+@app.put("/api/forecast-weeks/actual")
+def set_forecast_week_actual(body: WeekActual):
+    """
+    Type what actually moved in one week.
+
+    ⭐ Does NOT calibrate. Variance appears immediately; next week's plan does not
+    move until /api/forecast-weeks/calibrate is called.
+    """
+    res = weeks.set_actual(body.route_id, body.month_index, body.discipline,
+                           body.section_id, body.week_index,
+                           actual_qty=body.actual_qty, actual_note=body.actual_note,
+                           by=body.actual_by)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    return res
+
+
+@app.post("/api/forecast-weeks/calibrate")
+def calibrate_forecast_week(body: WeekCalibrate):
+    """
+    Carry this week's variance into next week — and only next week.
+
+    400 when next week is already confirmed. The response's `blocked_by` says so, so
+    the UI can disable the button rather than discovering it on click.
+    """
+    res = weeks.calibrate(body.route_id, body.month_index, body.discipline,
+                          body.section_id, body.week_index,
+                          override_qty=body.override_qty, by=body.by)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    return res
+
+
+# --------------------------------------------- stockpiles (Week 1, Task D2)
+class CapacityIn(BaseModel):
+    # None CLEARS the capacity — "we do not know how big this pile is" is a real state
+    # and is not zero. See stockpiles.set_capacity().
+    capacity_qty: Optional[float] = None
+    capacity_unit: Optional[str] = None
+    opening_qty: Optional[float] = None
+
+
+class ConsumeIn(BaseModel):
+    location_id: str
+    month_index: int
+    week_index: int
+    consumed_qty: Optional[float] = None
+    unit: Optional[str] = None
+    note: Optional[str] = None
+    updated_by: Optional[str] = None
+
+
+@app.put("/api/locations/{location_id}/capacity")
+def set_location_capacity(location_id: str, body: CapacityIn,
+                          token: Optional[str] = None):
+    """Max live stock, its unit, and the opening figure. Admin-gated like every other
+    write to master data."""
+    _check_admin(token)
+    res = stockpiles.set_capacity(location_id, capacity_qty=body.capacity_qty,
+                                  capacity_unit=body.capacity_unit,
+                                  opening_qty=body.opening_qty)
+    if res.get("error"):
+        raise HTTPException(404, res["error"])
+    return res
+
+
+@app.get("/api/stockpiles")
+def list_stockpiles(from_month: int = Query(1, ge=1, le=MONTH_COUNT),
+                    to_month: int = Query(MONTH_COUNT, ge=1, le=MONTH_COUNT),
+                    location_id: Optional[str] = None):
+    """
+    Per-week stock for every location that can hold it.
+
+    A read model — nothing here is stored. Inbound comes from typed week ACTUALS, so a
+    week nobody has reported shows inbound 0 rather than a quarter of the forecast.
+    """
+    out = stockpiles.balances(from_month, to_month, location_id=location_id)
+    out["storage_types"] = list(stockpiles.STORAGE_TYPES)
+    out["capacity_units"] = list(stockpiles.CAPACITY_UNITS)
+    return out
+
+
+@app.put("/api/stockpiles/consume")
+def consume_stockpile(body: ConsumeIn):
+    """One week's typed consumption. There is no file and no importer."""
+    res = stockpiles.consume(body.location_id, body.month_index, body.week_index,
+                             consumed_qty=body.consumed_qty, unit=body.unit,
+                             note=body.note, by=body.updated_by)
+    if res.get("error"):
+        raise HTTPException(404, res["error"])
+    return res
 
 
 # ------------------------------------------------------------------ public feed (map)
