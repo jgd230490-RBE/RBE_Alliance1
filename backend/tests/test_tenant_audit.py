@@ -73,6 +73,12 @@ TENANTED = {
     # fails if db.py creates a table this set does not name, which is the mechanism
     # that stops a new table shipping with no isolation.
     "location_gates",
+    # ⭐ Week 1, 2026-09-01. THE AUDIT PROVED ITSELF AGAIN. Both tables were written,
+    # registered in db.TENANTED_TABLES and given _TENANT_DDL / _TENANT_PK entries —
+    # and this file still failed, because the registry HERE had not been updated. Two
+    # failures, naming both tables. That is four registrations per table, and the
+    # fourth is this one.
+    "forecast_weeks", "stockpile_weeks",
 }
 
 # Tables that are deliberately NOT tenanted, with the reason. Anything here is

@@ -829,6 +829,136 @@ ok("the fetch is off the critical path — a failure must not cost the map",
 ok("...and it says how many there are, or why there are none",
   /no alternatives/.test(code));
 
+
+// =============================================================================
+//  Week 1, Task E — the EVR rail layer and the rail-head highlight
+// =============================================================================
+ok("the rail data file is loaded statically", /src=["']data\/evr_rail\.js\?v=\d+["']/.test(html));
+// ⚠️ The half-upgraded pair (new index.html, old data file behind a browser cache)
+// cost an hour on 2026-08-30. ipt_segments.js carries a ?v= for that reason and so
+// does this one.
+ok("...with a ?v= cache-buster, like ipt_segments.js", /evr_rail\.js\?v=/.test(html));
+ok("it is NOT the Rail Baltica alignment file",
+  /src=["']data\/alignment\.js["']/.test(html) && !/evr_rail[\s\S]{0,80}alignment_data/.test(code));
+
+ok("there is an evr-rail source", /addSource\('evr-rail'/.test(code));
+ok("...that tolerates the file being absent",
+  /window\.evr_rail_data \|\| \{ type: 'FeatureCollection', features: \[\] \}/.test(code));
+ok("and an evr-rail-line layer on it",
+  /id: 'evr-rail-line', type: 'line', source: 'evr-rail'/.test(code));
+
+// the build list's numbers, exactly
+ok("the rail colour is the reserved #0F766E", /const RAIL_COLOR = '#0F766E'/.test(code));
+ok("default paint is 2 px at 25%",
+  /RAIL_DIM_WIDTH = 2, RAIL_DIM_OPACITY = 0\.25/.test(code));
+ok("highlighted paint is 4 px at 80%",
+  /RAIL_BOLD_WIDTH = 4, RAIL_BOLD_OPACITY = 0\.8/.test(code));
+// ⭐ #0F766E must not collide with anything already meaning something on this map.
+for (const reserved of ["#039E86", "#f59e0b", "#C2790B", "#3398DB", "#BF2E55",
+                        "#003787", "#0A1446", "#4338CA", "#6D28D9", "#57534E",
+                        "#9A3412", "#9F1239", "#5B21B6"]) {
+  ok(`the rail colour is not the reserved ${reserved}`, "#0F766E" !== reserved);
+}
+
+// visibility from the checkbox, never a module variable — style.load re-adds every
+// layer on a basemap switch and a drifted variable restores one the user turned off
+ok("rail visibility is read from the checkbox",
+  /function railVisible\(\)/.test(code)
+  && /document\.getElementById\('layer-rail'\)/.test(code)
+  && /visibility: railVisible\(\)/.test(code));
+ok("there is a Rail network control, ON by default",
+  /id="layer-rail" checked/.test(html));
+ok("toggling it moves the line AND the rail-head dots",
+  /function toggleRail\(visible\) \{[\s\S]{0,160}'evr-rail-line', 'rail-heads'/.test(code));
+
+// the highlight
+ok("the highlight follows the origin filter", /function applyRailHighlight\(\)/.test(code)
+  && /applyRailHighlight\(\);/.test(code));
+ok("...and applyFilters is what calls it",
+  /function applyFilters\(\)[\s\S]{0,2600}applyRailHighlight\(\);/.test(code));
+ok("it bolds only when the selected origin is a Rail head",
+  /locTypeByName\(sel\) === 'Rail head'/.test(code));
+ok("the loc_type comes from the Node features, not a hard-coded list",
+  /function locTypeByName\(name\)/.test(code)
+  && /x\.properties\.type === 'Node'/.test(code));
+// ⭐ an array literal used as an expression OUTPUT must be wrapped in ['literal', ...]
+// or setFilter validates, errors and silently applies nothing
+ok("⭐ the id filter wraps its array in ['literal', ...]",
+  /\['in', \['get', 'id'\], \['literal', ids\]\]/.test(code));
+ok("heads are matched case-insensitively and by substring, both ways",
+  /function railFeaturesFor\(name\)/.test(code)
+  && /toLowerCase\(\)\.trim\(\)/.test(code)
+  && /n\.indexOf\(hh\) >= 0 \|\| hh\.indexOf\(n\) >= 0/.test(code));
+ok("origin back to ALL returns the layer to the dim default",
+  /bold \? RAIL_BOLD_WIDTH : RAIL_DIM_WIDTH/.test(code)
+  && /bold \? RAIL_BOLD_OPACITY : RAIL_DIM_OPACITY/.test(code));
+// ⭐ the road filter must be untouched: a rail head origin still isolates its hauls
+ok("⭐ the existing road-route filter is not disturbed",
+  /setFilter\('inbound-lines',/.test(code) && /setFilter\('outbound-lines',/.test(code)
+  && /setFilter\('inbound-lines-casing',/.test(code));
+
+// filterByNode must treat a rail head as an origin, like a quarry or a port
+ok("filterByNode treats a Rail head as an origin",
+  /nodeType === 'Rail head'/.test(code)
+  && /nodeType === 'Quarry' \|\| nodeType === 'Hub' \|\| nodeType === 'Port'[\s\S]{0,120}filter-origin/.test(code));
+
+// rail heads drawn as a LAYER, not only a DOM marker
+ok("rail heads are drawn as a real layer",
+  /id: 'rail-heads', type: 'circle'/.test(code));
+ok("...filtered to Node features of that type",
+  /\['==', \['get', 'node_type'\], 'Rail head'\]/.test(code));
+
+// ⭐ the honesty channel. The picture reads as authoritative; the popup is where the
+// caveat lives, exactly as the alignment's gap bridges do.
+ok("⭐ clicking the rail line opens a popup", /map\.on\('click', 'evr-rail-line'/.test(code));
+ok("⭐ ...built by railPopupHTML", /function railPopupHTML\(p\)/.test(code));
+// ⚠️ RUN IT, do not grep it. A source-level check for "Provisional geometry" passed
+// on a deliberately broken tree where the caveat had been branched out with
+// `if (false)` — the string was still in the file and unreachable. Executing the
+// function is the only assertion that proves the caveat actually renders.
+const _railFn = (() => {
+  const i = code.indexOf("function railPopupHTML(p) {");
+  if (i < 0) return null;
+  const j = code.indexOf("\n    function gatePopupHTML", i);
+  const body = j > i ? code.slice(i, j) : null;
+  if (!body) return null;
+  try {
+    return new Function("RAIL_COLOR", body + "\nreturn railPopupHTML;")("#0F766E");
+  } catch (e) { return null; }
+})();
+ok("railPopupHTML can be isolated and run", typeof _railFn === "function");
+const _railHtml = _railFn ? _railFn({
+  name: "Rapla - Lelle", operator: "Eesti Raudtee (EVR)",
+  heads: '["Rapla","Lelle"]', length_km: 16.6, provisional: "true",
+  accuracy_note: "wrong at the Lelle end by ~6.4 km",
+  source: "Natural Earth 10m railroads",
+}) : "";
+ok("⭐ the rendered popup SAYS the geometry is provisional",
+  _railHtml.includes("Provisional geometry"));
+ok("⭐ ...and renders the feature's own accuracy note",
+  _railHtml.includes("6.4 km"));
+ok("⭐ ...and names the source", _railHtml.includes("Natural Earth"));
+ok("⭐ ...and parses the stringified heads array rather than printing JSON",
+  _railHtml.includes("Rapla · Lelle") && !_railHtml.includes('["Rapla"'));
+// a real (non-provisional) file must NOT carry the caveat, or it becomes wallpaper
+const _railOk = _railFn ? _railFn({ name: "x", provisional: false, source: "OSM" }) : "x";
+ok("⭐ a file marked provisional:false shows NO caveat",
+  !_railOk.includes("Provisional geometry"));
+// properties cross Mapbox's boundary as strings — 'false' is truthy
+ok("stringified properties are parsed, not trusted",
+  /typeof heads === 'string'/.test(code)
+  && /p\.provisional === false \|\| p\.provisional === 'false'/.test(code));
+
+// Task D2's popup line
+ok("the node popup shows stock only when BOTH numbers exist",
+  /props\.stock_balance != null && props\.capacity_qty != null/.test(code));
+ok("...and there is no chart", !/new Chart\(/.test(code));
+
+// Never build: no week scrubber on the public map, no actuals painted here
+ok("the timeline is still monthly — no week scrubber",
+  !/week_index/.test(code) && !/scrubber/i.test(code));
+ok("actuals are not painted on the public map", !/actual_qty/.test(code));
+
 console.log();
 for (const f of fail) console.log("  FAIL:", f);
 console.log(`\n${pass} passed, ${fail.length} failed`);

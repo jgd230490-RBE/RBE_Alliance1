@@ -267,8 +267,72 @@ known = set(conversions.material_names(conversions.load_factors()))
 bad = {c for cats in taxonomy.DISCIPLINE_MATERIALS.values() for c in cats} - known
 ok("every discipline material is a real factors.json category", not bad, str(bad))
 
-ok("work_sections deliberately left unseeded (awaiting Appendix E)",
-   len(taxonomy.list_work_sections()) == 0)
+# ⚠️ THIS ASSERTION IS THE INVERSE OF WHAT IT SAID UNTIL 2026-09-01. It read
+# "work_sections deliberately left unseeded (awaiting Appendix E)" and passed for the
+# whole of Phase 2. The 2026-09-01 build list answered §A3 — WS 10/11 and WS 14/15 are
+# two rows each, WS 14/15 are IPT 6, WS 6 is in scope — so the table is now seeded and
+# the old assertion had to FLIP rather than be deleted. Deleting it would have left
+# nothing asserting the count at all.
+_ws = taxonomy.list_work_sections()
+ok("⭐ work_sections is seeded — fifteen rows (§A3 answered 2026-09-01)", len(_ws) == 15,
+   f"got {len(_ws)}")
+ok("...and every one reaches the Submit Forecast picker (all in scope, all active)",
+   len(taxonomy.list_work_sections(in_scope_only=True)) == 15)
+# WS 10/11 and WS 14/15 are the whole of what §A3 asked. Two rows each, neither pair
+# merged into a 'WS10/11'.
+_ids = [r["section_id"] for r in _ws]
+ok("WS10 and WS11 are separate rows, not 'WS10/11'",
+   "WS10" in _ids and "WS11" in _ids and not any("/" in i for i in _ids))
+ok("WS14 and WS15 are separate rows", "WS14" in _ids and "WS15" in _ids)
+_by = {r["section_id"]: r for r in _ws}
+ok("WS14 and WS15 are owned by IPT 6 — a human answer, no longer an inference",
+   _by["WS14"]["ipt_id"] == "IPT6" and _by["WS15"]["ipt_id"] == "IPT6")
+# WS13 → IPT2 reached the client-visible map as IPT1 once already. Asserted here as
+# well as in test_ipt_overlay.js so the seed and the overlay cannot drift apart.
+ok("WS13 (Urge Halt) is IPT 2, not IPT 1", _by["WS13"]["ipt_id"] == "IPT2")
+ok("WS12 and WS13 hang off their parent bands",
+   _by["WS12"]["parent_section_id"] == "WS1"
+   and _by["WS13"]["parent_section_id"] == "WS2")
+ok("WS6 is IN scope — only its Phase 1 construct status is open", _by["WS6"]["in_scope"])
+# ⭐ THE DATUM. Two chainage frames already existed in this project and WS8 brings a
+# third. A km value on a row with no datum statement is the failure mode.
+_with_km = [r for r in _ws if r["km_from"] is not None or r["km_to"] is not None]
+ok("exactly the six mainline bands carry a km range", len(_with_km) == 6,
+   str(sorted(r["section_id"] for r in _with_km)))
+ok("⭐ every row carrying km says the datum is LOCAL DS3 and the map's is GLOBAL",
+   all("LOCAL DS3" in (r["scope_note"] or "")
+       and "GLOBAL GIS" in (r["scope_note"] or "") for r in _with_km))
+ok("WS1 starts at 0.000 (Tootsi) and WS6 ends at 36.663",
+   _by["WS1"]["km_from"] == 0.0 and _by["WS6"]["km_to"] == 36.663)
+ok("the six bands are contiguous — each starts where the last ended",
+   all(_by[f"WS{i}"]["km_to"] == _by[f"WS{i + 1}"]["km_from"] for i in range(1, 6)))
+ok("WS7 carries NO km — its 0+000-142+130 extent is the GLOBAL datum",
+   _by["WS7"]["km_from"] is None and _by["WS7"]["km_to"] is None
+   and "GLOBAL" in (_by["WS7"]["scope_note"] or ""))
+ok("WS8 carries no km either — the terminal datum is a THIRD 0+000",
+   _by["WS8"]["km_from"] is None
+   and "third 0+000" in (_by["WS8"]["scope_note"] or "").lower())
+# 31+507 is a chainage the build list explicitly said not to seed as a map tick.
+ok("31+507 is recorded as an open programme question, never as a km value",
+   "31+507" in (_by["WS5"]["scope_note"] or "")
+   and all(r["km_from"] != 31.507 and r["km_to"] != 31.507 for r in _ws))
+# §A4 is still open: the section → discipline mapping has never been confirmed.
+ok("⭐ primary_discipline is NULL on every row — §A4 is still unanswered",
+   all(r["primary_discipline"] is None for r in _ws))
+# WS15's ownership is split three ways and one column cannot hold it. The loss has to
+# be visible in the row, not only in a code comment.
+ok("WS15 records the IPT 3 / RBE PTO split it cannot store",
+   "IPT 3" in (_by["WS15"]["scope_note"] or "")
+   and "PTO" in (_by["WS15"]["scope_note"] or ""))
+# lexicographic ordering would put WS10–WS15 between WS1 and WS2 in the picker
+ok("sections come back in numeric order, not lexicographic",
+   _ids == [f"WS{i}" for i in range(1, 16)], str(_ids))
+# additive, like every other seed in this module: a corrected row survives a redeploy
+_before = taxonomy.list_work_sections()
+taxonomy.seed_taxonomy()
+ok("re-seeding inserts nothing and rewrites nothing",
+   taxonomy.list_work_sections() == _before)
+
 ok("disciplines carry their material categories for the picker",
    all("materials" in d for d in in_scope))
 sub = [d for d in in_scope if d["id"] == "substructure"][0]

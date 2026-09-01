@@ -153,6 +153,7 @@ def reset_db():
     db.init_taxonomy_db()
     db.init_zones_db()
     db.init_gates_db()     # Phase 5a
+    db.init_weeks_db()     # Week 1 — forecast_weeks, stockpile_weeks, capacity columns
     db.init_tenant()
 
 
@@ -202,10 +203,12 @@ A, B = "acme", "beta"
 # =========================================================================== #
 reset_db()
 
-# 11 at Phase 4.5, 12 from Phase 5a's location_gates. Pinned to an exact number on
-# purpose: a table added to db.py without being registered here and in
-# test_tenant_audit.py ships with the column present and the isolation absent.
-ok("db.py names the tenanted tables in one place", len(db.TENANTED_TABLES) == 12,
+# 11 at Phase 4.5, 12 from Phase 5a's location_gates, 14 from Week 1's forecast_weeks
+# and stockpile_weeks. Pinned to an exact number on purpose: a table added to db.py
+# without being registered here and in test_tenant_audit.py ships with the column
+# present and the isolation absent. Both Week 1 tables tripped this line and the audit
+# before they were registered.
+ok("db.py names the tenanted tables in one place", len(db.TENANTED_TABLES) == 14,
    f"got {len(db.TENANTED_TABLES)}")
 
 for t in sorted(db.TENANTED_TABLES):
@@ -540,6 +543,12 @@ main_src = open(os.path.join(BACKEND, "main.py"), encoding="utf-8").read()
 ok("init_tenant runs at startup", "db.init_tenant()" in main_src)
 ok("⭐ and AFTER the other init_* calls, whose ALTERs it copies",
    main_src.index("db.init_zones_db()") < main_src.index("db.init_tenant()"))
+# Week 1 adds three columns to `locations` by ALTER. Run init_weeks_db() after the
+# tenant rebuild and SQLite copies only the intersection, silently dropping them —
+# the same trap Phase 5a's two route gate columns had to avoid.
+ok("⭐ init_weeks_db too, for the three capacity columns it ALTERs onto locations",
+   main_src.index("db.init_weeks_db()") < main_src.index("db.init_tenant()")
+   and main_src.index("db.init_network_db()") < main_src.index("db.init_weeks_db()"))
 ok("⭐ and BEFORE the seeds, which must write into the tenanted table",
    main_src.index("db.init_tenant()") < main_src.index("network.seed_network()"))
 ok("the tenant is resolved in one place, not passed through 139 signatures",

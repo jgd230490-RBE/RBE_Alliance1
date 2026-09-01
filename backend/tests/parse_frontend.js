@@ -120,10 +120,182 @@ ok("effective payload is now simply the vehicle's own payload",
 // takes another's forecast with it
 ok("withdraw sends the line keys",
   code.includes("discipline: g.discipline") && code.includes("section_id: g.sectionId"));
-ok("my-submissions groups per line",
-  code.includes('[r.route_id, year, disc, sect].join("|")'));
+// ⚠️ CHANGED 2026-09-01. This asserted `[r.route_id, year, disc, sect]` — per line AND
+// year. The multi-year save lets one line span several years, and that key splits it
+// into a 2026 row and a 2027 row that read as two separate forecasts. The year came OUT
+// of the key; discipline and section stay in it, which is the half this assertion has
+// always really been protecting.
+ok("my-submissions groups per line, across every year the line covers",
+  code.includes('[r.route_id, disc, sect].join("|")')
+  && !/\[r\.route_id,\s*year,/.test(code));
 ok("edit carries the line keys back into the matrix",
   code.includes("editTarget.discipline") && code.includes("editTarget.sectionId"));
+
+// ---- 4b. Task A — the four planning vehicles lead the picker -------------------
+ok("the matrix reads planning_vehicles off /api/meta",
+  code.includes("planning_vehicles"));
+ok("...and defaults it to [] so an older meta payload still renders one flat list",
+  /planning_vehicles\s*=\s*\[\]/.test(code));
+ok("the picker groups planning vehicles above the rest",
+  code.includes('<optgroup label="Planning vehicles">')
+  && code.includes('<optgroup label="Other vehicles">'));
+ok("the legacy group is the complement, not a second hard-coded list",
+  /legacyVehicles\s*=\s*useMemo\(\s*\(\)\s*=>\s*vehicles\.filter/.test(code));
+// one <option> renderer, shared: two copies of the disabled rule would drift
+ok("both groups render through one shared option builder",
+  /function vehOption\(/.test(code)
+  && (code.match(/vehOption\(v, suggestedVehicles, vehicle\)/g) || []).length >= 3);
+ok("a vehicle outside the material's list is still visible, just disabled",
+  code.includes("not used for this material"));
+ok("...and the currently-selected vehicle is never disabled",
+  /disabled=\{!fits && v !== current\}/.test(code));
+
+// ---- 4c. Task B — the multi-year matrix ---------------------------------------
+// The single-year state has to be GONE, not shadowed. A surviving setYear would be a
+// second source of truth for the same window.
+for (const gone of [
+  ["setYear(", "the single-year setter is gone"],
+  ["const [year,", "the single-year state is gone"],
+  ["clearYear", "'Clear year' no longer refers to a single year's state"],
+]) {
+  ok(gone[1], !code.includes(gone[0]));
+}
+ok("the matrix carries a From year and a To year",
+  /const \[fromYear, setFromYear\]/.test(code) && /const \[toYear, setToYear\]/.test(code));
+ok("both come from months.years", code.includes("yearsAvail.map(y =>"));
+ok("⭐ the To list only offers years at or after From",
+  code.includes("yearsAvail.filter(y => y >= fromYear)"));
+ok("...and to >= from is enforced in state as well as in the dropdown",
+  /setToYear\(t => \(t < fromYear \? fromYear : t\)\)/.test(code));
+ok("the default range is the CURRENT calendar year",
+  code.includes("new Date().getFullYear()"));
+ok("...falling back to the first year the backend offers",
+  /yearsAvail\.includes\(now\) \? now : \(yearsAvail\[0\]/.test(code));
+ok("one labelled twelve-cell row is rendered per year in the range",
+  code.includes("yearsInRange.map(y =>") && code.includes("MONTHS.map((mn, i) =>"));
+// ⭐ absolute month_index keys. A relative 1..12 key collides across years — Jan 2026
+// and Jan 2027 would both be "1" and overwrite each other in `vals`.
+ok("⭐ cells are keyed by absolute month_index, not 1..12",
+  code.includes("const mi = base + i + 1") && code.includes("vals[mi]")
+  && !/vals\[i \+ 1\]/.test(code));
+ok("the edit window is a month_index range computed from the two years",
+  /const mLo = \(fromYear - months\.start_year\) \* 12 \+ 1/.test(code)
+  && /const mHi = \(Math\.max\(fromYear, toYear\) - months\.start_year\) \* 12 \+ 12/.test(code));
+ok("the load filters on that window", code.includes("x.month_index >= mLo && x.month_index <= mHi"));
+ok("...and re-runs when either year moves",
+  code.includes("[routeId, fromYear, toYear, discipline, sectionId]"));
+ok("⭐ ONE bulk POST covers the whole range",
+  /for\(let mi = mLo; mi <= mHi; mi\+\+\) cells\.push/.test(code)
+  && (code.match(/\/forecasts\/bulk/g) || []).length === 1);
+ok("totals, per-day and the seasonal check all read the same in-range list",
+  (code.match(/inRange/g) || []).length >= 4);
+// seasonal_restrictions.months are CALENDAR months; month_index is absolute
+ok("⭐ the seasonal check folds an absolute index back to a calendar month",
+  code.includes("((mi - 1) % 12) + 1"));
+ok("clearing is scoped to the range, not the whole of vals",
+  /for\(let mi = mLo; mi <= mHi; mi\+\+\) delete next\[mi\]/.test(code));
+ok("the save message names the range", code.includes("Saved ${rangeLabel} forecast"));
+// my submissions
+ok("⭐ my submissions shows a year SPAN when a line covers more than one",
+  code.includes("fromYear === toYear ? String(fromYear) : `${fromYear}–${toYear}`"));
+ok("withdraw is scoped to the months the row actually shows, not 1..60",
+  code.includes("from: String(g.minMonth), to: String(g.maxMonth)"));
+ok("...and the confirmation says how many months go",
+  code.includes("will be removed"));
+ok("edit reopens the line on its full span",
+  code.includes("year: g.fromYear, toYear: g.toYear"));
+ok("...and the matrix accepts that span", code.includes("setToYear(editTarget.toYear || editTarget.year)"));
+
+// ---- 4d. Tasks C + D — the Look-ahead tab -------------------------------------
+ok("there is a Look-ahead tab", code.includes('"Look-ahead"'));
+ok("...placed straight after Submit Forecast",
+  /"Dashboard", "Submit Forecast", "Look-ahead", "My submissions"/.test(code));
+ok("...and it renders the LookAhead component",
+  /tab === "Look-ahead" && <LookAhead/.test(code));
+// ⚠️ Visible to submitters too. Until Task F, /api/forecast-weeks has exactly the same
+// visibility as /api/forecasts, and hiding the tab would imply a boundary that is not
+// there. Asserted so nobody "fixes" it into a false permission.
+ok("⭐ the tab is NOT gated on canApprove",
+  !/canApprove \? \[[^\]]*Look-ahead/.test(code));
+ok("the window is the current month plus the next one",
+  /to: Math\.min\(months\.count, from \+ 1\)/.test(code));
+// ⭐ which cell is editable comes from the SERVER, not the browser clock
+ok("⭐ the editable week comes from the server's next_week",
+  code.includes("payload.next_week") && /const isNext = \(r\) =>/.test(code));
+ok("only next week, or an already-edited week, is editable",
+  /r\.status !== "confirmed" && \(next \|\| r\.status === "edited"\)/.test(code));
+ok("a confirmed week's plan is read-only", code.includes("Confirmed — reopen it to change the plan"));
+ok("Confirm next week is its own button, separate from editing",
+  code.includes("Confirm next week") && code.includes("/forecast-weeks/confirm"));
+ok("confirm offers exactly the four flag fields, all optional",
+  /\["weather", "wetness", "traffic", "other"\]/.test(code)
+  && code.includes("optional and may be left blank"));
+// ⭐ THE ONE THAT MATTERS. Saving an actual must not calibrate.
+ok("⭐ the actual is saved through /forecast-weeks/actual",
+  code.includes("/forecast-weeks/actual"));
+// Scoped to saveActual's OWN body, sliced out between its declaration and the next
+// one. A window-sized regex matched doCalibrate() further down the file and passed on
+// a clean tree AND on a deliberately broken one — vacuously true in both directions.
+const _saveActualBody = (() => {
+  const i = code.indexOf("const saveActual =");
+  if (i < 0) return null;
+  const j = code.indexOf("const doConfirm =", i);
+  return j > i ? code.slice(i, j) : code.slice(i);
+})();
+ok("saveActual is findable in the source", !!_saveActualBody);
+ok("⭐ and saveActual's own body never touches the calibrate endpoint",
+  !!_saveActualBody && !_saveActualBody.includes("forecast-weeks/calibrate"));
+ok("⭐ calibrate is reached only from the → next week button",
+  (code.match(/\/forecast-weeks\/calibrate/g) || []).length === 1
+  && code.includes("→ next week"));
+ok("...and the button is disabled when next week is confirmed",
+  code.includes('after.status !== "confirmed"')
+  && code.includes("Next week is already confirmed"));
+ok("the calibrate dialog offers a typed override instead of the formula",
+  code.includes("override_qty") && code.includes("leave blank to use the formula"));
+ok("variance is blank rather than 0 until an actual is typed",
+  /r\.variance == null \? "—"/.test(code));
+ok("an emptied actual box clears it back to null, not to zero",
+  /actual_qty: \(v === "" \|\| v == null \? null/.test(code));
+ok("a week whose parent month changed says so",
+  code.includes("parent month changed") && code.includes("parent_changed"));
+ok("reopening a month is shown as a note, not by hiding its weeks",
+  code.includes("month is now"));
+
+// ---- 4e. Task D2 — stock held --------------------------------------------------
+ok("the stockpile panel sits under the look-ahead",
+  /<Stockpiles meta=\{meta\}/.test(code) && /function Stockpiles\(/.test(code));
+ok("consumption is typed through /stockpiles/consume", code.includes("/stockpiles/consume"));
+ok("...and the balance is read from /stockpiles", code.includes("/stockpiles?from_month="));
+// ⭐ no capacity recorded is NOT zero capacity
+ok("⭐ an unset capacity renders '—', never 0",
+  /s\.capacity_qty == null \? "—"/.test(code)
+  && /cell\.remaining == null \? "—"/.test(code));
+ok("over capacity uses the existing red, not a reserved route colour",
+  /cell\.over \? "var\(--red\)"/.test(code)
+  && !/cell\.over \? "#039E86"/.test(code));
+ok("the panel says inbound comes from typed actuals only",
+  code.includes("a week with no") && code.includes("actual counts as nothing"));
+ok("the capacity fields appear for the four storage types",
+  /const STORAGE_TYPES = \["Stockpile", "Site", "Compound", "Rail head"\]/.test(code)
+  && /STORAGE_TYPES\.includes\(form\.loc_type\)/.test(code));
+ok("...and on other types only when the location receives material",
+  /form\.role === "destination" \|\| form\.role === "both"/.test(code));
+ok("capacity has ONE write path, its own endpoint",
+  (code.match(/\/capacity\$\{qs\}/g) || []).length === 1);
+
+// ---- 4f. Task E — the two new location types -----------------------------------
+ok("Rail head and Stockpile are offered as location types",
+  /const LOC_TYPES = \["Quarry", "Port", "Compound", "Site", "Rail head", "Stockpile", "Other"\]/.test(code));
+ok("Rail head is drawn in the reserved rail colour",
+  /"Rail head": "#0F766E"/.test(code));
+
+// ---- 4g. NOTHING may upload ----------------------------------------------------
+// "Never build: file upload, OCR..." — asserted at source level so a later edit that
+// adds one trips here rather than shipping.
+for (const banned of ['type="file"', "FormData(", ".files[", "multipart/form-data"]) {
+  ok(`no upload path: ${banned} is absent`, !code.includes(banned));
+}
 
 // ---- 5. the double-counting caution --------------------------------------------
 ok("the save surfaces the backend caution", src.includes("caution"));
