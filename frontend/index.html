@@ -489,9 +489,16 @@ function Login({ onSignIn, onBack, savedName }){
 // ================================================================= Portal (tabbed)
 function Portal({ role, who, meta, metaErr }){
   const canApprove = CAN_APPROVE[role];
-  const tabs = ["Dashboard", "Submit Forecast", "My submissions", ...(canApprove ? ["Approvals", "Data Management"] : []), "Public Route Map"];
+  // ⚠️ Look-ahead is visible to EVERYONE on staff, submitters included, because until
+  // Task F lands /api/forecast-weeks has exactly the same visibility as
+  // /api/forecasts — everyone sees every line. Hiding the tab from submitters would
+  // suggest a permission boundary that does not exist behind it.
+  const tabs = ["Dashboard", "Submit Forecast", "Look-ahead", "My submissions", ...(canApprove ? ["Approvals", "Data Management"] : []), "Public Route Map"];
   const [tab, setTab] = useState("Dashboard");
-  const [editTarget, setEditTarget] = useState(null);   // {routeId, year} handed to the Matrix
+  // {routeId, year, toYear, discipline, sectionId} handed to the Matrix. `year` is the
+  // FIRST year of the line and `toYear` the last — a line can span several since the
+  // multi-year save, and reopening it on one year would hide the rest.
+  const [editTarget, setEditTarget] = useState(null);
 
   if(metaErr){
     return <div className="p-8 text-center text-slate-600">
@@ -520,6 +527,7 @@ function Portal({ role, who, meta, metaErr }){
       <div className="flex-1 min-h-0 overflow-auto">
         {tab === "Dashboard" && <Dashboard meta={meta} />}
         {tab === "Submit Forecast" && <Matrix meta={meta} who={who} editTarget={editTarget} />}
+        {tab === "Look-ahead" && <LookAhead meta={meta} who={who} />}
         {tab === "My submissions" && <MySubmissions meta={meta} who={who} onEdit={editInMatrix} />}
         {tab === "Approvals" && canApprove && <Approvals />}
         {tab === "Data Management" && canApprove && <DataManagement meta={meta} who={who} />}
@@ -531,11 +539,35 @@ function Portal({ role, who, meta, metaErr }){
   );
 }
 
+// One vehicle <option>. Pulled out of Matrix so the planning group and the legacy
+// group render identically — two copies of this markup would drift, and the disabled
+// rule is the part that must not.
+//
+// Anything outside the material category's own list stays VISIBLE but disabled rather
+// than vanishing, so a wrong saved value is obvious instead of silently swapped. The
+// currently-selected vehicle is never disabled, or a line saved before a category's
+// vehicle list changed could not be re-saved.
+function vehOption(v, suggested, current){
+  const fits = suggested.includes(v);
+  return <option key={v} value={v} disabled={!fits && v !== current}
+    style={{ color: fits ? undefined : "#cbd5e1" }}>
+    {v}{fits ? "" : " · not used for this material"}
+  </option>;
+}
+
 // ================================================================= Matrix
 function Matrix({ meta, who, editTarget }){
   const { routes, materials, vehicles, units, months, factors,
           material_categories = {}, seasonal_restrictions = [],
-          disciplines = [], work_sections = [] } = meta;
+          disciplines = [], work_sections = [], planning_vehicles = [] } = meta;
+
+  // The four EU-named planning vehicles lead every picker; the six older entries stay
+  // below them as legacy. Kept as two lists rather than a re-ordered `vehicles`,
+  // because every saved forecast and every baked route names a vehicle by string and
+  // the full set has to remain complete. Defaults to empty, so an older /api/meta that
+  // does not send planning_vehicles renders exactly the pre-2026-09-01 single list.
+  const legacyVehicles = useMemo(
+    () => vehicles.filter(v => !planning_vehicles.includes(v)), [vehicles, planning_vehicles]);
 
   const GUESS_TO_CAT = { "soil":"Earthworks / soil", "sand":"Small aggregate", "gravel":"Small aggregate",
     "limestone - rockfill":"Large aggregate / ballast", "limestone (shale aggregate)":"Small aggregate",
@@ -563,7 +595,10 @@ function Matrix({ meta, who, editTarget }){
     setOrigin(r.origin || "");
     setDest(r.dest || "");
     setRouteId(editTarget.routeId);
-    if(editTarget.year) setYear(editTarget.year);
+    // My submissions groups a line across every year it covers, so it hands back a
+    // span. `year` is the first year and `toYear` the last; an older caller that sends
+    // only `year` still opens that one year, which is what it used to do.
+    if(editTarget.year){ setFromYear(editTarget.year); setToYear(editTarget.toYear || editTarget.year); }
     // carry the line keys across, or "Edit" would reopen the route on a different
     // discipline and the month cells would load from the wrong line
     if(editTarget.discipline !== undefined) setDiscipline(editTarget.discipline || "");
@@ -590,7 +625,41 @@ function Matrix({ meta, who, editTarget }){
   // ---- vehicle (exactly one per line) ----
   const [vehicle, setVehicle] = useState(vehicles[0] || "");
   const [unit, setUnit] = useState(units[0] || "m3");
-  const [year, setYear] = useState(months.years[0]);
+
+  // ---- year RANGE, not a single year ----------------------------------------
+  // One save now covers From year..To year. Nothing about the stored shape changed:
+  // the UNIQUE key is still (tenant_id, route_id, month_index, discipline, section_id),
+  // there is no `year` column, and MONTH_COUNT is still 60. month_index has always been
+  // absolute — 1 = Jan of start_year — and /api/forecasts?route_id= has always returned
+  // every month of it. Only the form was ever limited to twelve cells.
+  //
+  // Default is the CURRENT calendar year alone, falling back to the first year the
+  // backend offers if today is outside the horizon (which it will be from 2031).
+  const yearsAvail = months.years || [];
+  const defaultYear = useMemo(() => {
+    const now = new Date().getFullYear();
+    return yearsAvail.includes(now) ? now : (yearsAvail[0] || months.start_year);
+  }, [yearsAvail, months.start_year]);
+  const [fromYear, setFromYear] = useState(defaultYear);
+  const [toYear, setToYear] = useState(defaultYear);
+  // to >= from, always. Enforced here as well as by the To dropdown only offering
+  // years at or after From, because editTarget can set either one directly.
+  useEffect(() => { setToYear(t => (t < fromYear ? fromYear : t)); }, [fromYear]);
+
+  const yearsInRange = useMemo(() => {
+    const out = [];
+    for(let y = fromYear; y <= Math.max(fromYear, toYear); y++) out.push(y);
+    return out;
+  }, [fromYear, toYear]);
+
+  // The absolute month_index window this form is editing. Everything — load, save,
+  // totals, clear — is scoped to it, so narrowing the range cannot touch months
+  // outside it and widening it cannot invent them.
+  const mLo = (fromYear - months.start_year) * 12 + 1;
+  const mHi = (Math.max(fromYear, toYear) - months.start_year) * 12 + 12;
+
+  // vals is keyed by ABSOLUTE month_index now, not 1..12. With more than one year on
+  // screen a relative key collides across years — Jan 2026 and Jan 2027 are both "1".
   const [vals, setVals] = useState({});
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -639,15 +708,15 @@ function Matrix({ meta, who, editTarget }){
     // change, and it used to pull the whole forecasts table each time
     fetch(`${API}/forecasts?route_id=${encodeURIComponent(routeId)}`).then(r => r.json()).then(rows => {
       if(!live) return;
-      const base = (year - months.start_year) * 12;
       // a route can now carry several lines in the same months, so the cells loaded are
-      // the ones for THIS discipline and section, not every row on the route
+      // the ones for THIS discipline and section, not every row on the route — and
+      // every month inside the year RANGE, not one year's twelve
       const mine = rows.filter(x => x.route_id === routeId
         && (x.discipline || "") === discipline
         && (x.section_id || "") === sectionId
-        && x.month_index > base && x.month_index <= base + 12);
+        && x.month_index >= mLo && x.month_index <= mHi);
       const next = {};
-      mine.forEach(x => { next[x.month_index - base] = String(x.quantity); });
+      mine.forEach(x => { next[x.month_index] = String(x.quantity); });
       setVals(next);
       const first = mine[0];
       if(first){
@@ -670,9 +739,19 @@ function Matrix({ meta, who, editTarget }){
         }, []));
     }).catch(() => {});
     return () => { live = false; };
-  }, [routeId, year, discipline, sectionId]);
+  }, [routeId, fromYear, toYear, discipline, sectionId]);
 
-  const setMonth = (m, v) => setVals(s => ({ ...s, [m]: v }));
+  const setMonth = (mi, v) => setVals(s => ({ ...s, [mi]: v }));
+
+  // Only the cells inside the current window count. vals is replaced wholesale by the
+  // load effect whenever the range moves, so a stale key should never survive — but
+  // every total, the save and the seasonal check filter anyway, because a stale key
+  // outside the range would be counted in a figure and then not written by the save.
+  const inRange = useMemo(
+    () => Object.entries(vals)
+      .map(([mi, q]) => [+mi, q])
+      .filter(([mi]) => mi >= mLo && mi <= mHi),
+    [vals, mLo, mHi]);
 
   // One vehicle per line since Phase 2. A load split across two vehicle types is two
   // lines now, which the widened forecasts key makes storable. The old blended payload
@@ -681,15 +760,20 @@ function Matrix({ meta, who, editTarget }){
   const effPayload = payload(factors, vehicle);
   const allowedUnits = units.filter(u => (u !== "m3" || volumeOk));
 
-  const totalUnit = Object.values(vals).reduce((a, b) => a + (+b || 0), 0);
-  const totalT = Object.entries(vals).reduce((a, [, q]) => a + toTonnes(q, unit, material, vehicle, factors), 0);
+  // Totals run across the WHOLE range, not one year — the brief's requirement and the
+  // only reading that makes sense once a save can cover 2026-2027.
+  const totalUnit = inRange.reduce((a, [, q]) => a + (+q || 0), 0);
+  const totalT = inRange.reduce((a, [, q]) => a + toTonnes(q, unit, material, vehicle, factors), 0);
   const totalVeh = totalT / (effPayload || 1);
 
   // Daily rates. A year total tells you nothing about whether a site gate can cope;
   // the peak month divided by working days is the number that sizes the fleet.
   const perDay = useMemo(() => {
     const wd = (factors.planning && factors.planning.working_days_per_month) || 22;
-    const monthlyT = Object.entries(vals)
+    // Still per WORKING month, and now over the whole range — the average is across
+    // the months actually entered, not across every month the range spans. A range of
+    // 2026-2030 with three months filled in must not report a twelfth of the traffic.
+    const monthlyT = inRange
       .map(([, q]) => toTonnes(q, unit, material, vehicle, factors))
       .filter(t => t > 0);
     if(!monthlyT.length || wd <= 0) return { avgT:0, peakT:0, avgVeh:0, peakVeh:0, months:0 };
@@ -697,10 +781,13 @@ function Matrix({ meta, who, editTarget }){
     const peakT = Math.max(...monthlyT) / wd;
     const p = effPayload || 1;
     return { avgT, peakT, avgVeh: avgT / p, peakVeh: peakT / p, months: monthlyT.length };
-  }, [vals, unit, material, vehicle, factors, effPayload]);
+  }, [inRange, unit, material, vehicle, factors, effPayload]);
 
   const warnings = useMemo(() => {
-    const entered = new Set(Object.keys(vals).filter(m => +vals[m] > 0).map(Number));
+    // seasonal_restrictions.months are CALENDAR months 1-12. month_index is absolute,
+    // so it has to be folded back — ((mi - 1) % 12) + 1. Reading an absolute index as
+    // a calendar month would put Jan 2027 (13) outside every window silently.
+    const entered = new Set(inRange.filter(([, q]) => +q > 0).map(([mi]) => ((mi - 1) % 12) + 1));
     return (seasonal_restrictions || [])
       .filter(w => (w.months || []).some(m => entered.has(m)))
       .map(w => {
@@ -708,14 +795,19 @@ function Matrix({ meta, who, editTarget }){
         return (rv.length === 0 || rv.includes(vehicle)) ? w.message : null;
       })
       .filter(Boolean);
-  }, [vals, vehicle, seasonal_restrictions]);
+  }, [inRange, vehicle, seasonal_restrictions]);
+
+  const rangeLabel = fromYear === toYear ? String(fromYear) : `${fromYear}–${toYear}`;
 
   const save = () => {
     if(!routeId){ setMsg({ ok: false, text: "Pick an origin and destination that map to a route first." }); return; }
     setBusy(true); setMsg(null); setCaution(null);
-    const base = (year - months.start_year) * 12;
+    // ONE POST for the whole range. The backend upserts a cell with a quantity and
+    // DELETES one at zero, both on the full widened key, so an emptied month inside
+    // the range is cleared and a month outside the range is never mentioned and
+    // therefore never touched. Narrowing the range cannot delete another year.
     const cells = [];
-    for(let m = 1; m <= 12; m++) cells.push({ month_index: base + m, quantity: +vals[m] || 0 });
+    for(let mi = mLo; mi <= mHi; mi++) cells.push({ month_index: mi, quantity: +vals[mi] || 0 });
     fetch(`${API}/forecasts/bulk`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -727,7 +819,7 @@ function Matrix({ meta, who, editTarget }){
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(j => {
-        setMsg({ ok: true, text: `Saved ${year} forecast for ${routeId}${discipline ? ` · ${discipline}` : ""}. Sent for approval.` });
+        setMsg({ ok: true, text: `Saved ${rangeLabel} forecast for ${routeId}${discipline ? ` · ${discipline}` : ""}. Sent for approval.` });
         // not an error — two disciplines on one route is the case the taxonomy exists
         // for — but two people filling this in separately can double-count the same
         // lorries without ever seeing each other's line
@@ -736,7 +828,14 @@ function Matrix({ meta, who, editTarget }){
       .catch(e => setMsg({ ok: false, text: `Couldn't save (${e}). Try again.` }))
       .finally(() => setBusy(false));
   };
-  const clearYear = () => setVals({});
+  // Clears only what is on screen. With a range open, wiping vals outright would also
+  // discard nothing visible — but the name mattered when it said "year", and a future
+  // caller that keeps out-of-range keys would silently lose them.
+  const clearRange = () => setVals(s => {
+    const next = { ...s };
+    for(let mi = mLo; mi <= mHi; mi++) delete next[mi];
+    return next;
+  });
 
   return (
     <div className="max-w-7xl mx-auto p-5">
@@ -843,13 +942,16 @@ function Matrix({ meta, who, editTarget }){
                 stays visible but disabled rather than vanishing, so a wrong saved value
                 is obvious instead of silently swapped. */}
             <select value={vehicle} onChange={e => setVehicle(e.target.value)} className={selCls}>
-              {vehicles.map(v => {
-                const fits = suggestedVehicles.includes(v);
-                return <option key={v} value={v} disabled={!fits && v !== vehicle}
-                  style={{ color: fits ? undefined : "#cbd5e1" }}>
-                  {v}{fits ? "" : " · not used for this material"}
-                </option>;
-              })}
+              {planning_vehicles.length > 0 && (
+                <optgroup label="Planning vehicles">
+                  {planning_vehicles.map(v => vehOption(v, suggestedVehicles, vehicle))}
+                </optgroup>
+              )}
+              {planning_vehicles.length > 0 ? (
+                <optgroup label="Other vehicles">
+                  {legacyVehicles.map(v => vehOption(v, suggestedVehicles, vehicle))}
+                </optgroup>
+              ) : vehicles.map(v => vehOption(v, suggestedVehicles, vehicle))}
             </select>
           </Field>
           <Field label="Input unit">
@@ -865,23 +967,55 @@ function Matrix({ meta, who, editTarget }){
           used to hide (an Artic Flatbed turns round in 45 minutes, a Tipper in 24).
         </p>
 
+        {/* From year / To year. One save covers the whole range — see the save()
+            comment for why widening or narrowing it cannot touch another year's
+            months. The To list only offers years at or after From, so `to >= from`
+            cannot be entered; the effect above enforces it for programmatic sets. */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <Field label="Year">
-            <select value={year} onChange={e => setYear(+e.target.value)} className={selCls}>
-              {months.years.map(y => <option key={y} value={y}>{y}</option>)}
+          <Field label="From year">
+            <select value={fromYear} onChange={e => setFromYear(+e.target.value)} className={selCls}>
+              {yearsAvail.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
           </Field>
+          <Field label="To year">
+            <select value={toYear} onChange={e => setToYear(+e.target.value)} className={selCls}>
+              {yearsAvail.filter(y => y >= fromYear).map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </Field>
+          <div className="col-span-2 md:col-span-3 self-end text-[11px] text-slate-400 pb-2">
+            {yearsInRange.length} year{yearsInRange.length === 1 ? "" : "s"} ·{" "}
+            {mHi - mLo + 1} months in one save. Months left blank are cleared.
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-          {MONTHS.map((mn, i) => (
-            <label key={mn} className="block">
-              <span className="text-[11px] uppercase tracking-wide text-slate-400">{mn}</span>
-              <input type="number" min="0" inputMode="decimal"
-                value={vals[i + 1] ?? ""} onChange={e => setMonth(i + 1, e.target.value)} placeholder="0"
-                className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
-            </label>
-          ))}
+        {/* One labelled twelve-cell row per year in the range. The cells are keyed by
+            ABSOLUTE month_index — Jan 2026 is 1 and Jan 2027 is 13 — because a
+            relative 1..12 key collides between years. */}
+        <div className="space-y-4">
+          {yearsInRange.map(y => {
+            const base = (y - months.start_year) * 12;
+            return (
+              <div key={y}>
+                <div className="flex items-baseline gap-2 mb-1.5">
+                  <span className="text-xs font-semibold text-[color:var(--navy-deep)] tabular-nums">{y}</span>
+                  <span className="flex-1 border-t border-slate-100" />
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                  {MONTHS.map((mn, i) => {
+                    const mi = base + i + 1;
+                    return (
+                      <label key={mn} className="block">
+                        <span className="text-[11px] uppercase tracking-wide text-slate-400">{mn}</span>
+                        <input type="number" min="0" inputMode="decimal"
+                          value={vals[mi] ?? ""} onChange={e => setMonth(mi, e.target.value)} placeholder="0"
+                          className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {warnings.length > 0 && (
@@ -891,7 +1025,8 @@ function Matrix({ meta, who, editTarget }){
         )}
 
         <div className="rounded-lg bg-slate-50 border border-slate-200 p-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
-          <Stat label={`Year total (${unit === "m3" ? "m³" : unit})`} value={fmt(totalUnit, unit)} />
+          <Stat label={`${fromYear === toYear ? "Year" : "Range"} total · ${rangeLabel} (${unit === "m3" ? "m³" : unit})`}
+            value={fmt(totalUnit, unit)} />
           <Stat label="≈ tonnes" value={fmt(totalT, "t")} />
           <Stat label="≈ vehicle loads" value={fmt(totalVeh, "vehicles")} tone="var(--navy)" />
           {/* Per working DAY, not per calendar day — the peak month is what sizes a
@@ -912,8 +1047,8 @@ function Matrix({ meta, who, editTarget }){
             style={{background:"var(--navy)"}}>
             {busy ? "Saving…" : "Save & send for approval"}
           </button>
-          <button onClick={clearYear} className="px-4 py-2.5 rounded-lg text-slate-600 hover:bg-slate-100 text-sm">
-            Clear year
+          <button onClick={clearRange} className="px-4 py-2.5 rounded-lg text-slate-600 hover:bg-slate-100 text-sm">
+            {fromYear === toYear ? "Clear year" : `Clear ${rangeLabel}`}
           </button>
           {msg && <span className="text-sm font-medium" style={{color: msg.ok ? "var(--green)" : "var(--red)"}}>{msg.text}</span>}
         </div>
@@ -959,36 +1094,55 @@ function MySubmissions({ meta, who, onEdit }){
     if(!rows) return [];
     const g = {};
     rows.forEach(r => {
-      const year = months.start_year + Math.floor((r.month_index - 1) / 12);
-      // per LINE and year. Grouped on route and year alone, a submitter's substructure
-      // and superstructure forecasts for one route would merge into a single row showing
-      // only whichever material happened to be seen first.
+      // ⚠️ Grouped per LINE, NOT per line-and-year — changed 2026-09-01 with the
+      // multi-year save. A line can now span several years in one submission, and the
+      // old key split it into a 2026 row and a 2027 row that look like two forecasts.
+      //
+      // Grouping on route alone would still be wrong: a submitter's substructure and
+      // superstructure lines on one route would merge into a single row showing only
+      // whichever material happened to be seen first. Discipline and section stay in
+      // the key for exactly that reason.
       const disc = r.discipline || "", sect = r.section_id || "";
-      const key = [r.route_id, year, disc, sect].join("|");
+      const key = [r.route_id, disc, sect].join("|");
       const e = g[key] || (g[key] = {
-        routeId: r.route_id, year, discipline: disc, sectionId: sect,
+        routeId: r.route_id, discipline: disc, sectionId: sect,
         statuses: new Set(), material: r.material_type,
         material_description: r.material_description, vehicle: r.vehicle_type,
         unit: r.unit, months: 0, quantity: 0, rejectReason: null,
+        minMonth: r.month_index, maxMonth: r.month_index,
       });
       e.statuses.add(r.status); e.months += 1;
       e.quantity += (+r.quantity || 0);
+      e.minMonth = Math.min(e.minMonth, r.month_index);
+      e.maxMonth = Math.max(e.maxMonth, r.month_index);
       if(r.reject_reason && !e.rejectReason) e.rejectReason = r.reject_reason;
     });
+    const yearOf = (mi) => months.start_year + Math.floor((mi - 1) / 12);
     return Object.values(g)
-      .map(e => ({ ...e, status: e.statuses.size === 1 ? [...e.statuses][0] : "Mixed" }))
-      .sort((a, b) => (a.year - b.year) || a.routeId.localeCompare(b.routeId)
+      .map(e => {
+        const fromYear = yearOf(e.minMonth), toYear = yearOf(e.maxMonth);
+        return { ...e, fromYear, toYear,
+          yearLabel: fromYear === toYear ? String(fromYear) : `${fromYear}–${toYear}`,
+          status: e.statuses.size === 1 ? [...e.statuses][0] : "Mixed" };
+      })
+      .sort((a, b) => (a.fromYear - b.fromYear) || a.routeId.localeCompare(b.routeId)
         || a.discipline.localeCompare(b.discipline));
   }, [rows, months]);
 
-  // Scoped to the LINE. Without discipline and section_id this would delete every line
-  // the submitter has on that route that year — including a different discipline's.
+  // Scoped to the LINE, and to exactly the months the row shows. Without discipline and
+  // section_id this would delete every line the submitter has on that route — including
+  // a different discipline's.
+  //
+  // ⚠️ CONSEQUENCE OF THE REGROUPING. A row is now a whole line, so Withdraw removes
+  // every year of it, not one. The range is minMonth..maxMonth — what the row displays
+  // — rather than 1..60, so it still cannot reach past what is on screen, and the
+  // confirmation names the span.
   const withdraw = (g) => {
     const what = g.discipline ? `${g.discipline} forecast` : "forecast";
-    if(!confirm(`Withdraw your ${g.year} ${what} for ${g.routeId}?`)) return;
-    const base = (g.year - months.start_year) * 12;
+    if(!confirm(`Withdraw your ${g.yearLabel} ${what} for ${g.routeId}?\n` +
+                `${g.months} month${g.months === 1 ? "" : "s"} will be removed.`)) return;
     const p = new URLSearchParams({
-      submitted_by: who, from: String(base + 1), to: String(base + 12),
+      submitted_by: who, from: String(g.minMonth), to: String(g.maxMonth),
       discipline: g.discipline || "", section_id: g.sectionId || "",
     });
     fetch(`${API}/forecasts/${encodeURIComponent(g.routeId)}?${p}`, { method: "DELETE" })
@@ -1007,7 +1161,7 @@ function MySubmissions({ meta, who, onEdit }){
   // CSV export. Built and downloaded in the browser — no server round trip, and no
   // dependency on a spreadsheet library.
   const exportCsv = () => {
-    const cols = ["Route", "From", "To", "Year", "Discipline", "Section", "Material",
+    const cols = ["Route", "From", "To", "Years", "Discipline", "Section", "Material",
                   "Description", "Vehicle", "Unit", "Quantity", "Months", "Status",
                   "Rejection reason"];
     const esc = (v) => {
@@ -1017,7 +1171,7 @@ function MySubmissions({ meta, who, onEdit }){
     const lines = [cols.join(",")];
     groups.forEach(g => {
       const r = routeById[g.routeId] || {};
-      lines.push([g.routeId, r.origin || "", r.dest || "", g.year, g.discipline || "",
+      lines.push([g.routeId, r.origin || "", r.dest || "", g.yearLabel, g.discipline || "",
                   g.sectionId || "", g.material || "", g.material_description || "",
                   g.vehicle || "", g.unit || "", Math.round(g.quantity * 10) / 10,
                   g.months, g.status, g.rejectReason || ""].map(esc).join(","));
@@ -1062,7 +1216,7 @@ function MySubmissions({ meta, who, onEdit }){
                   <th className="px-3 py-2 text-left font-semibold">Route</th>
                   <th className="px-3 py-2 text-left font-semibold">Discipline</th>
                   <th className="px-3 py-2 text-left font-semibold">From → to</th>
-                  <th className="px-3 py-2 text-left font-semibold">Year</th>
+                  <th className="px-3 py-2 text-left font-semibold">Years</th>
                   <th className="px-3 py-2 text-left font-semibold">Material</th>
                   <th className="px-3 py-2 text-left font-semibold">Vehicle</th>
                   <th className="px-3 py-2 text-center font-semibold">Months</th>
@@ -1074,7 +1228,7 @@ function MySubmissions({ meta, who, onEdit }){
                 {groups.map(g => {
                   const r = routeById[g.routeId] || {};
                   return (
-                    <tr key={`${g.routeId}|${g.year}|${g.discipline}|${g.sectionId}`} className="border-t border-slate-100 hover:bg-slate-50">
+                    <tr key={`${g.routeId}|${g.discipline}|${g.sectionId}`} className="border-t border-slate-100 hover:bg-slate-50">
                       <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{g.routeId}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         {g.discipline
@@ -1084,7 +1238,7 @@ function MySubmissions({ meta, who, onEdit }){
                           : <span className="text-slate-300">—</span>}
                       </td>
                       <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{r.origin || "—"} → {r.dest || "—"}</td>
-                      <td className="px-3 py-2 tabular-nums">{g.year}</td>
+                      <td className="px-3 py-2 tabular-nums whitespace-nowrap">{g.yearLabel}</td>
                       <td className="px-3 py-2 text-slate-600">{g.material}{g.material_description ? <span className="text-slate-400"> · {g.material_description}</span> : null}</td>
                       <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{g.vehicle}</td>
                       <td className="px-3 py-2 text-center tabular-nums">{g.months}</td>
@@ -1098,7 +1252,7 @@ function MySubmissions({ meta, who, onEdit }){
                         )}
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
-                        <button onClick={() => onEdit({ routeId: g.routeId, year: g.year, discipline: g.discipline, sectionId: g.sectionId })}
+                        <button onClick={() => onEdit({ routeId: g.routeId, year: g.fromYear, toYear: g.toYear, discipline: g.discipline, sectionId: g.sectionId })}
                           className="text-[color:var(--navy)] font-semibold hover:underline mr-3">Edit</button>
                         <button onClick={() => withdraw(g)}
                           className="text-[color:var(--red)] hover:underline">Withdraw</button>
@@ -1106,6 +1260,469 @@ function MySubmissions({ meta, who, onEdit }){
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ================================================================= Look-ahead (Week 1)
+// Tasks C, D and D2's panel. Sits ON the month line — there is no week_index on
+// `forecasts`, no upload, no importer, and the public map's timeline stays monthly.
+//
+// Window: the current month and the next one. The browser's clock picks the WINDOW
+// only; which cell is editable comes from the server's `next_week`, so a laptop with
+// the wrong date cannot let someone confirm a different week.
+const WEEK_NOS = [1, 2, 3, 4];
+const WEEK_DAYS = { 1: "1–7", 2: "8–14", 3: "15–21", 4: "22–end" };
+const wkKey = (r) => `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}|${r.month_index}|${r.week_index}`;
+const lineKeyOf = (r) => `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}|${r.month_index}`;
+const wkBody = (r) => ({ route_id: r.route_id, month_index: r.month_index,
+                         discipline: r.discipline || "", section_id: r.section_id || "",
+                         week_index: r.week_index });
+const numOr = (v, d) => (v === "" || v == null || isNaN(+v)) ? d : +v;
+
+function StatusChip({ s, parentChanged }){
+  const map = { derived: ["#64748b", "rgba(100,116,139,.12)"],
+                edited:  ["#B45309", "rgba(217,119,6,.14)"],
+                confirmed: ["var(--green)", "rgba(3,158,134,.14)"] };
+  const [c, bg] = map[s] || map.derived;
+  return (
+    <span className="inline-flex flex-wrap justify-end gap-1">
+      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full" style={{ color: c, background: bg }}>{s}</span>
+      {/* The parent month's quantity moved after this week was set. Only ever shown on
+          an edited or confirmed week — a derived one is refreshed instead of flagged. */}
+      {parentChanged && (
+        <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
+          style={{ color: "var(--red)", background: "rgba(191,46,85,.12)" }}
+          title="The parent month's quantity changed after this week was set. This week was deliberately not refreshed.">
+          parent month changed
+        </span>
+      )}
+    </span>
+  );
+}
+
+function LookAhead({ meta, who }){
+  const { months, routes } = meta;
+  const routeById = useMemo(() => Object.fromEntries((routes || []).map(r => [r.route_id, r])), [routes]);
+
+  // current month + next month, clamped to the horizon
+  const win = useMemo(() => {
+    const now = new Date();
+    const cur = (now.getFullYear() - months.start_year) * 12 + (now.getMonth() + 1);
+    const from = Math.max(1, Math.min(cur, months.count));
+    return { from, to: Math.min(months.count, from + 1), outside: cur < 1 || cur > months.count };
+  }, [months]);
+
+  const [payload, setPayload] = useState(null);
+  const [err, setErr] = useState("");
+  const [tick, setTick] = useState(0);
+  const [busy, setBusy] = useState("");
+  const [draft, setDraft] = useState({});                // cellKey -> unsaved input
+  const [confirming, setConfirming] = useState(null);    // week whose flag dialog is open
+  const [flags, setFlags] = useState({ weather: "", wetness: "", traffic: "", other: "" });
+  const [calibrating, setCalibrating] = useState(null);  // {row, override}
+
+  useEffect(() => {
+    let live = true;
+    setErr("");
+    fetch(`${API}/forecast-weeks?from_month=${win.from}&to_month=${win.to}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(j => { if(live){ setPayload(j); setDraft({}); } })
+      .catch(e => { if(live) setErr(`Couldn't load the look-ahead (${e}).`); });
+    return () => { live = false; };
+  }, [win.from, win.to, tick]);
+
+  const rows = (payload && payload.weeks) || [];
+  const nextW = (payload && payload.next_week) || {};
+  const isNext = (r) => r.month_index === nextW.month_index && r.week_index === nextW.week_index;
+
+  const lines = useMemo(() => {
+    const g = {};
+    rows.forEach(r => {
+      const k = lineKeyOf(r);
+      (g[k] || (g[k] = { key: k, route_id: r.route_id, discipline: r.discipline || "",
+                         section_id: r.section_id || "", month_index: r.month_index,
+                         unit: r.unit, material_type: r.material_type,
+                         vehicle_type: r.vehicle_type, parent_status: r.parent_status,
+                         weeks: {} })).weeks[r.week_index] = r;
+    });
+    return Object.values(g).sort((a, b) => (a.month_index - b.month_index)
+      || a.route_id.localeCompare(b.route_id) || a.discipline.localeCompare(b.discipline));
+  }, [rows]);
+
+  const send = (path, body, method) => {
+    setBusy(path);
+    return fetch(`${API}${path}`, { method: method || "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then(async r => { if(!r.ok){ throw new Error((await r.text()).slice(0, 200)); } return r.json(); })
+      .then(() => { setTick(t => t + 1); setErr(""); })
+      .catch(e => setErr(String(e.message || e)))
+      .finally(() => setBusy(""));
+  };
+
+  const savePlanned = (r) => {
+    const v = draft[wkKey(r) + "|p"];
+    if(v === undefined) return;
+    send("/forecast-weeks", { ...wkBody(r), planned_qty: numOr(v, r.planned_qty), edited_by: who || null }, "PUT");
+  };
+  const saveActual = (r) => {
+    const kq = wkKey(r) + "|a", kn = wkKey(r) + "|n";
+    if(draft[kq] === undefined && draft[kn] === undefined) return;
+    const v = draft[kq] !== undefined ? draft[kq] : (r.actual_qty ?? "");
+    // an emptied box clears the actual back to "not reported", which is NOT zero
+    send("/forecast-weeks/actual",
+      { ...wkBody(r), actual_qty: (v === "" || v == null ? null : numOr(v, null)),
+        actual_note: draft[kn] !== undefined ? draft[kn] : (r.actual_note ?? null),
+        actual_by: who || null }, "PUT");
+  };
+  const doConfirm = () => {
+    const r = confirming;
+    setConfirming(null);
+    send("/forecast-weeks/confirm", { ...wkBody(r), confirmed_by: who || null, ...flags });
+  };
+  const doCalibrate = () => {
+    const { row, override } = calibrating;
+    setCalibrating(null);
+    send("/forecast-weeks/calibrate",
+      { ...wkBody(row), override_qty: (override === "" ? null : numOr(override, null)), by: who || null });
+  };
+
+  // the week AFTER this one, so the calibrate button can say whether it is confirmed
+  // BEFORE it is pressed rather than after the 400 comes back
+  const weekAfter = (line, r) => {
+    if(r.week_index < 4) return line.weeks[r.week_index + 1];
+    const nxt = lines.find(l => l.route_id === line.route_id && l.discipline === line.discipline
+      && l.section_id === line.section_id && l.month_index === line.month_index + 1);
+    return nxt && nxt.weeks[1];
+  };
+
+  const fld = "w-full border border-slate-300 rounded px-1.5 py-1 text-xs text-right tabular-nums outline-none focus:ring-2 focus:ring-[color:var(--blue)]";
+
+  return (
+    <div className="max-w-[1400px] mx-auto p-5">
+      <div className="mb-4">
+        <h2 className="text-lg font-bold text-[color:var(--navy-deep)]">Look-ahead</h2>
+        <p className="text-sm text-slate-500">
+          Four weeks on each approved month line: {monthLabelAbs(win.from, months.start_year)} and{" "}
+          {monthLabelAbs(win.to, months.start_year)}. Weeks appear when a month is approved and start at a
+          quarter of it. Typed only — there is no import.
+        </p>
+      </div>
+
+      {win.outside && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 mb-3">
+          Today is outside the forecast horizon, so this is showing the nearest month in range.
+        </div>
+      )}
+      {err && <div className="rounded-lg border p-3 text-sm mb-3"
+        style={{ borderColor: "var(--red)", color: "var(--red)", background: "rgba(191,46,85,.06)" }}>{err}</div>}
+
+      {!payload ? <div className="p-8 text-center text-slate-400">Loading…</div>
+        : lines.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-500">
+          No approved forecast lines in {monthLabelAbs(win.from, months.start_year)} or{" "}
+          {monthLabelAbs(win.to, months.start_year)}. Weeks are created when a month line is approved —
+          a Pending line has none by design.
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="overflow-auto">
+            <table className="text-sm" style={{ minWidth: "1180px" }}>
+              <thead className="bg-slate-50 text-slate-500 text-xs">
+                <tr>
+                  <th rowSpan={2} className="px-3 py-2 text-left font-semibold border-r border-slate-200">Line</th>
+                  <th rowSpan={2} className="px-3 py-2 text-left font-semibold border-r border-slate-200">Month</th>
+                  {WEEK_NOS.map(w => (
+                    <th key={w} colSpan={3} className="px-2 py-1.5 text-center font-semibold border-r border-slate-200">
+                      Week {w} <span className="font-normal text-slate-400">· {WEEK_DAYS[w]}</span>
+                    </th>
+                  ))}
+                </tr>
+                <tr>
+                  {WEEK_NOS.map(w => (
+                    <React.Fragment key={w}>
+                      <th className="px-2 py-1 text-right font-medium text-[10px] uppercase tracking-wide">Planned</th>
+                      <th className="px-2 py-1 text-right font-medium text-[10px] uppercase tracking-wide">Actual</th>
+                      <th className="px-2 py-1 text-right font-medium text-[10px] uppercase tracking-wide border-r border-slate-200">Var</th>
+                    </React.Fragment>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map(line => {
+                  const rt = routeById[line.route_id] || {};
+                  return (
+                    <tr key={line.key} className="border-t border-slate-100 align-top">
+                      <td className="px-3 py-2 border-r border-slate-100 whitespace-nowrap">
+                        <div className="font-medium text-slate-800">{line.route_id}</div>
+                        <div className="text-[11px] text-slate-400">{rt.origin || "—"} → {rt.dest || "—"}</div>
+                        <div className="text-[11px] text-slate-500">
+                          {line.discipline || "unassigned"}{line.section_id ? ` · ${line.section_id}` : ""}
+                        </div>
+                        <div className="text-[10px] text-slate-400">{line.unit === "m3" ? "m³" : line.unit} · {line.vehicle_type || "—"}</div>
+                        {/* Reopening a month does NOT delete its weeks — a confirmed week
+                            with an actual against it is a record of what happened. */}
+                        {line.parent_status && line.parent_status !== "Approved" && (
+                          <div className="text-[10px] mt-0.5" style={{ color: "var(--red)" }}
+                            title="These weeks were created while the month was approved. Reopening it does not delete them.">
+                            month is now {line.parent_status}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 border-r border-slate-100 whitespace-nowrap tabular-nums text-slate-600">
+                        {monthLabelAbs(line.month_index, months.start_year)}
+                      </td>
+                      {WEEK_NOS.map(w => {
+                        const r = line.weeks[w];
+                        if(!r) return <td key={w} colSpan={3} className="px-2 py-2 text-center text-slate-300 border-r border-slate-100">—</td>;
+                        const k = wkKey(r);
+                        const next = isNext(r);
+                        // ⭐ Editable only when it is the next-week cell, or when somebody
+                        // has already edited this one. A confirmed week is never editable.
+                        const canEdit = r.status !== "confirmed" && (next || r.status === "edited");
+                        const after = weekAfter(line, r);
+                        const canCal = r.actual_qty != null && !!after && after.status !== "confirmed";
+                        return (
+                          <React.Fragment key={w}>
+                            <td className={"px-2 py-2 text-right " + (next ? "bg-blue-50/60" : "")}>
+                              {canEdit ? (
+                                <input className={fld} inputMode="decimal"
+                                  value={draft[k + "|p"] ?? (r.planned_qty ?? "")}
+                                  onChange={e => setDraft(d => ({ ...d, [k + "|p"]: e.target.value }))}
+                                  onBlur={() => savePlanned(r)} />
+                              ) : (
+                                <span className="tabular-nums text-slate-600"
+                                  title={r.status === "confirmed" ? "Confirmed — reopen it to change the plan"
+                                                                  : "Only next week is editable"}>
+                                  {fmt(r.planned_qty || 0, line.unit)}
+                                </span>
+                              )}
+                              <div className="mt-1 flex flex-col items-end gap-1">
+                                <StatusChip s={r.status} parentChanged={r.parent_changed} />
+                                {/* A SEPARATE act from editing: adjusting a number and
+                                    committing to it are different, and only the second
+                                    one blocks calibration into this week. */}
+                                {next && r.status !== "confirmed" && (
+                                  <button onClick={() => { setConfirming(r); setFlags({ weather: r.weather || "", wetness: r.wetness || "", traffic: r.traffic || "", other: r.other || "" }); }}
+                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded text-white"
+                                    style={{ background: "var(--green)" }}>Confirm next week</button>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-2 py-2 text-right">
+                              <input className={fld} inputMode="decimal" placeholder="—"
+                                value={draft[k + "|a"] ?? (r.actual_qty ?? "")}
+                                onChange={e => setDraft(d => ({ ...d, [k + "|a"]: e.target.value }))}
+                                onBlur={() => saveActual(r)} />
+                              <input className={fld + " mt-1 text-left"} placeholder="note"
+                                value={draft[k + "|n"] ?? (r.actual_note ?? "")}
+                                onChange={e => setDraft(d => ({ ...d, [k + "|n"]: e.target.value }))}
+                                onBlur={() => saveActual(r)} />
+                            </td>
+                            <td className="px-2 py-2 text-right border-r border-slate-100">
+                              <span className="tabular-nums font-medium"
+                                style={{ color: r.variance == null ? "#cbd5e1"
+                                  : r.variance > 0 ? "var(--red)" : "var(--green)" }}>
+                                {r.variance == null ? "—" : fmt(r.variance, line.unit)}
+                              </span>
+                              {/* ⭐ NEVER fires on save of the actual. A separate press,
+                                  writing next week and nothing else. */}
+                              <div className="mt-1">
+                                {r.actual_qty != null && (
+                                  <button disabled={!canCal}
+                                    onClick={() => setCalibrating({ row: r, unit: line.unit, override: "" })}
+                                    title={!after ? "Next week is outside this window"
+                                      : after.status === "confirmed" ? "Next week is already confirmed — reopen it first"
+                                      : "Add this variance to next week's plan"}
+                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded border disabled:opacity-40"
+                                    style={{ borderColor: "var(--navy)", color: "var(--navy)" }}>
+                                    → next week
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </React.Fragment>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100">
+            Editable cell = <span className="px-1 bg-blue-50">next week</span> ({monthLabelAbs(nextW.month_index, months.start_year)},
+            week {nextW.week_index}), chosen by the server. Variance = planned − actual. Typing an actual never
+            moves next week; the → button does, and only next week.
+            {busy && <span className="ml-2 text-slate-500">saving…</span>}
+          </div>
+        </div>
+      )}
+
+      {confirming && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={() => setConfirming(null)}>
+          <div className="bg-white rounded-xl p-5 w-full max-w-md space-y-3" onClick={e => e.stopPropagation()}>
+            <div className="font-semibold text-[color:var(--navy-deep)]">
+              Confirm {confirming.route_id} · {monthLabelAbs(confirming.month_index, months.start_year)} week {confirming.week_index}
+            </div>
+            <p className="text-xs text-slate-500">
+              All four notes are optional and may be left blank. Free text — no scores, no lookups, no colour
+              used as logic.
+            </p>
+            {["weather", "wetness", "traffic", "other"].map(f => (
+              <label key={f} className="block">
+                <span className="text-[11px] uppercase tracking-wide text-slate-400">{f}</span>
+                <input className={selCls} value={flags[f]}
+                  onChange={e => setFlags(s => ({ ...s, [f]: e.target.value }))} />
+              </label>
+            ))}
+            <div className="flex gap-2 justify-end pt-1">
+              <button onClick={() => setConfirming(null)} className="px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+              <button onClick={doConfirm} className="px-4 py-2 text-sm font-semibold text-white rounded-lg" style={{ background: "var(--green)" }}>Confirm week</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {calibrating && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={() => setCalibrating(null)}>
+          <div className="bg-white rounded-xl p-5 w-full max-w-md space-y-3" onClick={e => e.stopPropagation()}>
+            <div className="font-semibold text-[color:var(--navy-deep)]">Apply variance to next week</div>
+            <p className="text-xs text-slate-600">
+              next.planned = next.planned + (planned − actual) ={" "}
+              <span className="tabular-nums font-medium">{fmt(calibrating.row.variance || 0, calibrating.unit)}</span>.
+              Only next week changes; weeks after it are untouched.
+            </p>
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wide text-slate-400">Or type next week's figure instead</span>
+              <input className={selCls} inputMode="decimal" placeholder="leave blank to use the formula"
+                value={calibrating.override}
+                onChange={e => setCalibrating(c => ({ ...c, override: e.target.value }))} />
+            </label>
+            <div className="flex gap-2 justify-end pt-1">
+              <button onClick={() => setCalibrating(null)} className="px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+              <button onClick={doCalibrate} className="px-4 py-2 text-sm font-semibold text-white rounded-lg" style={{ background: "var(--navy)" }}>Apply</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Stockpiles meta={meta} who={who} from={win.from} to={win.to} tick={tick} />
+    </div>
+  );
+}
+
+// ---- Task D2: stock held on a location -----------------------------------------
+// A READ MODEL. Nothing here is stored: inbound is the sum of typed week ACTUALS on
+// routes whose destination is this location, so a week nobody has reported shows 0
+// rather than a quarter of the month forecast. Over capacity is a FLAG, never a block.
+function Stockpiles({ meta, who, from, to, tick }){
+  const { months } = meta;
+  const [data, setData] = useState(null);
+  const [draft, setDraft] = useState({});
+  const [own, setOwn] = useState(0);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/stockpiles?from_month=${from}&to_month=${to}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(j => { if(live){ setData(j); setDraft({}); } })
+      .catch(e => { if(live) setErr(`Couldn't load stock (${e}).`); });
+    return () => { live = false; };
+  }, [from, to, tick, own]);
+
+  const saveConsumed = (s, m, w) => {
+    const k = `${s.location_id}|${m}|${w}`;
+    const v = draft[k];
+    if(v === undefined) return;
+    fetch(`${API}/stockpiles/consume`, { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ location_id: s.location_id, month_index: m, week_index: w,
+        consumed_qty: (v === "" ? null : +v), unit: s.capacity_unit, note: null,
+        updated_by: who || null }) })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(() => setOwn(n => n + 1))
+      .catch(e => setErr(`Couldn't save consumption (${e}).`));
+  };
+
+  const piles = (data && data.stockpiles) || [];
+  const fldS = "w-full border border-slate-300 rounded px-1 py-0.5 text-[11px] text-right tabular-nums outline-none focus:ring-2 focus:ring-[color:var(--blue)]";
+
+  return (
+    <div className="mt-6">
+      <div className="mb-2">
+        <h3 className="text-sm font-bold text-[color:var(--navy-deep)]">Stock held</h3>
+        <p className="text-xs text-slate-500">
+          Type what came out of each pile. In = typed week actuals on routes delivering here — a week with no
+          actual counts as nothing, not as a share of the forecast. Over capacity is flagged, never blocked.
+        </p>
+      </div>
+      {err && <div className="text-xs mb-2" style={{ color: "var(--red)" }}>{err}</div>}
+      {!data ? <div className="p-6 text-center text-slate-400 text-sm">Loading…</div>
+        : piles.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-500 text-sm">
+          No locations that hold stock yet. Set a type of Stockpile, Site, Compound or Rail head in Data
+          Management, and give it a capacity there.
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="overflow-auto">
+            <table className="text-xs" style={{ minWidth: "1000px" }}>
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold border-r border-slate-200">Location</th>
+                  {[from, to].map(m => (
+                    <th key={m} colSpan={4} className="px-2 py-1.5 text-center font-semibold border-r border-slate-200">
+                      {monthLabelAbs(m, months.start_year)}
+                    </th>
+                  ))}
+                </tr>
+                <tr>
+                  <th className="px-3 py-1 text-left font-medium text-[10px] uppercase tracking-wide border-r border-slate-200">max · opening</th>
+                  {[from, to].map(m => WEEK_NOS.map(w => (
+                    <th key={`${m}-${w}`} className={"px-2 py-1 text-center font-medium text-[10px] " + (w === 4 ? "border-r border-slate-200" : "")}>W{w}</th>
+                  )))}
+                </tr>
+              </thead>
+              <tbody>
+                {piles.map(s => (
+                  <tr key={s.location_id} className="border-t border-slate-100 align-top">
+                    <td className="px-3 py-2 border-r border-slate-100 whitespace-nowrap">
+                      <div className="font-medium text-slate-800">{s.name}</div>
+                      <div className="text-[10px] text-slate-400">{s.loc_type} · {s.location_id}</div>
+                      <div className="text-[11px] text-slate-600 tabular-nums">
+                        {/* ⭐ '—', never 0. No capacity recorded is not zero capacity. */}
+                        max {s.capacity_qty == null ? "—" : `${fmt(s.capacity_qty, s.capacity_unit)} ${s.capacity_unit === "m3" ? "m³" : s.capacity_unit}`}
+                        {" · opening "}{fmt(s.opening_qty || 0, s.capacity_unit)}
+                      </div>
+                    </td>
+                    {[from, to].map(m => WEEK_NOS.map(w => {
+                      const cell = (s.weeks || []).find(x => x.month_index === m && x.week_index === w) || {};
+                      const k = `${s.location_id}|${m}|${w}`;
+                      return (
+                        <td key={k} className={"px-2 py-2 " + (w === 4 ? "border-r border-slate-100 " : "")
+                              + (cell.over ? "bg-[rgba(191,46,85,.07)]" : "")}>
+                          <input className={fldS} inputMode="decimal" placeholder="out"
+                            value={draft[k] ?? (cell.consumed || "")}
+                            onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))}
+                            onBlur={() => saveConsumed(s, m, w)} />
+                          <div className="mt-1 text-[10px] tabular-nums text-slate-500 text-right leading-tight">
+                            <div>in {fmt(cell.inbound || 0, s.capacity_unit)}</div>
+                            <div>bal {fmt(cell.balance_end || 0, s.capacity_unit)}</div>
+                            <div style={{ color: cell.over ? "var(--red)" : undefined }}>
+                              rem {cell.remaining == null ? "—" : fmt(cell.remaining, s.capacity_unit)}
+                            </div>
+                          </div>
+                        </td>
+                      );
+                    }))}
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -1126,7 +1743,14 @@ const FAILED_COLOR = "#BF2E55";
 // the selected route's other options, drawn behind the chosen line
 const ALT_COLOR = "#94A3B8";
 const MAP_H = "62vh";     // map height — the right-hand column matches it and scrolls inside
-const NODE_COLORS = { "Quarry": "#C6841D", "Port": "#003787", "Compound": "#039E86", "Site": "#6D28D9" };
+// ⚠️ This is the ADMIN map's node legend, not the public map's palette — the public
+// map draws nodes as DOM markers with their own colouring. #0F766E is the rail colour
+// the build list reserves and is used here for the same concept. Stockpile's #78350F
+// is MY choice, not a reserved value: it is clear of every reserved route, brand and
+// IPT colour. Change it here and the legend follows, because both are generated from
+// this object.
+const NODE_COLORS = { "Quarry": "#C6841D", "Port": "#003787", "Compound": "#039E86",
+                      "Site": "#6D28D9", "Rail head": "#0F766E", "Stockpile": "#78350F" };
 
 // Phase 3 zones. The colour carries the only distinction that matters at a glance:
 // red means the router is steered away from this area, grey means it is drawn for
@@ -1191,7 +1815,15 @@ function maaametStyle(){
               { id: "maaamet-ortho", type: "raster", source: "maaamet-ortho" } ] };
 }
 
-const LOC_TYPES = ["Quarry", "Port", "Compound", "Site", "Other"];
+// Week 1: two new types.
+//   Rail head  where material arrives by rail and leaves by road. An ORIGIN, like a
+//              quarry or a port — map/index.html's filterByNode() and
+//              network._role_for() carry the matching rule and all three must agree.
+//   Stockpile  somewhere material is held. A DESTINATION by default.
+const LOC_TYPES = ["Quarry", "Port", "Compound", "Site", "Rail head", "Stockpile", "Other"];
+// Types that can hold stock — the capacity fields appear for these. Mirrors
+// stockpiles.STORAGE_TYPES on the backend.
+const STORAGE_TYPES = ["Stockpile", "Site", "Compound", "Rail head"];
 const ROLE_OPTIONS = [["origin", "Origin (supplier)"], ["destination", "Destination (site)"], ["both", "Both"]];
 const ROLE_LABEL = { origin: "Origin", destination: "Destination", both: "Both" };
 const asArray = (v) => Array.isArray(v) ? v : (() => { try { return JSON.parse(v || "[]"); } catch(e){ return []; } })();
@@ -2433,7 +3065,10 @@ function DataManagement({ meta, who }){
     setSubTab("locations");
     setSelected(null); setLocMsg("");
     setForm({ id: null, name: "", role: "origin", loc_type: "Quarry", supplies: [], receives: [],
-      vendor: "", detail: "", lat: "", lon: "", gate_lat: "", gate_lon: "" });
+      vendor: "", detail: "", lat: "", lon: "", gate_lat: "", gate_lon: "",
+      // Week 1, Task D2. Blank means NOT RECORDED, which is not zero — the balance
+      // still computes and `remaining` comes back unknown.
+      capacity_qty: "", capacity_unit: "t", opening_qty: "" });
     setMode("add");
   };
   const openEditForNode = (id) => {
@@ -2448,7 +3083,10 @@ function DataManagement({ meta, who }){
       // blank means no gate surveyed — routing falls back to the marker above
       vendor: p.vendor || "", detail: p.detail || "",
       gate_lat: p.gate_lat == null ? "" : p.gate_lat,
-      gate_lon: p.gate_lon == null ? "" : p.gate_lon });
+      gate_lon: p.gate_lon == null ? "" : p.gate_lon,
+      capacity_qty: p.capacity_qty == null ? "" : p.capacity_qty,
+      capacity_unit: p.capacity_unit || "t",
+      opening_qty: p.opening_qty == null ? "" : p.opening_qty });
     setMode("edit");
   };
   // Locations-table row click: centre the map on the node and open it for editing.
@@ -2482,6 +3120,12 @@ function DataManagement({ meta, who }){
     lat, lon, ...gateFrom(f),
   });
 
+  // The build list's rule: the three storage fields show for Stockpile / Site /
+  // Compound / Rail head, and on the other types only when the location actually
+  // receives material. A Quarry that only supplies has nothing to hold.
+  const showCapacity = !!form && (STORAGE_TYPES.includes(form.loc_type)
+    || form.role === "destination" || form.role === "both");
+
   const saveLoc = async () => {
     if(!form) return;
     if(!form.name.trim()){ setLocMsg("Name is required."); return; }
@@ -2499,6 +3143,24 @@ function DataManagement({ meta, who }){
       const j = await res.json();
       if(j.error) throw new Error(j.error);
       const affected = j.affected_routes || [];
+      // Week 1, Task D2. Capacity has its ONE write path — PUT
+      // /api/locations/{id}/capacity — so the location PUT and this cannot disagree
+      // about the same three columns. On a create it runs against the id the POST
+      // just minted. A failure here is reported but does not undo the location save:
+      // a location with no capacity is a valid state, a lost location is not.
+      const savedId = form.id || j.id;
+      if(savedId && showCapacity){
+        try {
+          const cr = await fetch(`${API}/locations/${encodeURIComponent(savedId)}/capacity${qs}`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              capacity_qty: form.capacity_qty === "" ? null : +form.capacity_qty,
+              capacity_unit: form.capacity_unit || "t",
+              opening_qty: form.opening_qty === "" ? null : +form.opening_qty,
+            }) });
+          if(!cr.ok) throw new Error(String(cr.status));
+        } catch(ce){ setLocMsg("Location saved, but the capacity didn't: " + ce.message); }
+      }
       await reloadNetwork();
       if(form.id && affected.length){
         const { rebaked, skipped } = await rebakeAffected(affected);
@@ -3282,6 +3944,43 @@ function DataManagement({ meta, who }){
                       className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
                   </label>
                 </div>
+
+                {/* Week 1, Task D2 — storage ON this location. NOT the haul/gate
+                    capacity model, which is Phase 5a/5b and lives on routes and gates.
+                    Shown for the four storage types, and for anything else that
+                    actually receives material. */}
+                {showCapacity && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Stock held (optional)</span>
+                  <div className="grid grid-cols-3 gap-2 mt-1">
+                    <label className="block">
+                      <span className="text-[10px] text-slate-400">Max capacity</span>
+                      <input value={form.capacity_qty} onChange={e => setField("capacity_qty", e.target.value)}
+                        inputMode="decimal" placeholder="—"
+                        className="mt-0.5 w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] text-slate-400">Unit</span>
+                      <select value={form.capacity_unit} onChange={e => setField("capacity_unit", e.target.value)}
+                        className={"mt-0.5 w-full " + sel}>
+                        <option value="t">tonnes</option>
+                        <option value="m3">m³</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] text-slate-400">Opening stock</span>
+                      <input value={form.opening_qty} onChange={e => setField("opening_qty", e.target.value)}
+                        inputMode="decimal" placeholder="0"
+                        className="mt-0.5 w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                    </label>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1.5">
+                    Leave max blank if you don't know it — the balance still works and the Look-ahead shows
+                    "—" rather than pretending the pile holds nothing. Opening stock is what was there at the
+                    start of the horizon. Over capacity is flagged on the Look-ahead, never blocked.
+                  </p>
+                </div>
+                )}
 
                 {/* Operator and free-text detail. Salvaged out of a1_data.js before that
                     file was retired — the quarry operator existed nowhere else in the
