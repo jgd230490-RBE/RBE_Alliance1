@@ -530,6 +530,16 @@ def routes_summary():
     return network.summary()
 
 
+@app.get("/api/public/route-alternatives")
+def public_route_alternatives(profile: Optional[str] = None):
+    """Every non-primary baked option, for the public map's grey underlay.
+
+    A SEPARATE endpoint from /api/public/map-data on purpose — see the docstring
+    on network.route_alternatives_geojson() for the five things that walk that
+    FeatureCollection and would be corrupted by alternatives appearing in it."""
+    return network.route_alternatives_geojson(profile)
+
+
 @app.get("/api/routes/geojson")
 def routes_geojson(profile: str = network.DEFAULT_PROFILE,
                    leg: str = "loaded", alt_index: int = 0):

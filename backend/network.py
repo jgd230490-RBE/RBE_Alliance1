@@ -804,6 +804,67 @@ def public_map_data(profile=None):
     return {"type": "FeatureCollection", "features": feats}
 
 
+def route_alternatives_geojson(profile=None):
+    """
+    Every NON-primary baked option, as its own FeatureCollection.
+
+    ⚠️ DELIBERATELY NOT PART OF public_map_data(). That endpoint's FeatureCollection
+    is walked per-feature by five separate things on the map — the KPI count, the
+    route filters, buildRouteInfo(), the forecast timeline's is_forecast stamping,
+    and the route-highlight lookup — and every one of them matches on
+    "LineString with a route_id". Adding alternatives to it would make a route's
+    distance jump to whichever option happened to be longest, double-count the
+    forecast volumes, and paint alternatives as forecast routes.
+    Zones were kept out of that endpoint for exactly this reason in Phase 3; the
+    same reasoning applies here.
+
+    So this is a second endpoint and a second source, and nothing that reads the
+    main one can see it.
+
+    Both legs, every alt_index >= 1. Routes with a haul road attached have no
+    alternatives at all — a known Phase 4 consequence, not a gap here.
+    """
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
+    routes = {r["id"]: r for r in db.query("SELECT * FROM routes WHERE tenant_id = ?",
+                                           (db.current_tenant(),))}
+    rows = db.query(
+        "SELECT * FROM route_geometry WHERE tenant_id = ? AND alt_index > 0 "
+        "ORDER BY route_id, vehicle_profile, leg, alt_index",
+        (db.current_tenant(),))
+
+    feats = []
+    for g in rows:
+        if profile and g["vehicle_profile"] != profile:
+            continue
+        if not g["geometry"]:
+            continue
+        r = routes.get(g["route_id"])
+        if not r:
+            continue
+        o = locs.get(r["origin_id"], {}) or {}
+        d = locs.get(r["dest_id"], {}) or {}
+        feats.append({
+            "type": "Feature",
+            "properties": {
+                # NOT 'Inbound Highway' / 'Outbound Highway'. Those two strings are
+                # what the KPI count and the leg toggles match on, and this must not
+                # answer to either.
+                "type": "Route Alternative",
+                "route_id": g["route_id"],
+                "leg": g["leg"],
+                "alt_index": g["alt_index"],
+                "vehicle_profile": g["vehicle_profile"],
+                "origin": o.get("name"), "dest": d.get("name"),
+                "distance_km": g["distance_km"],
+                "duration_hr": g["duration_hr"],
+            },
+            "geometry": {"type": "LineString",
+                         "coordinates": json.loads(g["geometry"])},
+        })
+    return {"type": "FeatureCollection", "features": feats}
+
+
 def locations_geojson():
     def _parse(s):
         try:
