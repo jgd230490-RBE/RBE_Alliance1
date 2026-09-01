@@ -226,7 +226,7 @@ ok("the reason is written down where the order is easy to reverse by accident",
 
 ok("the direction offset collapses at high zoom instead of holding 4px",
   /OFFSET_IN\s*=[^;]*17,\s*0\]/.test(code) && /OFFSET_OUT\s*=[^;]*17,\s*0\]/.test(code));
-ok("line width keeps scaling with zoom", /WIDTH_CORE\s*=[^;]*16,\s*8\.5\]/.test(code));
+ok("line width keeps scaling with zoom", /WIDTH_CORE\s*=[^;]*16,\s*6\.8\]/.test(code));
 ok("no hard-coded offset ramp survives inside a layer definition",
   !/'line-offset': \['interpolate'/.test(code));
 
@@ -709,11 +709,11 @@ ok("the per-IPT filter agrees with the layer's own filter about bridges",
 // thinner line means a smaller gap, and at zoom 7 the design value would give
 // 0.57 px — where a dashed line starts aliasing to solid, at exactly the zoom the
 // change exists for. Wider gap below 10, design value above.
-ok("the route core is dashed", /const DASH_CORE\s*=\s*\[1, 0\.45\]/.test(code));
+ok("the route core is dashed", /const DASH_CORE\s*=\s*\[1, 0\.55\]/.test(code));
 // 🔴 Dashing only the core leaves the white casing showing through every gap and
 // the route reads as a pale continuous line with coloured beads on it.
 ok("🔴 the CASING is dashed too, or the dots sit on a solid white line",
-  /const DASH_CASING\s*=\s*\[0\.96, 0\.2\]/.test(code));
+  /const DASH_CASING\s*=\s*\[0\.96, 0\.28\]/.test(code));
 
 // 🔴 2026-09-01. A step expression whose outputs were BARE ARRAYS made every route
 // vanish: an array literal used as an expression output must be wrapped in
@@ -744,10 +744,14 @@ ok("🔴 line-cap is butt on all four route layers, or the dots render solid",
   (code.match(/'line-cap': 'butt'/g) || []).length === 4);
 ok("the casing is a FIXED 1.25x the core at every zoom stop, or the two dash "
    + "arrays cannot draw the same period on screen",
-  /WIDTH_CORE\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 1\.7,\s+12, 5,\s+16, 8\.5\]/.test(code)
-  && /WIDTH_CASING\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 2\.13, 12, 6\.25, 16, 10\.6\]/.test(code));
+  /WIDTH_CORE\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 1\.36, 12, 4,\s+16, 6\.8\]/.test(code)
+  && /WIDTH_CASING\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 1\.7,\s+12, 5,\s+16, 8\.5\]/.test(code));
 ok("⭐ at corridor zoom the route is THINNER than the alignment's fixed 2.5 px",
-  /'zoom'\], 7, 1\.7,/.test(code));
+  /WIDTH_CORE\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 1\.36,/.test(code));
+// ⚠️ the gap ratio is coupled to the width: a 20% thinner line is a 20% smaller gap,
+// and 0.45 at the new width gives 0.61 px at zoom 7 — back into aliasing
+ok("the gap ratio moved WITH the thinning, or the dots alias to solid at zoom 7",
+  /gap ratio moved 0\.45 -> 0\.55 WITH the thinning/.test(src));
 ok("the dasharray is NOT interpolated across zoom — it silently does nothing",
   !/'line-dasharray': \['interpolate'/.test(code));
 // 🔴 REMOVED 2026-09-01 at the user's request. Asserted GONE rather than deleted
@@ -789,6 +793,41 @@ ok("ipt_segments.js is v9", /IPT_SEGMENTS_VERSION = 'v9'/.test(iptSrc));
 ok("index.html expects v9", /IPT_INDEX_VERSION = 'v9'/.test(code));
 ok("...and the cache-buster matches the version",
   /src=["']ipt_segments\.js\?v=9["']/.test(html));
+
+// ---- Route alternatives -------------------------------------------------------
+// 🔴 THE POINT OF THE DESIGN: its own source. Five things walk routes-source per
+// feature matching "LineString with a route_id" — the KPI count, the leg filters,
+// buildRouteInfo(), the forecast timeline's is_forecast stamping and the
+// route-highlight lookup. An alternative in that collection would make a route's
+// distance jump to whichever option is longest and would be painted as a forecast.
+ok("🔴 alternatives live in their OWN source, not routes-source",
+  code.includes("map.addSource('route-alts-source'"));
+ok("...fed from their own endpoint",
+  /\/public\/route-alternatives/.test(code));
+ok("...and nothing points the alt layer at routes-source",
+  !/'id': 'route-alt-lines'[\s\S]{0,300}'source': 'routes-source'/.test(code));
+// (the feature TYPE is a backend fact and is asserted in test_phase5a.py, where
+// route_alternatives_geojson() can actually be run — a `true` here would have been
+// an assertion that passes for the wrong reason)
+ok("the alt layer is added BEFORE both carriageways, so it draws underneath",
+  code.indexOf("'id': 'route-alt-lines'") < code.indexOf("'id': 'outbound-lines-casing'"));
+ok("thin, grey and translucent — context, not content",
+  /'id': 'route-alt-lines'[\s\S]{0,500}'line-color': '#94a3b8'/.test(code) &&
+  /'id': 'route-alt-lines'[\s\S]{0,600}'line-opacity': 0\.45/.test(code));
+ok("solid, not dotted — the dots are what say 'this is a haul route'",
+  !/'id': 'route-alt-lines'[\s\S]{0,600}'line-dasharray'/.test(code));
+ok("and no casing, because a halo is what lifts a line off the basemap",
+  !code.includes("'route-alt-lines-casing'"));
+ok("its visibility is read from the checkbox, not a module variable",
+  /function altsVisible\(\)/.test(code) &&
+  /document\.getElementById\('layer-alts'\)/.test(code) &&
+  /visibility: altsVisible\(\)/.test(code));
+ok("there is a control for it, OFF by default",
+  /id="layer-alts"/.test(html) && !/id="layer-alts" checked/.test(html));
+ok("the fetch is off the critical path — a failure must not cost the map",
+  /async function loadAlternatives/.test(code) && /catch\(e\)\{[\s\S]{0,200}alternatives unavailable/.test(code));
+ok("...and it says how many there are, or why there are none",
+  /no alternatives/.test(code));
 
 console.log();
 for (const f of fail) console.log("  FAIL:", f);

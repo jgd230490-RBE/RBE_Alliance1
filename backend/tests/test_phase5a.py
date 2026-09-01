@@ -734,6 +734,53 @@ ok("a deactivated gate is still drawn, flagged rather than dropped",
 
 
 # =========================================================================== #
+#  12. Route alternatives — a SEPARATE collection, on purpose                  #
+# =========================================================================== #
+reset_db()
+seed_two_locations()
+add_geom("R1", leg="loaded", profile="P", alt=0)
+add_geom("R1", leg="return", profile="P", alt=0)
+add_geom("R1", leg="loaded", profile="P", alt=1)
+add_geom("R1", leg="loaded", profile="P", alt=2)
+add_geom("R1", leg="return", profile="P", alt=1)
+
+alts = network.route_alternatives_geojson()
+ok("alternatives are returned as a FeatureCollection",
+   alts.get("type") == "FeatureCollection")
+ok("every non-primary option is included, both legs",
+   len(alts["features"]) == 3, str(len(alts["features"])))
+ok("🔴 the PRIMARY option is NOT in it — that is the other endpoint's job",
+   all(f["properties"]["alt_index"] > 0 for f in alts["features"]))
+# 🔴 the type string is the whole safety mechanism: 'Inbound Highway' and
+# 'Outbound Highway' are what the map's KPI count and leg toggles match on
+ok("🔴 alternatives are typed 'Route Alternative', never either Highway string",
+   {f["properties"]["type"] for f in alts["features"]} == {"Route Alternative"})
+ok("each carries its route, leg and rank so a popup could name it",
+   all({"route_id", "leg", "alt_index", "distance_km"} <= set(f["properties"])
+       for f in alts["features"]))
+ok("filtering by profile works", len(
+   network.route_alternatives_geojson(profile="OTHER")["features"]) == 0)
+
+# and the collection the map's five walkers DO read must be unchanged by any of it
+main_fc = network.public_map_data(profile="P")
+ok("🔴 no alternative leaks into public_map_data",
+   not any(f["properties"].get("type") == "Route Alternative"
+           for f in main_fc["features"]))
+ok("...and it still emits only alt_index 0 geometry",
+   len([f for f in main_fc["features"]
+        if f["properties"].get("type", "").endswith("Highway")]) == 2,
+   str(len([f for f in main_fc["features"]
+            if f["properties"].get("type", "").endswith("Highway")])))
+
+# an unbaked alternative (an error row) must not become an empty line
+db.execute("INSERT INTO route_geometry (route_id, vehicle_profile, leg, alt_index, "
+           "geometry, error) VALUES (?, ?, ?, ?, ?, ?)",
+           ("R1", "P", "loaded", 3, None, "boom"))
+ok("an alternative with no geometry is skipped, not drawn as nothing",
+   len(network.route_alternatives_geojson()["features"]) == 3)
+
+
+# =========================================================================== #
 #  10. Source-level guards                                                     #
 # =========================================================================== #
 net_src = open(os.path.join(BACKEND, "network.py")).read()
