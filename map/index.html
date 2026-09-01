@@ -14,6 +14,12 @@
     <!-- IPT / Work Section bands for the alignment. Reference geometry only:
          reads nothing from the API and changes no routing behaviour. -->
     <script src="ipt_segments.js?v=9"></script>
+    <!-- Week 1, Task E. The existing EVR corridor, so a rail head has something to
+         highlight. PROVISIONAL Natural Earth geometry, NOT OSM and NOT survey - the
+         file's own header carries the measured error, including ~6.4 km at Lelle.
+         ?v= for the same reason ipt_segments.js has one: a half-upgraded pair of
+         files behind a browser cache cost an hour on 2026-08-30. -->
+    <script src="data/evr_rail.js?v=1"></script>
     <style>
         :root{
             --navy:#003787; --navy-deep:#0A1446; --ink:#1f2937; --muted:#6b7280;
@@ -172,6 +178,10 @@
              that ends in March is gone by April. -->
         <div class="control-item"><label><input type="checkbox" id="layer-zones" checked onchange="toggleZones(this.checked)"> Disruption zones</label><span class="color-dot" style="background:#BF2E55;"></span></div>
         <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">red = avoided by routing · grey = advisory</span></div>
+        <!-- Week 1, Task E. The EXISTING railway, not the Rail Baltica alignment above.
+             Dim until an origin filter picks a Rail head, then bold. Default ON. -->
+        <div class="control-item"><label><input type="checkbox" id="layer-rail" checked onchange="toggleRail(this.checked)"> Rail network (EVR)</label><span class="color-dot" style="background:#0F766E; border-radius:0; width:13px; height:3px;"></span></div>
+        <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;" id="rail-note">provisional geometry · bolds when a rail head is the origin</span></div>
     </div>
 
     <div class="control-group">
@@ -478,6 +488,80 @@
     const nodeMarkersArray = [];
     let hoveredRouteId = null;
 
+    // ===== Week 1, Task E - the rail head highlight =============================
+    // #0F766E is the build list's reserved rail colour. It is NOT reused anywhere
+    // else on this map: the reserved set is inbound #039E86, outbound #f59e0b, temp
+    // #C2790B, forecast #3398DB, selection #BF2E55, brand #003787/#0A1446 and the six
+    // IPT band colours. parse_map.js asserts that.
+    const RAIL_COLOR = '#0F766E';
+    const RAIL_DIM_WIDTH = 2, RAIL_DIM_OPACITY = 0.25;
+    const RAIL_BOLD_WIDTH = 4, RAIL_BOLD_OPACITY = 0.8;
+
+    // Read from the CHECKBOX, never a module variable - style.load re-adds every
+    // layer on a basemap switch and a drifted variable would restore a layer the user
+    // had turned off. Same rule as the gates and alternatives layers.
+    function railVisible() {
+        const cb = document.getElementById('layer-rail');
+        return !cb || cb.checked;
+    }
+    function toggleRail(visible) {
+        ['evr-rail-line', 'rail-heads'].forEach(l => toggleLayer(l, visible));
+    }
+
+    // name -> loc_type, built from the Node features the API sends. The origin
+    // dropdown holds NAMES (they come off the route features), so this is how
+    // "is the selected origin a rail head" gets answered.
+    function locTypeByName(name) {
+        if (!name || name === 'ALL' || !a1_data || !a1_data.features) return null;
+        const f = a1_data.features.find(x => x.properties
+            && x.properties.type === 'Node' && x.properties.name === name);
+        return f ? (f.properties.node_type || null) : null;
+    }
+
+    // Which rail features serve a given head. Matched CASE-INSENSITIVELY and by
+    // SUBSTRING both ways, so a location called "Lelle rail head" matches the head
+    // "Lelle" and vice versa - the human names the locations, and requiring an exact
+    // string match would mean the highlight silently does nothing.
+    function railFeaturesFor(name) {
+        const n = String(name || '').toLowerCase().trim();
+        if (!n || !window.evr_rail_data) return [];
+        return evr_rail_data.features.filter(f => (f.properties.heads || []).some(h => {
+            const hh = String(h).toLowerCase().trim();
+            return hh && (n.indexOf(hh) >= 0 || hh.indexOf(n) >= 0);
+        })).map(f => f.properties.id);
+    }
+
+    // Bold when the origin filter is a Rail head, dim otherwise. Called from
+    // applyFilters(), so it follows the origin dropdown AND filterByNode().
+    function applyRailHighlight() {
+        if (!map.getLayer('evr-rail-line')) return;
+        const el = document.getElementById('filter-origin');
+        const sel = el ? el.value : 'ALL';
+        const bold = sel !== 'ALL' && locTypeByName(sel) === 'Rail head';
+        map.setPaintProperty('evr-rail-line', 'line-width', bold ? RAIL_BOLD_WIDTH : RAIL_DIM_WIDTH);
+        map.setPaintProperty('evr-rail-line', 'line-opacity', bold ? RAIL_BOLD_OPACITY : RAIL_DIM_OPACITY);
+        const ids = bold ? railFeaturesFor(sel) : [];
+        // ⭐ An array literal used as an expression OUTPUT must be wrapped in
+        // ['literal', ...]. Style.addLayer/setFilter validates BEFORE applying and on
+        // failure fires an error and returns having done nothing - which is how four
+        // route layers vanished silently on 2026-09-01.
+        //
+        // ⚠️ DELIBERATE DEVIATION: with no matching feature the layer is bolded
+        // UNFILTERED rather than filtered to nothing. The build list says "filter to
+        // those whose heads contains the selected name"; taken literally, a rail head
+        // this provisional file does not name would make the whole layer disappear at
+        // the moment somebody asked to see it. Showing the corridor unfiltered says
+        // "here is the network, we cannot tell you which branch" - an empty map says
+        // nothing at all. Revisit when the geometry is real.
+        map.setFilter('evr-rail-line',
+            (bold && ids.length) ? ['in', ['get', 'id'], ['literal', ids]] : null);
+        const note = document.getElementById('rail-note');
+        if (note) note.innerText = !bold
+            ? 'provisional geometry · bolds when a rail head is the origin'
+            : (ids.length ? `highlighted for ${sel}`
+                          : `${sel} is not named in the rail data - showing the whole corridor`);
+    }
+
     function toggleSidebar() { document.getElementById('main-sidebar').classList.toggle('closed'); document.body.classList.toggle('sidebar-closed'); setTimeout(() => map.resize(), 300); }
     if (window.innerWidth <= 768) toggleSidebar();
 
@@ -583,6 +667,11 @@
             inVis ? ['all', ['==', ['get', 'type'], 'Inbound Highway'], ...filterArr.slice(1)] : none);
         if (map.getLayer('outbound-lines-casing')) map.setFilter('outbound-lines-casing',
             outVis ? ['all', ['==', ['get', 'type'], 'Outbound Highway'], ...filterArr.slice(1)] : none);
+
+        // Week 1, Task E. The road filter above is untouched: selecting a rail head as
+        // the origin still isolates the road hauls that start there. This only changes
+        // how the rail corridor is DRAWN.
+        applyRailHighlight();
     }
 
     function resetFilters() {
@@ -595,7 +684,12 @@
         resetFilters();
         // network loc_types are Quarry | Port | Compound | Site | Other. 'Hub' was the
         // legacy file's name for what the network calls a Port.
-        if (nodeType === 'Quarry' || nodeType === 'Hub' || nodeType === 'Port') { document.getElementById('filter-origin').value = nodeName; }
+        // network loc_types now also include 'Rail head' and 'Stockpile'. A rail head
+        // is an ORIGIN, exactly like a quarry or a port - network._role_for() and the
+        // frontend's LOC_TYPES carry the same rule and all three must agree. A
+        // stockpile falls through to the destination branch, which is what it is.
+        if (nodeType === 'Quarry' || nodeType === 'Hub' || nodeType === 'Port'
+            || nodeType === 'Rail head') { document.getElementById('filter-origin').value = nodeName; }
         else { document.getElementById('filter-dest').value = nodeName; }
         applyFilters(); if(window.innerWidth <= 768) toggleSidebar();
     }
@@ -617,6 +711,33 @@
         if (!map.getSource('alignment-survey-source')) map.addSource('alignment-survey-source', { type: 'geojson', data: alignment_data });
         if (!map.getSource('chainage-source')) map.addSource('chainage-source', { type: 'geojson', data: chainageStepData() });
         if (!map.getSource('ws-boundary-source')) map.addSource('ws-boundary-source', { type: 'geojson', data: wsBoundaryData() });
+
+        // ===== Week 1, Task E - the existing EVR rail corridor ==================
+        // ⚠️ NOT the Rail Baltica alignment. That is alignment-source above, a
+        // different railway on a different gauge. This is the operating Eesti Raudtee
+        // line a rail head sits on, and it is here so "filter to this rail head" has
+        // something to show.
+        //
+        // 🔴 PROVISIONAL. map/data/evr_rail.js is Natural Earth 10m, not OSM and not
+        // survey: 0.3 km out at Rapla, ~6.4 km out at Lelle. Every feature carries
+        // provisional:true, its source and its own accuracy_note, and the click popup
+        // repeats them. It shows WHICH corridor a haul relates to, never where the
+        // track is. Replacing it is one file - see that file's header.
+        //
+        // Added HERE, before the route layers, because add order is z-order and this
+        // is reference geometry that must sit UNDER the hauls.
+        if (!map.getSource('evr-rail')) map.addSource('evr-rail',
+            { type: 'geojson', data: (window.evr_rail_data || { type: 'FeatureCollection', features: [] }) });
+        if (!map.getLayer('evr-rail-line')) map.addLayer({
+            id: 'evr-rail-line', type: 'line', source: 'evr-rail',
+            layout: { visibility: railVisible() ? 'visible' : 'none',
+                      'line-cap': 'round', 'line-join': 'round' },
+            // Plain constants, not expressions: applyRailHighlight() swaps them with
+            // setPaintProperty when a rail head is selected. Defaults are the build
+            // list's - 2 px at 25%.
+            paint: { 'line-color': RAIL_COLOR, 'line-width': RAIL_DIM_WIDTH,
+                     'line-opacity': RAIL_DIM_OPACITY },
+        });
 
         // --- PROFESSIONAL MAPBOX STYLING (Corporate Palette + Highway Offsets) ---
 
@@ -900,6 +1021,27 @@
                 'circle-stroke-width': 1.5,
                 'circle-stroke-color': ['case', ['get', 'active'], '#FFFFFF', '#94A3B8'],
                 'circle-opacity': 0.95,
+            },
+        });
+        // Week 1, Task E - rail heads as a LAYER, not only a DOM marker.
+        //
+        // The site markers are DOM elements outside the WebGL canvas, which is what
+        // blocks PNG export; a rail head added as one more of those would make that
+        // worse. This is a real layer, like the gates, so it draws under the same
+        // rules and exports with the canvas if that ever ships. The DOM marker stays
+        // as well - it carries the popup and the "Filter Routes to this Location"
+        // button, which is how a rail head gets selected in the first place.
+        if (!map.getLayer('rail-heads')) map.addLayer({
+            id: 'rail-heads', type: 'circle', source: 'routes-source', minzoom: 7,
+            filter: ['all', ['==', ['get', 'type'], 'Node'],
+                            ['==', ['get', 'node_type'], 'Rail head']],
+            layout: { visibility: railVisible() ? 'visible' : 'none' },
+            paint: {
+                'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 4, 12, 7, 16, 10],
+                'circle-color': RAIL_COLOR,
+                'circle-stroke-width': 2,
+                'circle-stroke-color': '#FFFFFF',
+                'circle-opacity': 0.9,
             },
         });
         if (!map.getLayer('site-gates-label')) map.addLayer({
@@ -1360,6 +1502,20 @@
                 .setHTML(gatePopupHTML(e.features[0].properties)).addTo(map);
         });
 
+        // Week 1, Task E. The rail popup exists to carry the caveat the LINE cannot:
+        // this geometry is provisional and wrong by kilometres in places. Same pattern
+        // as the alignment's gap-bridge popup, and for the same reason - the picture
+        // reads as authoritative and the text is where the honesty lives.
+        map.on('mouseenter', 'evr-rail-line', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'evr-rail-line', () => { map.getCanvas().style.cursor = ''; });
+        map.on('click', 'evr-rail-line', (e) => {
+            if (!e.features || !e.features.length) return;
+            new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat)
+                .setHTML(railPopupHTML(e.features[0].properties)).addTo(map);
+        });
+        map.on('mouseenter', 'rail-heads', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'rail-heads', () => { map.getCanvas().style.cursor = ''; });
+
         ['restriction-points', 'restriction-lines'].forEach(lId => {
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
@@ -1397,6 +1553,18 @@
                 if (props.node_type === 'Compound') popupMarkup += `<p style='margin:4px 0;'><b>Sector IPT:</b> ${props.ipt}</p>`;
                 else if (props.node_type === 'Quarry') popupMarkup += `<p style='margin:4px 0;'><b>Material:</b> ${props.material}</p>`;
                 if (props.aux_info) popupMarkup += props.aux_info;
+                // Week 1, Task D2. 'Stock 1 240 t / 3 000 t', and ONLY when both
+                // numbers exist - the build list is explicit about that, and half the
+                // sentence would read as a pile with no limit. No chart.
+                if (props.stock_balance != null && props.capacity_qty != null) {
+                    const u = props.capacity_unit === 'm3' ? 'm³' : (props.capacity_unit || 't');
+                    const over = !(props.stock_over === false || props.stock_over === 'false');
+                    popupMarkup += `<p style='margin:4px 0;'><b>Stock:</b> ` +
+                        `<span style="color:${over ? '#BF2E55' : 'inherit'};font-weight:${over ? '700' : '400'}">` +
+                        `${Number(props.stock_balance).toLocaleString()} ${u}</span>` +
+                        ` / ${Number(props.capacity_qty).toLocaleString()} ${u}` +
+                        `${over ? ' — over capacity' : ''}</p>`;
+                }
                 // Phase 2.5a — a slot the Street View thumbnail drops into once the free
                 // metadata check has said there is imagery. Empty until then, and it
                 // stays empty for a location Google has never driven past, which is most
@@ -1814,6 +1982,30 @@
 
     function toggleGates(visible) {
         ['site-gates', 'site-gates-label'].forEach(l => toggleLayer(l, visible));
+    }
+
+    // ⚠️ Properties cross Mapbox's feature boundary as STRINGS - `heads` arrives as
+    // '["Rapla","Lelle"]' and `provisional` as 'true', not true. Both are parsed
+    // rather than trusted; comparing a stringified 'false' as a boolean is the same
+    // trap gatePopupHTML() documents for `active`.
+    function railPopupHTML(p) {
+        let heads = p.heads;
+        if (typeof heads === 'string') { try { heads = JSON.parse(heads); } catch (e) { heads = [heads]; } }
+        const provisional = !(p.provisional === false || p.provisional === 'false');
+        let h = `<div style='min-width:230px;max-width:300px;'>` +
+                `<h3 style='margin:0 0 5px 0;color:${RAIL_COLOR};border-bottom:1px solid #eee;padding-bottom:4px;'>` +
+                `${p.name || 'Rail line'}</h3>` +
+                `<p style='margin:4px 0;'><b>Operator:</b> ${p.operator || '—'}</p>`;
+        if (heads && heads.length) h += `<p style='margin:4px 0;'><b>Serves:</b> ${heads.join(' · ')}</p>`;
+        if (p.length_km) h += `<p style='margin:4px 0;'><b>Length:</b> ${p.length_km} km</p>`;
+        if (provisional) {
+            h += `<p style='margin:6px 0 4px 0;padding:5px 6px;background:rgba(191,46,85,.08);` +
+                 `border-left:3px solid #BF2E55;font-size:11.5px;line-height:1.45;'>` +
+                 `<b>Provisional geometry.</b> ${p.accuracy_note || ''}</p>`;
+        }
+        h += `<p style='margin:4px 0;font-size:10.5px;color:#8a9099;line-height:1.4;'>` +
+             `Source: ${p.source || 'unknown'}</p></div>`;
+        return h;
     }
 
     function gatePopupHTML(p) {
