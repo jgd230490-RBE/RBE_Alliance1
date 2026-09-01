@@ -709,14 +709,32 @@ ok("the per-IPT filter agrees with the layer's own filter about bridges",
 // thinner line means a smaller gap, and at zoom 7 the design value would give
 // 0.57 px — where a dashed line starts aliasing to solid, at exactly the zoom the
 // change exists for. Wider gap below 10, design value above.
-ok("the route core is dashed",
-  /const DASH_CORE\s*=\s*\['step', \['zoom'\], \[1, 0\.6\],\s*10, \[1, 0\.333\]\]/.test(code));
+ok("the route core is dashed", /const DASH_CORE\s*=\s*\[1, 0\.45\]/.test(code));
 // 🔴 Dashing only the core leaves the white casing showing through every gap and
 // the route reads as a pale continuous line with coloured beads on it.
 ok("🔴 the CASING is dashed too, or the dots sit on a solid white line",
-  /const DASH_CASING\s*=\s*\['step', \['zoom'\], \[0\.96, 0\.32\],\s*10, \[0\.96, 0\.107\]\]/.test(code));
-ok("...and both step at the SAME zoom, or the two patterns diverge for two levels",
-  (code.match(/\['step', \['zoom'\], \[[\d., ]+\],\s*10,/g) || []).length === 2);
+  /const DASH_CASING\s*=\s*\[0\.96, 0\.2\]/.test(code));
+
+// 🔴 2026-09-01. A step expression whose outputs were BARE ARRAYS made every route
+// vanish: an array literal used as an expression output must be wrapped in
+// ['literal', …], and Style.addLayer validates BEFORE adding — on failure it fires
+// an error and returns without adding the layer, so all four route layers were
+// silently skipped while every later layer added fine.
+//
+// This guard is deliberately broader than the bug: NO expression anywhere in this
+// file may use a bare array as a step/case/match output. It is the shape of the
+// mistake, not the one instance of it, that has to stay caught.
+{
+  const bareArrayOutput = /\['(step|case|match)',[^\]]*?\]\s*,\s*\[\s*[\d.]+\s*,/;
+  ok("🔴 no expression uses a bare array as an output — it must be ['literal', …]",
+    !bareArrayOutput.test(code.replace(/\s+/g, ' ')));
+}
+ok("line-dasharray is a plain constant, not an expression — cross-faded properties "
+   + "have patchy expression support and two map deploys went out broken",
+  !/'line-dasharray':\s*\['(step|interpolate|case|match)'/.test(code)
+  && !/DASH_(CORE|CASING)\s*=\s*\['/.test(code));
+ok("...and the reason is written where someone would 'improve' it back",
+  /must be wrapped in \['literal'/.test(src) && /RETURNS WITHOUT ADDING THE LAYER/.test(src));
 ok("all four route layers carry a dasharray",
   (code.match(/'line-dasharray': DASH_(CORE|CASING)/g) || []).length === 4);
 // 🔴 A round cap extends each dash by half the line width at EACH end, so a 1.0w
@@ -749,6 +767,22 @@ ok("⚠️ what went with them is written down — nothing now shows direction o
 ok("🔴 the route CASINGS are filtered too, not just the cores",
   /setFilter\('inbound-lines-casing'/.test(code) &&
   /setFilter\('outbound-lines-casing'/.test(code));
+
+// ---- the sidebar swatch is generated, not hard-coded -------------------------
+// ⭐ It was a hard-coded gradient of the FIRST palette and survived two palette
+// changes untouched, so the control panel advertised inbound-teal, brand navy and
+// selection-crimson as IPT colours while the map drew palette C beside it. The
+// roadmap already carried "a colour written in two places WILL drift" because this
+// same element caused it once before — writing it down was not enough.
+ok("🔴 the alignment swatch is generated from the band table",
+  /function paintAlignmentSwatch\(\)/.test(code)
+  && /window\.iptLegendRows\(\)/.test(code));
+ok("...and no stale palette gradient survives in the markup",
+  !/linear-gradient\(90deg,#039E86/.test(html));
+ok("...and it is repainted whenever the legend is",
+  /paintAlignmentSwatch\(\);/.test(code));
+ok("the swatch shows the civil bands only, not the underlay wash or Outside A1",
+  /r\.ipt !== IPT_UNDERLAY_KEY && r\.ipt !== 'Outside A1'/.test(code));
 
 // ---- the version handshake ---------------------------------------------------
 ok("ipt_segments.js is v9", /IPT_SEGMENTS_VERSION = 'v9'/.test(iptSrc));
