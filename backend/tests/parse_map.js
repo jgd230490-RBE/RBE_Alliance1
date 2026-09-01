@@ -226,7 +226,7 @@ ok("the reason is written down where the order is easy to reverse by accident",
 
 ok("the direction offset collapses at high zoom instead of holding 4px",
   /OFFSET_IN\s*=[^;]*17,\s*0\]/.test(code) && /OFFSET_OUT\s*=[^;]*17,\s*0\]/.test(code));
-ok("line width keeps scaling with zoom", /WIDTH_CORE\s*=[^;]*16,\s*10\]/.test(code));
+ok("line width keeps scaling with zoom", /WIDTH_CORE\s*=[^;]*16,\s*8\.5\]/.test(code));
 ok("no hard-coded offset ramp survives inside a layer definition",
   !/'line-offset': \['interpolate'/.test(code));
 
@@ -264,8 +264,13 @@ ok("the fixed black alignment colour is gone",
 // and keeping the width would look right in a diff and wrong on the map.
 ok("⭐ the IPT layer is Main Track only",
   /'id': 'rail-alignment',[\s\S]{0,700}'filter':[\s\S]{0,200}\['==',\s*\['get',\s*'align_type'\],\s*'Main Track'\]/.test(code));
-ok("⭐ and it excludes the gap bridges, which have their own layer",
-  /'id': 'rail-alignment',[\s\S]{0,700}'filter':[\s\S]{0,200}\['!=',\s*\['get',\s*'is_bridge'\],\s*true\]/.test(code));
+// 🔴 REVERSED 2026-09-01. The user asked for a continuous corridor and chose full
+// continuity over the 30%-opacity version, so the civil layer now DRAWS bridges
+// rather than excluding them. The assertion is reversed, not removed — it is the
+// record of a decision that has now flipped three times (phantom lines -> cut ->
+// faint bridges -> gone -> solid), and each flip has to be deliberate.
+ok("🔴 the gap bridges are drawn SOLID on the civil layer, by request",
+  !/'id': 'rail-alignment',[\s\S]{0,900}'filter':[\s\S]{0,200}\['!=',\s*\['get',\s*'is_bridge'\],\s*true\]/.test(code));
 ok("it draws at ONE width, not two",
   /'id': 'rail-alignment',[\s\S]{0,900}'line-width':\s*2\.5,/.test(code));
 ok("the old two-width case expression is gone",
@@ -284,12 +289,20 @@ ok("⭐ but the GEOMETRY CUT survives — the 239.5 km of phantom straights stay
   /var GAP_SPLIT = true/.test(iptSrc));
 ok("and the builder still emits the is_bridge flag, so nothing downstream breaks",
   /p\.is_bridge = /.test(iptSrc));
-ok("the civil layer still excludes bridges, guarding a future reinstatement",
-  /'id': 'rail-alignment',[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
-ok("⭐ the CONSEQUENCE is written down — the corridor reads dashed again",
-  /reads DASHED again/.test(src) && /open question H2/.test(src));
-ok("and the legend says a break is data, not a rendering fault",
-  /not a rendering fault/.test(html));
+// 🔴 The consequence of drawing them solid, and it is the whole risk of the change:
+// nothing in the PICTURE now separates measured geometry from an interpolation
+// across ~60 km of missing survey, on a client-visible map. Two things carry the
+// caveat instead, and both are asserted so neither can quietly go.
+ok("🔴 the click popup declares an interpolated stretch",
+  /No surveyed alignment on this stretch/.test(code) && /p\.is_bridge/.test(code));
+ok("...and says plainly that it is not measured geometry",
+  /not measured geometry/.test(code));
+ok("the sidebar legend no longer claims there are breaks in the line",
+  !/Breaks in the line/.test(html) && /interpolated/.test(html));
+ok("⭐ the reason it was made solid is written next to the layer",
+  /drawn SOLID, at full opacity/.test(src) && /open-questions\.md §H2/.test(src));
+ok("the boundary labels still flag a tick with no surveyed track under it",
+  /no surveyed alignment here/.test(code));
 
 // Survey layer
 ok("the original continuous alignment survives as its own layer",
@@ -414,8 +427,10 @@ ok("its colour, width and opacity are one tunable object, not three literals",
 ok("⭐ it runs the whole A1 mainline, not just the northern IPT 6 civil band — "
    + "so it is filtered by align_type and scope, never by chainage",
   /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'ipt'\], 'Outside A1'\]/.test(code));
-ok("⭐ and it still excludes anything flagged is_bridge",
-  /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
+// reversed with the civil layer above: an underlay with holes under a continuous
+// civil line reads as a rendering fault rather than as missing data
+ok("⭐ and it includes bridges, matching the civil layer",
+  !/'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
 
 // --- per-IPT selection ---------------------------------------------------------
 ok("the legend rows are checkboxes now",
@@ -684,12 +699,24 @@ ok("buildNodeMarkers excludes gate features",
 ok("...and the reason is written down where someone would remove it",
   src.includes("gates are Points too, and they are NOT sites"));
 
+// 🔴 applyIptFilter() rebuilds the SAME expression and must agree with the layer
+// definition, or ticking a checkbox silently reinstates the gaps.
+ok("the per-IPT filter agrees with the layer's own filter about bridges",
+  !/setFilter\('rail-alignment',[\s\S]{0,300}is_bridge/.test(code));
+
 // ---- Phase 5b map change 3: routes as a dotted line --------------------------
-ok("the route core is dashed", /const DASH_CORE\s*=\s*\[1, 0\.333\]/.test(code));
+// ⚠️ STEPPED since the 2026-09-01 thinning: the array is in width multiples, so a
+// thinner line means a smaller gap, and at zoom 7 the design value would give
+// 0.57 px — where a dashed line starts aliasing to solid, at exactly the zoom the
+// change exists for. Wider gap below 10, design value above.
+ok("the route core is dashed",
+  /const DASH_CORE\s*=\s*\['step', \['zoom'\], \[1, 0\.6\],\s*10, \[1, 0\.333\]\]/.test(code));
 // 🔴 Dashing only the core leaves the white casing showing through every gap and
 // the route reads as a pale continuous line with coloured beads on it.
 ok("🔴 the CASING is dashed too, or the dots sit on a solid white line",
-  /const DASH_CASING\s*=\s*\[0\.96, 0\.107\]/.test(code));
+  /const DASH_CASING\s*=\s*\['step', \['zoom'\], \[0\.96, 0\.32\],\s*10, \[0\.96, 0\.107\]\]/.test(code));
+ok("...and both step at the SAME zoom, or the two patterns diverge for two levels",
+  (code.match(/\['step', \['zoom'\], \[[\d., ]+\],\s*10,/g) || []).length === 2);
 ok("all four route layers carry a dasharray",
   (code.match(/'line-dasharray': DASH_(CORE|CASING)/g) || []).length === 4);
 // 🔴 A round cap extends each dash by half the line width at EACH end, so a 1.0w
@@ -699,16 +726,29 @@ ok("🔴 line-cap is butt on all four route layers, or the dots render solid",
   (code.match(/'line-cap': 'butt'/g) || []).length === 4);
 ok("the casing is a FIXED 1.25x the core at every zoom stop, or the two dash "
    + "arrays cannot draw the same period on screen",
-  /WIDTH_CORE\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 2,\s+12, 6,\s+16, 10\]/.test(code)
-  && /WIDTH_CASING\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 2\.5, 12, 7\.5, 16, 12\.5\]/.test(code));
+  /WIDTH_CORE\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 1\.7,\s+12, 5,\s+16, 8\.5\]/.test(code)
+  && /WIDTH_CASING\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 2\.13, 12, 6\.25, 16, 10\.6\]/.test(code));
 ok("⭐ at corridor zoom the route is THINNER than the alignment's fixed 2.5 px",
-  /'zoom'\], 7, 2,/.test(code));
+  /'zoom'\], 7, 1\.7,/.test(code));
 ok("the dasharray is NOT interpolated across zoom — it silently does nothing",
   !/'line-dasharray': \['interpolate'/.test(code));
-ok("route arrows move to zoom 11, because a dot does not point",
-  /source: 'routes-source', minzoom: 11/.test(code));
-ok("...and symbol-spacing stays 90, so an earlier zoom means fewer arrows",
-  /'symbol-spacing': 90/.test(code));
+// 🔴 REMOVED 2026-09-01 at the user's request. Asserted GONE rather than deleted
+// from the suite — this layer has now been added (nine quick fixes), moved
+// (12 -> 11) and removed, and a future edit must not reintroduce it by accident.
+ok("🔴 the directional arrow layers are gone",
+  !/'inbound-arrows'/.test(code) && !/'outbound-arrows'/.test(code));
+ok("...and nothing still tries to filter them",
+  !/setFilter\('inbound-arrows'/.test(code) && !/setFilter\('outbound-arrows'/.test(code));
+ok("...and no ▶ glyph survives on a route layer",
+  !/'text-field': '▶'/.test(code));
+ok("⚠️ what went with them is written down — nothing now shows direction of travel",
+  /Nothing on this map now indicates which way a/.test(src));
+// 🔴 Found while removing the arrows: applyFilters() filtered the cores and never
+// the casings, so filtering to one origin left every other route's white casing
+// drawn. Pre-existing since Phase 2.5a; a trail of white dots now that they dash.
+ok("🔴 the route CASINGS are filtered too, not just the cores",
+  /setFilter\('inbound-lines-casing'/.test(code) &&
+  /setFilter\('outbound-lines-casing'/.test(code));
 
 // ---- the version handshake ---------------------------------------------------
 ok("ipt_segments.js is v9", /IPT_SEGMENTS_VERSION = 'v9'/.test(iptSrc));
