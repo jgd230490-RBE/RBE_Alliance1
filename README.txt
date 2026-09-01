@@ -1,241 +1,240 @@
-RBE Alliance 1 — Phase 5a: gates, per-leg asymmetric routing, and the turnaround split
-=====================================================================================
-Delivered 2026-08-30.  Zip: rbe-phase5a.zip
-Extract over the repo root. Every path mirrors the repo; nothing needs renaming.
+RBE Alliance 1 — Phase 5a fix + Phase 5b map changes + the /map/ cache fix
+==========================================================================
+Delivered 2026-09-01.  Zip: rbe-5a-fix-5b-map.zip
 
-This file has to stand alone — you will read it after the chat has scrolled away.
+⚠️ THIS ZIP SUPERSEDES `rbe-phase5a-fix.zip`. If you have not applied that one —
+   and you told me you had not — apply THIS instead. Do not apply both.
 
+Extract over the repo root. Eleven files. **No database migration, no backup
+needed, nothing to delete.**
 
------------------------------------------------------------------------------------
-0. BEFORE YOU APPLY THIS — ORDER MATTERS
------------------------------------------------------------------------------------
-Phase 5a adds a tenanted table and two columns on `routes`. Both depend on Phase 4.5
-having run.
-
-  1. BACK UP THE RENDER POSTGRES.  Two migrations now run on the next boot: 4.5's
-     eleven-table tenant rebuild (still never executed against Postgres) and 5a's
-     new table. Take the backup first; the paid plan has them since 2026-08-27.
-
-  2. Apply rbe-phase45-tenant.zip if you have not already, then this zip.  They can
-     go in together — main.py's lifespan runs them in the right order — but 4.5 must
-     be in the tree.
-
-  3. Watch the boot log for THREE lines:
-       Phase 4.5: tenant key added to 11 table(s): ...      (4.5 worked)
-       Phase 5a: N legacy gate(s) migrated: G001, ...       (5a's gate migration ran)
-       ⚠️  Phase 4.5: tenant migration FAILED on: ...        (it did NOT — stop here)
-
-     If no "Phase 5a: ... legacy gate(s) migrated" line appears at all, that is fine
-     and expected when no location has a surveyed gate_lat/gate_lon. It is only wrong
-     if you know some do.
-
-  4. Confirm the app still shows the same locations, routes and forecasts. With one
-     tenant every filter is a no-op, so ANYTHING that changed is a bug, not a feature.
-
-NOTHING IN THIS DELIVERY HAS BEEN CONFIRMED IN THE DEPLOYMENT OR IN A BROWSER.
+REQUIRES `rbe-phase5a.zip` to be applied first. It is (confirmed live: /api/gates
+answers, and the boot log showed the Phase 4.5 tenant migration succeed on all
+eleven tables).
 
 
 -----------------------------------------------------------------------------------
-1. WHAT CHANGED
+0. WHAT IS IN HERE — three separate pieces of work in one delivery
 -----------------------------------------------------------------------------------
-NEW FILE
-  backend/gates.py        The gate model and, more importantly, the ONE place that
-                          decides which coordinate HERE is given for a location in a
-                          given direction. Every caller goes through it.
+A. The Phase 5a fixes (site marker, gate layer) — carried over unchanged.
+B. The Phase 5b MAP changes (palette C, dotted routes, WS ticks earlier).
+C. The /map/ half of the browser-cache fix.
 
-CHANGED
-  backend/db.py           location_gates in _TENANT_DDL (tenant_id first in the
-                          primary key) + TENANTED_TABLES + _TENANT_PK; origin_gate_id
-                          and dest_gate_id added to the routes DDL AND to a new
-                          init_gates_db(); count_gates().
-  backend/network.py      _waypoint is per-leg and asymmetric; _waypoint_full added;
-                          _turnaround_parts added; bake refusal on a blocked gate;
-                          the route diagnostic now reports four resolutions, not two.
-  backend/main.py         init_gates_db() + gates.migrate_legacy_gates() in the
-                          lifespan; /api/gates and four admin gate endpoints.
-  frontend/index.html     Gate editor with click-to-place on Locations; gate pickers
-                          and a "gate blocked" badge on Routes; turnaround breakdown.
-  backend/tests/*         New test_phase5a.py (167). The five existing python suites
-                          now call db.init_gates_db() in their harnesses.
-                          parse_frontend.js gains 20 Phase 5a assertions.
-                          test_phase45.py's table count moves 11 -> 12.
+They are together because (A) was never deployed, so shipping them separately
+would mean two uploads and two chances to half-upload.
 
-NO FILE NEEDS DELETING.  Nothing was removed in this delivery, so there is no manual
-step of that kind. (A zip can never delete a file — worth remembering next time.)
-
-NO factors.json IN THIS ZIP.  Phase 5a reads it and does not change it, so your copy
-is untouched and there is nothing to merge.
+⚠️ NAME COLLISION, and it matters when you read the notes: "Phase 5b" is BOTH the
+laydown-areas phase AND these three map changes. This zip is only the map changes.
+The laydown phase is not started and is still blocked on the E1 HERE probe.
 
 
 -----------------------------------------------------------------------------------
-2. THE THREE THINGS TO ACTUALLY LOOK AT
+1. 🔴 READ THIS BEFORE YOU LOOK AT THE MAP — a finding about palette C
 -----------------------------------------------------------------------------------
+Palette C is shipped exactly as decided. But the numbers it arrived with do not
+all hold up, and one of them is the measure that condemned the previous palette.
 
-(a) THE RETURN LEG IS NO LONGER THE OUTBOUND REVERSED.
+I re-measured every hex myself (CIE ΔE2000, sRGB/D65) rather than taking the
+brief's figures on trust. Two of the three reproduce exactly:
 
-_bake_leg() used to build the return leg by swapping the endpoints, which is exactly
-right when a location has one symmetric access point. With a one-way gate it is wrong
-in both directions at once — the empty truck leaves through the entry gate. The swap
-still happens; what flips with it is which ROLE each end is asked for:
+    weakest pair anywhere    16.6   ✅ matches the brief
+    weakest adjacent pair    20.1   ✅ matches the brief
+    "colour-blind      13.5"        ❌ COULD NOT BE REPRODUCED
 
-    loaded:  origin EXIT  -> destination ENTRY
-    return:  destination EXIT -> origin ENTRY
+13.5 is exactly palette C's nearest approach to a reserved colour (IPT 1 vs brand
+navy #003787). It looks like one number was copied into two roles.
 
-All 11 _waypoint call sites now pass a role. A test asserts that none is left
-direction-blind, and a separate one asserts the return leg is NOT the loaded leg
-reversed — reverting the roles alone fails three assertions.
+The actual deuteranopia figures, ADJACENT bands — the pairs that matter, because
+they meet along the corridor:
 
-(b) NO NUMBER MOVES ON THE DAY THIS SHIPS.
+                        previous palette   palette C
+    IPT 1 / IPT 2            19.5             4.4    violet vs teal blue
+    IPT 6 / IPT 1            21.7             5.7    jade vs violet
+    IPT 4 / IPT 5            15.2             8.8    umber vs burgundy
 
-B4 splits turnaround_hr into unloading + internal travel + safety check. The kickoff
-note was blunt that this can silently rewrite every route's cycle time, trips, tonnes
-and CO2. So:
+Protanopia is the same shape (IPT 1 / IPT 2 = 5.4).
 
-  * the two new gate columns default to NULL, not 0;
-  * gates.migrate_legacy_gates() does NOT guess an induction time for a migrated gate;
-  * test_phase5a.py asserts, for EVERY vehicle profile in your real factors.json, that
-    total_minutes == load + unload exactly, both before and after the migration.
+**So for a red-green colour-blind viewer — roughly 1 in 12 men — three of the six
+package changes along this corridor are close to invisible by colour alone.** The
+previous palette's worst adjacent pair was 15.2; palette C's is 4.4.
 
-Deliberately giving a migrated gate a 10-minute induction fails 7 assertions. Numbers
-move only when you type one into a gate.
+WHAT I DID ABOUT IT
+  * Shipped palette C. It was your decision, explicitly confirmed, and the dotted
+    route is a real mitigation for the routes-vs-alignment confusion it was
+    chosen to solve. Overriding it would have been me substituting my judgement.
+  * Wrote the MEASURED numbers into map/ipt_segments.js, not the claimed ones,
+    and said in the file that 13.5 must not be restored as a colour-blind score.
+  * Recorded the mitigations that are real: the legend uses labelled swatches
+    rather than thin lines, there are per-IPT checkboxes, and the click popup
+    names the package. Colour is not the only channel.
 
-(c) B5 — YOU ANSWERED (c): THE DRAWN ROAD WINS.
+⭐ IF YOU WANT IT FIXED, IT IS ONE HEX AND THE HUE FAMILIES SURVIVE.
+   Move IPT 1 from `#4C1D95` to `#7C3AED` (a lighter violet):
 
-Phase 4 already puts internal travel into route_geometry.duration_hr via a haul road's
-assigned speed. Adding a flat gate-to-face allowance on top counts the same minutes
-twice, and every fleet-size number would then be too big — wrong in the direction that
-looks cautious. Implemented as:
+       IPT 1 / IPT 2   4.4 -> 21.5
+       IPT 6 / IPT 1   5.7 -> 19.6
+       every normal-vision measure unchanged (16.6 / 20.1 / 13.7)
+       IPT 4 / IPT 5 stays 8.8 and becomes the binding pair
 
-  * a route whose baked geometry ran through a haul road gets internal travel from the
-    geometry and NO flat figure   -> internal_travel_source: "drawn_road"
-  * a route with none gets the flat per-gate figure -> "flat"
-  * neither -> "none"
-  * the suppressed flat figure is still REPORTED as internal_travel_flat_available. A
-    number that vanishes silently is how someone later concludes the field was never
-    wired up.
+   One line in `map/ipt_segments.js`. Say the word and I will cut it.
 
-⚠️ THE PRECEDENCE IS PER ROUTE, NOT PER END, and this is a real limitation, not an
-oversight. route_haul_roads records the route and the traversal order, not which SITE
-the road belongs to. A route with a drawn road at the origin and a flat allowance owed
-at the destination therefore UNDER-counts. 5b's gate<->area links are what make it
-per-end. Written into network.py next to the code and into claude/phase5a-decisions.md.
-
-⚠️ Also deliberate: the precedence reads the BAKED GEOMETRY, not the attachment. A haul
-road attached but not yet baked contributes nothing to duration_hr, so treating it as
-"already counted" would drop the flat figure for minutes nobody has. Asserted.
+✅ The MANDATORY colour rule still holds: no band hex equals any of the seven
+   reserved hexes. Checked against the real list, not assumed.
 
 
 -----------------------------------------------------------------------------------
-3. HOW RESOLUTION WORKS (the thing to check first if a route moves)
+2. THE DOTTED ROUTES — two things that were nearly wrong
 -----------------------------------------------------------------------------------
-gates.resolve(location, role, gate_id) picks, in order:
+🔴 THE CASING. The approved mockup drew each route as one stroke. The real map
+draws TWO layers — a white casing under a coloured core — plus a ±4 px offset.
+Dashing only the core would have left the casing showing through every gap, and
+the route would read as a continuous pale line with coloured beads on it: worse
+than the solid line it replaces.
 
-  1. the gate the route explicitly names for that end, IF it serves this role;
-  2. otherwise that location's default active gate for the role;
-  3. otherwise its lowest-id active gate for the role;
-  4. otherwise the legacy locations.gate_lat / gate_lon pair;
-  5. otherwise the node's own lat/lon.
+Both layers are dashed. The casing is pinned to a FIXED 1.25x the core at every
+zoom stop (it drifted 1.0 -> 1.167 -> 1.2 before), because `line-dasharray` units
+are multiples of that layer's OWN width — two layers of different widths need
+different arrays to draw the same pattern on screen:
 
-Steps 4 and 5 are why a database with no gate rows routes to exactly the coordinate it
-routed to before 5a. locations.gate_lat/gate_lon is NOT dropped: it is step 4 and it is
-the rollback path if 5a has to come out.
+               core          casing
+    width       w             1.25w
+    dash       1.0w           1.2w      (0.1w of halo past each dot end)
+    gap        0.333w         0.133w
+    period     1.333w         1.333w    ✓
+    array      [1, 0.333]     [0.96, 0.107]
 
-⚠️ A route may name a gate that does not serve the role being resolved — an egress-only
-gate selected as the origin gate still has to answer "where does the truck arrive to
-load?". That role falls through to step 2 rather than erroring. Visible, not silent:
-/api/admin/diagnostics/route/{id} reports leaves_by and arrives_by per end with a
-`source` of "selected" or "default".
+⚠️ k = 1.25 is near a ceiling. Inbound and outbound are offset ±4 px, so their
+centres are 8 px apart; at zoom 12 the casings are 7.5 px and clear by 0.5 px.
+The old casing cleared by 1.0 px, so this DOES tighten it. **Worth one look at
+zoom 11–13 where two routes run parallel.**
 
+🔴 `line-cap: butt`. A round cap extends every dash by half the line width at each
+end, so a 1.0w dot renders 2.0w long, the gap is swallowed twice over, and the
+route draws SOLID — indistinguishable from the change never being applied. Set on
+all four layers and asserted; flipping it to round fails a named assertion.
 
------------------------------------------------------------------------------------
-4. B2 — A DEACTIVATED GATE
------------------------------------------------------------------------------------
-You asked for "refuse to bake, flag in UI". Both legs of the route are refused, not
-one — baking the leg that still resolves would leave a route with one fresh and one
-stale direction, which reads on the map as a working route. The refusal:
+WIDTHS. Only the zoom-7 core stop moved, 2.5 -> 2, so at corridor zoom the route
+is thinner than the alignment's fixed 2.5 px (ratio 0.8, close to the mockup's
+3:4). The 12 and 16 stops are untouched — that ramp is a Phase 2.5a decision and
+flattening it would make routes hairlines at road zoom.
 
-  * spends no HERE call;
-  * is written into route_geometry.error naming the gate id, its name and the
-    location, so the route list shows a reason rather than looking un-baked;
-  * appears as `gate_blockers` on /api/routes/status and as a red "gate blocked"
-    badge on the route row;
-  * counts separately from `errors` in the batch result (`gate_refused`,
-    `gate_blocked_routes`) — a refusal is something you can fix in the UI, a HERE
-    failure is not, and lumping them together loses that.
-
-A route pointing at a DELETED gate is treated the same way. Deleting a gate a route
-still names is refused outright, with the routes listed and deactivation offered.
-
-
------------------------------------------------------------------------------------
-5. TESTS
------------------------------------------------------------------------------------
-    python3 backend/tests/test_phase5a.py       167 passed
-    python3 backend/tests/test_phase2.py        142
-    python3 backend/tests/test_phase3.py        154
-    python3 backend/tests/test_phase4.py        202
-    python3 backend/tests/test_phase25a.py      104
-    python3 backend/tests/test_phase45.py       127
-    python3 backend/tests/test_tenant_audit.py   22
-    node     backend/tests/parse_frontend.js    119
-    node     backend/tests/parse_map.js         250
-    node     backend/tests/test_ipt_overlay.js  140
-                                              -----
-                                              1,427 passed, 0 failed
-
-`ls backend/tests/` must show TEN files. It was nine. test_phase2.py has gone missing
-from the repo four times — check it is there.
-
-Four regressions were deliberately introduced and each failed the right assertions:
-reverting the leg roles (3 fails), re-adding the flat figure on top of a drawn road
-(3), letting a deactivated gate fall through silently (8), and giving a migrated gate
-a guessed induction time (7).
-
-WHAT IS *NOT* TESTED. Read this before quoting 1,427.
-  * HERE is never called. haul.route_with_haul is a recorder. Every claim about the
-    bake is about the COORDINATES handed to it, not what comes back.
-  * No Postgres branch runs. location_gates and the two routes columns are created
-    against SQLite only. 5a's Postgres path is an ADD COLUMN IF NOT EXISTS and a plain
-    CREATE — no key rebuild — but it has not been executed.
-  * Nothing in a browser. The gate editor, click-to-place and the route pickers are
-    asserted at SOURCE level only.
-  * The HTTP layer is stubbed. Endpoint bodies run; nothing proves the admin token
-    actually rejects a request.
+⚠️ UNVERIFIED AND WORTH A LOOK: at zoom 7 a 2 px line gives a 0.67 px gap, which
+may alias to solid at exactly the zoom where this change matters most. I could not
+test it — no Mapbox in the sandbox. If it looks solid at 7–9, the fix is a stepped
+array, and the comment in map/index.html says which one. Do NOT interpolate it;
+`line-dasharray` cannot be interpolated across zoom and silently does nothing.
 
 
 -----------------------------------------------------------------------------------
-6. WHAT TO CHECK IN THE BROWSER
+3. WORK-SECTION TICKS AND LABELS
 -----------------------------------------------------------------------------------
-  1. Data Management -> Locations -> open a location. A "Gates" block appears under
-     the old access-gate fields. On a location with a surveyed gate_lat/gate_lon it
-     should already list ONE gate called "Main gate", direction "in + out", default.
-  2. + Add gate -> "Place on map" -> click. The cursor goes to a crosshair and the
-     click fills lat/lon WITHOUT selecting the node underneath.
-  3. Set that gate to "Exit only" and add a second one "Entry only" somewhere else on
-     the site. Then Routes -> expand a route using that location -> the Gates block.
-  4. Bake the route, then GET /api/admin/diagnostics/route/{id}. `origin.asymmetric`
-     should be true and leaves_by / arrives_by should name the two different gates.
-  5. Deactivate a gate a route has selected. The route row should show a red "gate
-     blocked" badge, and Bake should refuse by name without spending a HERE call.
-  6. Put 10 minutes of induction on a gate. The Turn column gains a ‡ and the cycle
-     time increases by exactly that. Before you do it, note the Turn figure — it must
-     be unchanged from before this delivery.
+Ticks 11 -> 8, labels 13 -> 11. At zoom 11 the ticks were effectively absent —
+you had to already be looking at a boundary to discover one existed.
+
+Below zoom 13 only every OTHER boundary is labelled, because the three Pärnu
+boundaries (135400, 137685, 142000) are within a few km and their labels collide.
+Two mechanics worth knowing, both forced by documented Mapbox constraints:
+
+  * it is done in the TEXT-FIELD, not the filter — `['zoom']` cannot be used
+    inside a layer `filter`, which is the obvious thing to reach for and silently
+    does not work;
+  * the unlabelled ones get an EMPTY text-field, never `text-opacity: 0` — an
+    invisible label still occupies collision space and would push the labels that
+    ARE showing off the map.
+
+The ordinal is stamped onto the data in `buildWsBoundaries()` (sorted by chainage
+first), because Mapbox has no index-of operator.
 
 
 -----------------------------------------------------------------------------------
-7. OPEN / DELIBERATELY LEFT OUT
+4. THE /map/ CACHE FIX — the other half
 -----------------------------------------------------------------------------------
-  * GATES ARE NOT DRAGGABLE ON THE MAP. Click-to-place is built; drag-to-move is not.
-    Gates are not drawn as a map layer at all yet — you place one by clicking and edit
-    the coordinates by re-placing it. The roadmap expected 5a to give drag "for free"
-    via mapbox-gl-draw; that would be a new CDN dependency and the standing rule is to
-    decide that deliberately rather than smuggle it in. Said plainly rather than
-    implied as done.
-  * NO GATE LAYER ON EITHER MAP. Existing gates are listed in the panel, not drawn.
-  * B5's per-route (not per-end) precedence — section 2(c) above.
-  * E1, the HERE haul-road probe, is STILL OWED and still blocks 5b. Not needed for
-    5a. Run it before starting 5b:
-        GET /api/admin/diagnostics/haul-roads?route_id=...&probe=true
-  * Security is unchanged. LOGINS is still a client-side dict with plaintext passwords
-    in view-source. The gate endpoints are admin-token-gated, which is an API boundary
-    and not a user-permission one. Do not describe this deployment as secure.
+`GET /` got `Cache-Control: no-cache` in the 5a fix. `/map/` is served by
+`StaticFiles` and had the same exposure — and it is where the bug actually bit
+worst, producing a HALF-upgraded map: new index.html, old ipt_segments.js.
+
+Now served by a `NoCacheStatic` subclass.
+
+⚠️ It overrides `get_response()`, NOT `file_response()`. `file_response` is the
+more obvious hook and is the wrong one: it is internal, its signature has changed
+between Starlette versions, and a subclass overriding a method the installed
+version no longer calls adds no header and raises no error — it would fail exactly
+as silently as the bug it is meant to fix.
+
+`no-cache`, not `no-store`: the browser still revalidates with its ETag and still
+gets a 304, so `map/data/alignment.js` (8.8 MB) is re-downloaded only when it has
+actually changed. `no-store` would re-fetch it on every page load.
+
+⚠️ This does NOT replace the `?v=9` cache-buster. Both are in. For a bug that has
+now bitten twice, belt and braces is the right number of mechanisms.
+
+⚠️ NOT VERIFIED AT RUNTIME. FastAPI cannot be booted in the sandbox and Starlette
+is stubbed, so the subclass is asserted at source level only. **After deploying,
+check the response headers on /map/ in DevTools → Network.** If `Cache-Control`
+is absent, tell me and I will switch the mechanism to a middleware.
+
+
+-----------------------------------------------------------------------------------
+5. THE VERSION HANDSHAKE — v9, in all three places
+-----------------------------------------------------------------------------------
+    map/ipt_segments.js   window.IPT_SEGMENTS_VERSION = 'v9'
+    map/index.html        const IPT_INDEX_VERSION = 'v9'
+    map/index.html        <script src="ipt_segments.js?v=9">
+
+All three are in this zip and all three are asserted. Missing any one reproduces
+the 2026-08-30 fault where the map half-worked silently for a day. If the sidebar
+shows a red version-mismatch line after deploying, one of the two map files did
+not upload.
+
+
+-----------------------------------------------------------------------------------
+6. TESTS — 1,476, 0 failed
+-----------------------------------------------------------------------------------
+    parse_map.js       284   (was 263)      test_phase5a.py     182   (was 180)
+    test_phase2.py     142                  test_phase3.py      154
+    test_phase4.py     202                  test_phase25a.py    104
+    test_phase45.py    127                  test_tenant_audit.py 22
+    parse_frontend.js  119                  test_ipt_overlay.js 140
+
+⚠️ The five other python harnesses are in this zip for ONE reason: they stubbed
+`StaticFiles` as a lambda, and `main.py` now subclasses it, so `class X(lambda)`
+is a TypeError and every one of them crashed on import. They are otherwise
+unchanged. If you skip them, five suites stop running.
+
+Two existing assertions were UPDATED, not deleted, per the standing rule:
+"hidden below zoom 11" now reads "ticks from zoom 8", and the labels one moved
+13 -> 11. The palette assertions were narrowed to palette C's hexes rather than
+removed — the property being guarded (six distinct hue families) is unchanged.
+
+Three deliberate regressions were introduced to check the new guards bite:
+round caps (1 fail), an undashed casing (1), a missing cache-buster (2).
+
+🔴 WHAT IS NOT TESTED. Read this before quoting 1,476.
+**Nothing in this delivery has been seen rendered on a real basemap.** There is no
+Mapbox in the sandbox — no npm, no PyPI. Every claim here is about the NUMBERS in
+the layer definitions, not the pixels. Specifically unverified:
+  * whether the dots read as dots at zoom 7–9 (§2);
+  * whether the two casings visibly clash at zoom 11–13 where routes run
+    parallel (§2);
+  * whether palette C's six bands are tellable apart on the satellite basemap;
+  * whether the /map/ no-cache header actually lands (§4);
+  * whether alternate labelling is enough for the three Pärnu boundaries at 11–12.
+
+
+-----------------------------------------------------------------------------------
+7. WHAT TO LOOK AT AFTER DEPLOYING
+-----------------------------------------------------------------------------------
+  1. Hard refresh once. After this deploy you should not need to again.
+  2. /map/ at zoom 7–9: are the routes dotted, or has the gap aliased to solid?
+  3. Zoom 11–13 with two parallel routes: do the white casings clash?
+  4. Zoom 11: arrows AND work-section labels both switch on here. It is the
+     busiest threshold in the new design and the one thing the tests cannot see.
+  5. Six bands, six colours, on satellite and on the light basemap.
+  6. Sites are on the sites; gates are separate grey dots from zoom 10 (§5a fix).
+  7. DevTools → Network → /map/ → response headers → `Cache-Control: no-cache`.
+
+Still owed, unchanged by this delivery:
+  * the E6 gate walkthrough in `claude/open-questions.md`;
+  * the E1 HERE probe, which blocks the laydown-areas phase;
+  * `claude/roadmap.md` was rewritten on 2026-08-31 from a pre-5a copy and now
+    says 5a is unbuilt. Corrected in the project notes this session.
