@@ -147,7 +147,7 @@
              so the swatch is a gradient rather than one colour. The legend below is
              generated from IPT_SEGMENTS so the band table stays the only place the
              colours are defined. -->
-        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" style="background:linear-gradient(90deg,#039E86,#003787,#0E7490,#C6841D,#BF2E55); border-radius:0; width:13px; height:3px;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" id="ipt-alignment-swatch" style="background:#94a3b8; border-radius:0; width:13px; height:3px;"></span></div>
         <div id="ipt-legend" style="padding-left:23px;margin:-2px 0 4px;"></div>
         <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Drawn continuously. ~60&nbsp;km has no surveyed Main Track in the alignment file and is interpolated &mdash; click the line to see whether a stretch is measured.</div>
         <div class="control-item"><label><input type="checkbox" id="layer-ws-bounds" checked onchange="toggleWsBounds(this.checked)"> Work section boundaries</label><span class="color-dot" style="background:#334155; border-radius:0; width:3px; height:13px;"></span></div>
@@ -386,6 +386,36 @@
                 + `<span style="flex:0 0 14px;height:${under ? 4 : 3}px;background:${colour};border-radius:0;"></span>`
                 + `<span style="color:#8a9099;">${label}</span></div>`;
         }).join('');
+        paintAlignmentSwatch();
+    }
+
+    // ⭐ The sidebar swatch is GENERATED from the same table that paints the map.
+    //
+    // It used to be a hard-coded `linear-gradient(#039E86,#003787,#0E7490,#C6841D,
+    // #BF2E55)` — the FIRST palette. It survived the v4 rebuild and palette C
+    // untouched, so by 2026-09-01 the control panel was advertising inbound-teal,
+    // brand navy and selection-crimson as IPT colours, three palettes out of date,
+    // while the map beside it drew jade/violet/teal/stone/umber/burgundy.
+    //
+    // This is the "a colour written in two places WILL drift" rule in the roadmap,
+    // and it had already caught this exact element once. Writing it down was not
+    // enough; generating it is.
+    function paintAlignmentSwatch() {
+        const sw = document.getElementById('ipt-alignment-swatch');
+        if (!sw || !window.iptLegendRows) return;
+        // corridor order, civil bands only — the underlay is a wash, not a band, and
+        // 'Outside A1' is outside scope, so neither belongs in a swatch that says
+        // "this is what the package colours look like"
+        const cols = window.iptLegendRows()
+            .filter(r => r.ipt !== IPT_UNDERLAY_KEY && r.ipt !== 'Outside A1')
+            .map(r => r.colour);
+        if (!cols.length) return;
+        // hard stops, not a blend: the bands are discrete and a smooth gradient
+        // would invent colours that are not on the map
+        const stops = cols.map((c, i) =>
+            `${c} ${(i * 100 / cols.length).toFixed(2)}%, ${c} ${((i + 1) * 100 / cols.length).toFixed(2)}%`
+        ).join(', ');
+        sw.style.background = `linear-gradient(90deg, ${stops})`;
     }
 
     function toggleAlignment(visible) {
@@ -615,27 +645,44 @@
         // ⚠️ Width and dash are coupled: because the array is in width multiples,
         //    changing line-width rescales the dots and gaps with it. Usually what you
         //    want, but the three numbers cannot be retuned independently.
-        // ⚠️ THINNER LINES MAKE THE GAP SMALLER, because the array is in width
-        // multiples. At the old zoom-7 width of 2 px the gap was 0.67 px; at 1.7 px
-        // it would be 0.57 px, which is where a dashed line starts aliasing to solid
-        // — at exactly the zoom this change exists for. So the array is STEPPED: a
-        // proportionally wider gap below zoom 10, the design value above it.
+        // 🔴 2026-09-01 — WHY THESE ARE CONSTANTS AND NOT A ZOOM STEP.
         //
-        //   below z10   core dash 1.0w, gap 0.6w   -> 1.02 px gap at z7. period 1.6w
-        //   from z10    core dash 1.0w, gap 0.333w -> the agreed 3:1 dot spacing
+        // The first cut of this used
+        //     ['step', ['zoom'], [1, 0.6], 10, [1, 0.333]]
+        // to widen the gap at corridor zoom, and it made every route DISAPPEAR.
         //
-        // The casing arrays are the same pattern converted into CASING width units
-        // (divide by 1.25) with 0.1w of halo past each dot end, so both layers draw
-        // the same period on screen at every zoom:
+        // The cause is a Mapbox expression rule, not a dasharray rule: **a literal
+        // array used as an expression output must be wrapped in ['literal', …]**.
+        // A bare [1, 0.6] is parsed as an expression whose operator is the number 1,
+        // which is not an operator, so the paint property fails style validation.
+        // And `Style.addLayer` VALIDATES BEFORE ADDING: on a validation failure it
+        // fires an error on the map and RETURNS WITHOUT ADDING THE LAYER. So all
+        // four route layers were silently skipped while every later layer — the
+        // alignment, the ticks, the gates — added normally. Nothing crashed, nothing
+        // looked wrong in the console flow, and the routes were simply not there.
         //
-        //   below z10   dash (1.0w + 0.2w)/1.25w = 0.96 , period 1.6w/1.25w = 1.28
-        //               -> gap 1.28 - 0.96 = 0.32
-        //   from z10    dash 0.96, period 1.333/1.25 = 1.067 -> gap 0.107
+        // The correctly-wrapped form is
+        //     ['step', ['zoom'], ['literal', [1, 0.6]], 10, ['literal', [1, 0.333]]]
+        // and it is left here as the next step rather than shipped, because
+        // `line-dasharray` is a CROSS-FADED property and expression support for
+        // those has been patchy across GL JS versions. Two map deploys in a row have
+        // now gone out broken; a constant is the value that cannot fail validation,
+        // and the step is worth trying only once the constant is confirmed drawing.
         //
-        // ⚠️ ['step'] is the ONLY thing that works here. `line-dasharray` cannot be
-        // interpolated across zoom — a smooth ramp silently does nothing.
-        const DASH_CORE   = ['step', ['zoom'], [1, 0.6],    10, [1, 0.333]];
-        const DASH_CASING = ['step', ['zoom'], [0.96, 0.32], 10, [0.96, 0.107]];
+        // The constant is a compromise on the agreed 3:1 dot:gap. At the thinned
+        // widths the design value of 0.333 gives a 0.57 px gap at zoom 7, which
+        // aliases to solid; 0.45 gives 0.77 px there and 2.25 px at zoom 12.
+        //
+        //            core          casing
+        //   width      w            1.25w
+        //   dash      1.0w          1.2w      (0.1w of halo past each dot end)
+        //   gap       0.45w         0.2w
+        //   period    1.45w         1.45w     ✓
+        //
+        // ⚠️ Width and dash stay coupled: the array is in width multiples, so
+        // changing line-width rescales the dots and gaps with it.
+        const DASH_CORE   = [1, 0.45];
+        const DASH_CASING = [0.96, 0.2];
 
 
         // ⚠️ LAYER ADD ORDER IS Z-ORDER. Outbound is added FIRST so that inbound
