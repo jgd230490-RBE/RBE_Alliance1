@@ -63,20 +63,20 @@
 // So the two halves now announce their version to each other. A mismatch prints
 // a console error AND puts a red line in the sidebar, because a silent
 // half-upgrade costs more to diagnose than it does to prevent.
-window.IPT_SEGMENTS_VERSION = 'v8';
+window.IPT_SEGMENTS_VERSION = 'v9';
 
 // --- The bands -------------------------------------------------------------
 // Contiguous by construction: each chain_to is the next chain_from. Asserted
 // in backend/tests/parse_map.js — a gap would leave unpainted track and an
 // overlap would make the first-match scan silently win.
 window.IPT_SEGMENTS = [
-  { ipt: 'IPT 6', ws: ['WS7', 'WS8', 'WS9', 'WS10', 'WS11'], label: 'Superstructure / Ülemiste / Soodevahe', ws_primary: 'WS7', chain_from: -5000, chain_to: 105480, colour: '#86198F' },
-  { ipt: 'IPT 1', ws: ['WS1', 'WS12'], label: 'Tootsi–Timmermanni / local stops', ws_primary: 'WS1', chain_from: 105480, chain_to: 117278, colour: '#7F1D1D' },
-  { ipt: 'IPT 2', ws: ['WS2', 'WS13'], label: 'Timmermanni–Orasselja', ws_primary: 'WS2', chain_from: 117278, chain_to: 125000, colour: '#78716C' },
-  { ipt: 'IPT 3', ws: ['WS3'], label: 'Rääma bog / Papiniidu approach', ws_primary: 'WS3', chain_from: 125000, chain_to: 130036, colour: '#854D0E' },
-  { ipt: 'IPT 4', ws: ['WS4'], label: 'Pärnu Papiniidu bridge BR2032', ws_primary: 'WS4', chain_from: 130036, chain_to: 135400, colour: '#155E75' },
-  { ipt: 'IPT 5', ws: ['WS5'], label: 'Pärnu passenger terminal area', ws_primary: 'WS5', chain_from: 135400, chain_to: 137685, colour: '#166534' },
-  { ipt: 'IPT 4', ws: ['WS6'], label: 'Pärnu terminal – A1/A2 border', ws_primary: 'WS6', chain_from: 137685, chain_to: 142000, colour: '#155E75' },
+  { ipt: 'IPT 6', ws: ['WS7', 'WS8', 'WS9', 'WS10', 'WS11'], label: 'Superstructure / Ülemiste / Soodevahe', ws_primary: 'WS7', chain_from: -5000, chain_to: 105480, colour: '#0F766E' },
+  { ipt: 'IPT 1', ws: ['WS1', 'WS12'], label: 'Tootsi–Timmermanni / local stops', ws_primary: 'WS1', chain_from: 105480, chain_to: 117278, colour: '#4C1D95' },
+  { ipt: 'IPT 2', ws: ['WS2', 'WS13'], label: 'Timmermanni–Orasselja', ws_primary: 'WS2', chain_from: 117278, chain_to: 125000, colour: '#155E75' },
+  { ipt: 'IPT 3', ws: ['WS3'], label: 'Rääma bog / Papiniidu approach', ws_primary: 'WS3', chain_from: 125000, chain_to: 130036, colour: '#57534E' },
+  { ipt: 'IPT 4', ws: ['WS4'], label: 'Pärnu Papiniidu bridge BR2032', ws_primary: 'WS4', chain_from: 130036, chain_to: 135400, colour: '#92400E' },
+  { ipt: 'IPT 5', ws: ['WS5'], label: 'Pärnu passenger terminal area', ws_primary: 'WS5', chain_from: 135400, chain_to: 137685, colour: '#831843' },
+  { ipt: 'IPT 4', ws: ['WS6'], label: 'Pärnu terminal – A1/A2 border', ws_primary: 'WS6', chain_from: 137685, chain_to: 142000, colour: '#92400E' },
   { ipt: 'Outside A1', ws: [], label: 'Outside Alliance 1 mainline scope', ws_primary: null, chain_from: 142000, chain_to: 250000, colour: '#94a3b8' },
 ];
 
@@ -111,46 +111,69 @@ window.IPT_RESERVED_COLOURS = [
 ];
 
 // ---------------------------------------------------------------------------
-// ⚠️ MEASURED — the palette was rebuilt on 2026-08-28 because the first one failed
+// ⚠️ MEASURED — palette C, adopted 2026-08-30. Read this before changing a hex.
 // ---------------------------------------------------------------------------
-// The mandated palette put IPT 6, IPT 1 and IPT 2 in the same indigo/violet
-// family, and those are three CONSECUTIVE bands: the corridor changes package
-// three times between chainage 105480 and 125000. Measured with CIE ΔE2000,
-// where ~1 is a just-noticeable difference and two 2.5 px lines on a light
-// basemap need roughly 20+ to read as different colours:
+// The user chose the ORIGINAL hue families back. This palette is the third one
+// this map has worn, and it is deliberately the WEAKEST of the three on colour
+// separation. That is not an accident and it is not free — it is a trade, and
+// the thing bought with it is that routes are now a DOTTED line, so routes and
+// alignment separate by FORM. Colour distance matters less than it did.
 //
-//                              first palette      this palette
-//   weakest adjacent pair            6.3               22.1
-//   weakest pair anywhere            5.7               21.0
-//   underlay vs the colour on it     0.0               34.5
-//   weakest adjacent, colour-blind   2.0               21.5
+// **The dotted route restyle is therefore a dependency of this palette, not an
+// option alongside it.** Revert map/index.html's dasharrays and these colours
+// stop being defensible.
 //
-// ⭐ That last row is the one that decided it. Simulated for deuteranopia and
-//    protanopia, three consecutive bands of the first palette were ΔE 2.0 apart
-//    — the same colour, not a similar one.
+// Re-measured from the hexes below (CIE ΔE2000, sRGB, D65), not copied from the
+// brief:
 //
-// ⚠️ 21.0 is the CEILING, not a compromise nobody tried to beat. Seven hexes are
-//    already spent on route, forecast, selection and brand layers, and the
-//    remaining hue space will not hold six band colours plus an underlay any
-//    further apart than this. Searched exhaustively over a bank of 28 corporate
-//    tones under all four constraints at once (every pair apart, every adjacent
-//    pair further apart, colour-blind safe, and clear of every line the map
-//    already draws). If a band ever needs more room, the way to get it is to
-//    free up a reserved colour, not to re-shuffle these.
+//                                 previous palette   palette C
+//   weakest pair anywhere               21.0            16.6   (IPT 6 / IPT 2)
+//   weakest ADJACENT pair               22.1            20.1   (IPT 2 / IPT 3)
+//   nearest approach to a reserved      15.4            13.5   (IPT 1 vs navy)
+//
+// ✅ The MANDATORY rule still holds: no band hex equals any reserved hex. The
+//    rule is about exact reuse, and C's closest approach is 13.5, not 0.
+//
+// 🔴 UNRESOLVED, AND IT IS THE ONE THAT DECIDED THE 2026-08-28 REBUILD.
+//    Simulated for deuteranopia (Viénot 1999), ADJACENT bands:
+//
+//                       previous palette   palette C
+//      IPT 1 / IPT 2         19.5             4.4     <-- violet vs teal blue
+//      IPT 6 / IPT 1         21.7             5.7     <-- jade vs violet
+//      IPT 4 / IPT 5         15.2             8.8     <-- umber vs burgundy
+//
+//    Protanopia is the same shape (IPT 1 / IPT 2 = 5.4). So for a red-green
+//    colour-blind viewer — roughly 1 in 12 men — three of the six package
+//    changes along this corridor are close to invisible by colour alone.
+//
+//    ⚠️ The brief this palette arrived with quoted "colour-blind 13.5". That
+//    figure could not be reproduced by any colour-blind measurement here, and
+//    13.5 is exactly the nearest-reserved-colour distance in the row above —
+//    one number appears to have been copied into two roles. The numbers in this
+//    block are the measured ones. **Do not restore 13.5 as a colour-blind
+//    score.**
+//
+//    What this palette relies on instead, and it is a real mitigation rather
+//    than an excuse: the dotted routes, the legend (where bands are labelled
+//    swatches, not thin lines), the per-IPT checkboxes, and the click popup
+//    that names the package. Colour is no longer the only channel.
+//
+//    ⭐ If it ever needs fixing, it is ONE hex and the hue families survive:
+//    moving IPT 1 from #4C1D95 to a lighter violet (#7C3AED) lifts
+//    IPT 1 / IPT 2 from 4.4 to 21.5 and IPT 6 / IPT 1 from 5.7 to 19.6, leaves
+//    every normal-vision measure unchanged (16.6 / 20.1 / 13.7), and leaves
+//    IPT 4 / IPT 5 at 8.8 as the remaining binding pair. Offered, not applied —
+//    the palette was a user decision, not a computed one.
 //
 // How the palette is built, so an edit keeps the property rather than losing it:
-//   * six hue families, one per band: plum, oxblood, stone, bronze, teal blue,
-//     pine. No two bands share a family, so the LEGEND reads as six things.
+//   * six hue families, one per band: jade, violet, teal blue, stone, umber,
+//     burgundy. No two bands share a family, so the LEGEND reads as six things.
 //   * the underlay is a light lavender wash (L* 77) rather than another deep
-//     colour, so it separates from everything it sits under by lightness rather
-//     than competing with it on hue.
+//     colour, so it separates by lightness rather than competing on hue.
 //   * 'Outside A1' stays muted slate.
 //
-// ⚠️ Closest remaining approaches to a line the map already draws, all
-//    acceptable but worth knowing: Outside A1 vs forecast ΔE 15.4 (both muted,
-//    and Outside A1 predates this palette), IPT 1 vs selection 17.1, IPT 4 vs
-//    brand navy 17.8, IPT 3 vs temporary haul 19.5 — temporary haul is dashed,
-//    which separates it independently of colour.
+// ⚠️ IPT 4 appears TWICE in the band table (WS4 and WS6, either side of IPT 5).
+//    Both rows carry the same hex and both must move together.
 window.IPT_UNDERLAY = {
   colour: '#C4B5FD',   // lavender 300 — a wash, not a seventh competing colour
   width: 4.5,
@@ -772,6 +795,14 @@ window.buildWsBoundaries = function (chainageFC, alignmentFC) {
       },
     });
   }
+  // Phase 5b: an ordinal along the corridor, used by map/index.html to label only
+  // every OTHER boundary between zoom 11 and 12. The three Pärnu boundaries
+  // (135400, 137685, 142000) sit within a few km and their labels collide there.
+  // Stamped here rather than computed in the layer expression because Mapbox has
+  // no index-of operator, and because the order is a property of the data.
+  out.sort(function (a, b) { return a.properties.chain_m - b.properties.chain_m; });
+  for (var ix = 0; ix < out.length; ix++) out[ix].properties.idx = ix;
+
   // ⭐ Which of these boundaries has no surveyed track under it?
   //
   // The ticks are positioned from chainage.js, whose 2,180 markers are all

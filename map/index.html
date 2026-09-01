@@ -13,12 +13,7 @@
     <script src="data/chainage.js"></script>
     <!-- IPT / Work Section bands for the alignment. Reference geometry only:
          reads nothing from the API and changes no routing behaviour. -->
-    <!-- ⚠️ The ?v= is not decoration. A browser caches a .js far more stubbornly than
-         it revalidates the .html that loads it, so uploading both files can still
-         leave the OLD ipt_segments.js running under the NEW index.html — which is
-         indistinguishable from forgetting to upload it. Bump this with the version
-         constant below and the browser is forced to refetch. -->
-    <script src="ipt_segments.js?v=8"></script>
+    <script src="ipt_segments.js?v=9"></script>
     <style>
         :root{
             --navy:#003787; --navy-deep:#0A1446; --ink:#1f2937; --muted:#6b7280;
@@ -152,9 +147,9 @@
              so the swatch is a gradient rather than one colour. The legend below is
              generated from IPT_SEGMENTS so the band table stays the only place the
              colours are defined. -->
-        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" id="ipt-swatch" style="border-radius:0; width:13px; height:3px;"></span></div>
+        <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" style="background:linear-gradient(90deg,#039E86,#003787,#0E7490,#C6841D,#BF2E55); border-radius:0; width:13px; height:3px;"></span></div>
         <div id="ipt-legend" style="padding-left:23px;margin:-2px 0 4px;"></div>
-        <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Some stretches have no surveyed alignment beneath them — click the line to check.</div>
+        <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Breaks in the line = no surveyed Main Track in the alignment file, not a rendering fault.</div>
         <div class="control-item"><label><input type="checkbox" id="layer-ws-bounds" checked onchange="toggleWsBounds(this.checked)"> Work section boundaries</label><span class="color-dot" style="background:#334155; border-radius:0; width:3px; height:13px;"></span></div>
         <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">7 package edges · ticks from zoom 11, labels from 13</span></div>
         <!-- The alignment as it was drawn before the IPT overlay: every track type, one
@@ -166,6 +161,11 @@
         <div class="control-item"><label><input type="checkbox" id="layer-chainage" onchange="toggleLayer('chainage-global', this.checked); toggleLayer('chainage-labels', this.checked);"> Chainage markers</label><span class="color-dot" style="background:#94a3b8;"></span></div>
         <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">10 km ticks at corridor zoom · denser and labelled as you zoom in</span></div>
         <div class="control-item"><label><input type="checkbox" id="layer-nodes" checked onchange="toggleNodes(this.checked)"> Sites &amp; assets</label><span class="color-dot" style="background:#003787;"></span></div>
+        <!-- Phase 5a. The access point on the public road, which for a large site is
+             nowhere near the marker in the middle of it. Routes start and end at these,
+             not at the site marker — that gap is the information, not a drawing error. -->
+        <div class="control-item"><label><input type="checkbox" id="layer-gates" checked onchange="toggleGates(this.checked)"> Site gates</label><span class="color-dot" style="background:#64748B;"></span></div>
+        <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">from zoom 10 · hollow = deactivated</span></div>
         <!-- Phase 3. Two colours, one meaning each: red = the router is steered around
              this area, grey = drawn for information and HERE never hears about it. With
              the forecast timeline open these follow the month on screen, so a closure
@@ -259,13 +259,13 @@
     // still the polish build, which showed as IPT 6 stuck green, bridges still
     // present, and a "Work section boundaries" checkbox that toggled nothing.
     // One cause, three symptoms, and nothing in the console to say so.
-    const IPT_INDEX_VERSION = 'v8';
+    const IPT_INDEX_VERSION = 'v9';
     function checkOverlayVersion() {
         const got = window.IPT_SEGMENTS_VERSION;
         if (got === IPT_INDEX_VERSION) return true;
         const msg = got
-            ? `map/ipt_segments.js is ${got} but map/index.html is ${IPT_INDEX_VERSION}`
-            : `map/ipt_segments.js is older than ${IPT_INDEX_VERSION} (no version stamp)`;
+            ? `map/ipt_segments.js is ${got} but map/index.html is ${IPT_INDEX_VERSION} — extract the whole zip, not one file`
+            : `map/ipt_segments.js is older than ${IPT_INDEX_VERSION} (no version stamp) — extract the whole zip, not one file`;
         console.error('[IPT] VERSION MISMATCH: ' + msg);
         const host = document.getElementById('ipt-legend');
         if (host) {
@@ -273,13 +273,7 @@
             w.id = 'ipt-version-warning';
             w.style.cssText = 'margin:4px 0;padding:6px 8px;background:#fee2e2;border-left:3px solid #b91c1c;'
                             + 'font-size:10.5px;line-height:1.45;color:#7f1d1d;border-radius:2px;';
-            // ⚠️ Order matters here. "You forgot to upload it" is the rarer cause and
-            // was the one this banner used to assert; a stale browser cache produces
-            // exactly the same symptom and is far more common, so it is named first.
-            w.innerHTML = '<b>Overlay files out of step.</b> ' + msg
-                + '<br>Try a hard reload first (Ctrl/Cmd + Shift + R) — a cached copy of '
-                + 'the old file gives exactly this. If it persists, re-upload BOTH files '
-                + 'from the zip.';
+            w.textContent = 'Overlay files out of step: ' + msg;
             host.parentNode.insertBefore(w, host);
         }
         return false;
@@ -367,12 +361,6 @@
                 ['==', ['get', 'align_type'], 'Main Track'],
                 ['in', ['get', 'ipt'], on]]);
         }
-        if (map.getLayer('rail-alignment-bridge')) {
-            map.setFilter('rail-alignment-bridge', ['all',
-                ['==', ['get', 'is_bridge'], true],
-                ['==', ['get', 'align_type'], 'Main Track'],
-                ['in', ['get', 'ipt'], on]]);
-        }
     }
 
     function toggleUnderlay(visible) {
@@ -381,62 +369,25 @@
 
     // 'Outside A1' is shown muted rather than hidden — an unexplained grey line
     // reads as a bug.
-    // ⚠️ This swatch used to be a hard-coded gradient of the FIRST palette, written
-    // straight into the markup. It survived every palette change untouched, so the
-    // sidebar was advertising inbound-teal, brand-navy and selection-crimson as IPT
-    // colours long after none of them was. Generated from the band table now, so it
-    // cannot drift again — a colour must never be written in two places.
-    function renderIptSwatch() {
-        const el = document.getElementById('ipt-swatch');
-        if (!el || !window.IPT_SEGMENTS) return;
-        const stops = window.IPT_SEGMENTS.map(b => b.colour);
-        el.style.background = stops.length > 1
-            ? `linear-gradient(90deg, ${stops.join(', ')})`
-            : (stops[0] || '#64748B');
-    }
-
     function renderIptLegend() {
         const el = document.getElementById('ipt-legend');
         if (!el || !window.iptLegendRows) return;
-        // ⚠️ IPT 6 gets TWO rows, and the reason is a bug this fixed.
-        //
-        // IPT 6 is two different things on this map: a civil BAND in the north
-        // (chainage -5000 to 105480, drawn in the band colour) and the corridor-wide
-        // superstructure UNDERLAY (drawn in the underlay colour). One legend row was
-        // showing the underlay colour against the label "IPT 6" — so the key said
-        // lavender and the map drew plum for the same name.
-        //
-        // Two rows, one per thing, each with its own swatch. The band row has no
-        // checkbox because the band is always drawn — that asymmetry was decided
-        // deliberately (see IPT_UNDERLAY_KEY above) and showing it beats hiding it.
-        const row = (opts) =>
-            `<div style="display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:1.7;${opts.muted ? 'opacity:.7;' : ''}" title="${(opts.title || '').replace(/"/g, '&quot;')}">`
-            + (opts.box
-                ? `<input type="checkbox" id="${opts.box}" checked onchange="${opts.handler}" style="margin:0;">`
-                : `<span style="flex:0 0 13px;" title="always shown"></span>`)
-            + `<span style="flex:0 0 14px;height:${opts.h || 3}px;background:${opts.colour};border-radius:0;"></span>`
-            + `<span style="color:#8a9099;">${opts.label}</span></div>`;
-
         el.innerHTML = window.iptLegendRows().map(r => {
-            const title = r.labels.join(' · ');
-            const band = row({
-                colour: r.colour, muted: r.muted, title,
-                box: r.ipt === IPT_UNDERLAY_KEY ? null : iptCheckboxId(r.ipt),
-                handler: 'applyIptFilter()',
-                label: `<b style="color:#5b6270;">${r.ipt}</b>${r.ws.length ? ' · ' + r.ws.join(', ') : ''}`,
-            });
-            if (r.ipt !== IPT_UNDERLAY_KEY) return band;
-            return band + row({
-                colour: (window.IPT_UNDERLAY || {}).colour || r.colour, h: 4, title,
-                box: iptCheckboxId(r.ipt), handler: 'toggleUnderlay(this.checked)',
-                label: `<b style="color:#5b6270;">${r.ipt}</b> · Superstructure (corridor underlay)`,
-            });
+            const under = r.ipt === IPT_UNDERLAY_KEY;
+            const colour = under ? (window.IPT_UNDERLAY || {}).colour || r.colour : r.colour;
+            const label = under
+                ? `<b style="color:#5b6270;">${r.ipt}</b> · Superstructure (corridor underlay)`
+                : `<b style="color:#5b6270;">${r.ipt}</b>${r.ws.length ? ' · ' + r.ws.join(', ') : ''}`;
+            const handler = under ? 'toggleUnderlay(this.checked)' : 'applyIptFilter()';
+            return `<div style="display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:1.7;${r.muted ? 'opacity:.7;' : ''}" title="${r.labels.join(' · ').replace(/"/g, '&quot;')}">`
+                + `<input type="checkbox" id="${iptCheckboxId(r.ipt)}" checked onchange="${handler}" style="margin:0;">`
+                + `<span style="flex:0 0 14px;height:${under ? 4 : 3}px;background:${colour};border-radius:0;"></span>`
+                + `<span style="color:#8a9099;">${label}</span></div>`;
         }).join('');
     }
 
     function toggleAlignment(visible) {
         toggleLayer('rail-alignment', visible);
-        toggleLayer('rail-alignment-bridge', visible);
         toggleLayer('rail-alignment-underlay', visible && (function () {
             const el = document.getElementById(iptCheckboxId(IPT_UNDERLAY_KEY));
             return !el || el.checked;
@@ -601,8 +552,57 @@
         // like a scratch.
         const OFFSET_IN  = ['interpolate', ['linear'], ['zoom'], 7, -1, 12, -4, 14, -3, 17, 0];
         const OFFSET_OUT = ['interpolate', ['linear'], ['zoom'], 7,  1, 12,  4, 14,  3, 17, 0];
-        const WIDTH_CORE   = ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 6, 16, 10];
-        const WIDTH_CASING = ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 7, 16, 12];
+        // Phase 5b map change 3 — routes are a DOTTED line, and the numbers below are
+        // coupled to each other in two ways that are easy to break later.
+        //
+        // 1. The zoom-7 core stop drops 2.5 -> 2 so that at corridor zoom the route is
+        //    THINNER than the alignment's fixed 2.5 px — a ratio of 0.8, close to the
+        //    mockup's 3:4. Only that stop moves. The 12 and 16 stops stay because the
+        //    ramp is a Phase 2.5a decision: at zoom 16 a 2.5 px line on a 40 px-wide
+        //    road looks like a scratch. Past zoom 10 the DOTS do the separating, not
+        //    the width, and the confusion this fixes happens at corridor zoom.
+        //
+        // 2. The casing is now a FIXED 1.25x the core at every stop. It was not before
+        //    (the ratio drifted 1.0 -> 1.167 -> 1.2), and that drift is what stops the
+        //    two dash arrays resolving to constants — `line-dasharray` units are
+        //    multiples of THAT LAYER'S OWN WIDTH, so two layers of different widths
+        //    need different arrays to draw the same pattern on screen.
+        //
+        // ⚠️ k = 1.25 is close to a ceiling. Inbound and outbound are offset ±4 px, so
+        //    their centres are 8 px apart. At zoom 12 the core is 6 px and the casing
+        //    7.5, clearing by 0.5 px. At k = 1.4 the casings would be 8.4 px and would
+        //    OVERLAP. The old casing (7 px) cleared by 1.0 px, so this does tighten it
+        //    — worth a look at zoom 11–13 where two routes run parallel.
+        const WIDTH_CORE   = ['interpolate', ['linear'], ['zoom'], 7, 2,   12, 6,   16, 10];
+        const WIDTH_CASING = ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 7.5, 16, 12.5];
+
+        // The dash pattern, in multiples of each layer's own width, chosen so both
+        // layers draw the SAME period on screen (1.333 x core width):
+        //
+        //            core          casing
+        //   width      w            1.25w
+        //   dash      1.0w          1.2w     (0.1w of halo past each dot end)
+        //   gap       0.333w        0.133w
+        //   period    1.333w        1.333w   ✓
+        //
+        // 🔴 Dashing only the CORE would leave the white casing showing through every
+        //    gap, and the route would read as a continuous pale line with coloured
+        //    beads on it — worse than the solid line it replaces. Dashing both turns
+        //    the casing into a halo around each dot, which is the point.
+        //
+        // 🔴 `line-cap: butt` is load-bearing, not a detail. A round cap extends every
+        //    dash by half the line width at EACH end, so a 1.0w dot renders 2.0w long
+        //    and the 0.333w gap is swallowed twice over — the route draws SOLID and
+        //    the change is indistinguishable from never having been applied.
+        //
+        // ⚠️ `line-dasharray` cannot be interpolated across zoom, only stepped. Do not
+        //    turn these into a smooth ramp; it silently does nothing.
+        //
+        // ⚠️ Width and dash are coupled: because the array is in width multiples,
+        //    changing line-width rescales the dots and gaps with it. Usually what you
+        //    want, but the three numbers cannot be retuned independently.
+        const DASH_CORE   = [1, 0.333];
+        const DASH_CASING = [0.96, 0.107];
 
 
         // ⚠️ LAYER ADD ORDER IS Z-ORDER. Outbound is added FIRST so that inbound
@@ -617,12 +617,14 @@
             'id': 'outbound-lines-casing',
             'type': 'line',
             'source': 'routes-source',
+            'layout': { 'line-cap': 'butt', 'line-join': 'round' },
             'filter': ['==', ['get', 'type'], 'Outbound Highway'], 
             'paint': { 
                 'line-color': '#ffffff', 
                 'line-width': WIDTH_CASING,
                 'line-opacity': 0.8,
-                'line-offset': OFFSET_OUT
+                'line-offset': OFFSET_OUT,
+                'line-dasharray': DASH_CASING
             }
         });
         // Core Line
@@ -630,12 +632,14 @@
             'id': 'outbound-lines',
             'type': 'line',
             'source': 'routes-source',
+            'layout': { 'line-cap': 'butt', 'line-join': 'round' },
             'filter': ['==', ['get', 'type'], 'Outbound Highway'], 
             'paint': { 
                 'line-color': '#f59e0b', 
                 'line-width': WIDTH_CORE, 
                 'line-opacity': 1,
-                'line-offset': OFFSET_OUT
+                'line-offset': OFFSET_OUT,
+                'line-dasharray': DASH_CORE
             }
         });
 
@@ -645,12 +649,14 @@
             'id': 'inbound-lines-casing',
             'type': 'line',
             'source': 'routes-source',
+            'layout': { 'line-cap': 'butt', 'line-join': 'round' },
             'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
             'paint': { 
                 'line-color': '#ffffff', 
                 'line-width': WIDTH_CASING, 
                 'line-opacity': 0.8,
-                'line-offset': OFFSET_IN
+                'line-offset': OFFSET_IN,
+                'line-dasharray': DASH_CASING
             }
         });
         // Core Line
@@ -658,12 +664,14 @@
             'id': 'inbound-lines',
             'type': 'line',
             'source': 'routes-source',
+            'layout': { 'line-cap': 'butt', 'line-join': 'round' },
             'filter': ['==', ['get', 'type'], 'Inbound Highway'], 
             'paint': { 
                 'line-color': '#039E86', 
                 'line-width': WIDTH_CORE, 
                 'line-opacity': 1,
-                'line-offset': OFFSET_IN
+                'line-offset': OFFSET_IN,
+                'line-dasharray': DASH_CORE
             }
         });
 
@@ -699,6 +707,46 @@
             paint: { 'text-color': '#7A4C05', 'text-halo-color': '#ffffff', 'text-halo-width': 2 },
         });
 
+        // Phase 5a — gates.
+        //
+        // A small grey dot, not an icon: a gate is a point on a road, and anything with
+        // a glyph in it competes with the site markers for attention at exactly the zoom
+        // where you are trying to read the site. Grey because it is reference geometry —
+        // every colour on this map already means something (green laden, amber empty,
+        // red avoided, ochre temporary haul), and a gate means none of them.
+        //
+        // minzoom 10 on purpose: at corridor zoom a gate and its site are the same pixel,
+        // so drawing both is noise. From 10 they separate; the label follows at 13.
+        //
+        // A circle LAYER rather than a DOM marker like the sites use. Cheaper for the
+        // 50-odd gates a full network will have, and it keeps the canvas-export problem
+        // from getting worse — the site markers are already DOM elements outside the
+        // WebGL canvas, which is what blocks PNG export today.
+        if (!map.getLayer('site-gates')) map.addLayer({
+            id: 'site-gates', type: 'circle', source: 'routes-source', minzoom: 10,
+            filter: ['==', ['get', 'type'], 'Gate'],
+            layout: { visibility: gatesVisible() ? 'visible' : 'none' },
+            paint: {
+                'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 3, 14, 5.5, 17, 7],
+                // a deactivated gate is drawn hollow rather than hidden: it is the reason
+                // a route refuses to bake, and an absent dot explains nothing
+                'circle-color': ['case', ['get', 'active'], '#64748B', '#FFFFFF'],
+                'circle-stroke-width': 1.5,
+                'circle-stroke-color': ['case', ['get', 'active'], '#FFFFFF', '#94A3B8'],
+                'circle-opacity': 0.95,
+            },
+        });
+        if (!map.getLayer('site-gates-label')) map.addLayer({
+            id: 'site-gates-label', type: 'symbol', source: 'routes-source', minzoom: 13,
+            filter: ['==', ['get', 'type'], 'Gate'],
+            layout: { visibility: gatesVisible() ? 'visible' : 'none',
+                      'text-field': ['get', 'name'], 'text-size': 10.5,
+                      'text-offset': [0, 1.05], 'text-anchor': 'top',
+                      'text-optional': true },
+            paint: { 'text-color': '#475569', 'text-halo-color': '#ffffff',
+                     'text-halo-width': 1.6 },
+        });
+
         // Direction of travel, from zoom 12 in. symbol-placement 'line' repeats the
         // glyph along the geometry and rotates it to the bearing, so laden-out and
         // empty-back read as opposite flows rather than two parallel lines.
@@ -706,7 +754,15 @@
             const id = dir + '-arrows';
             if (map.getLayer(id)) return;
             map.addLayer({
-                id, type: 'symbol', source: 'routes-source', minzoom: 12,
+                // Phase 5b: 12 -> 11. A dot does not point, so the arrows stay and
+                // arrive one level earlier to carry the direction the dashes cannot.
+                // symbol-spacing stays 90 px: a zoom earlier means the route is shorter
+                // on screen, so the same spacing yields FEWER arrows — punctuation
+                // rather than a crowd.
+                // ⚠️ zoom 11 now switches on two things at once, arrows and work-section
+                // labels. Different features so they should not compete, but it is the
+                // busiest threshold in this design and worth one look on the live map.
+                id, type: 'symbol', source: 'routes-source', minzoom: 11,
                 filter: ['==', ['get', 'type'],
                          dir === 'inbound' ? 'Inbound Highway' : 'Outbound Highway'],
                 layout: {
@@ -760,10 +816,8 @@
         map.addLayer({
             'id': 'rail-alignment-underlay', 'type': 'line', 'source': 'alignment-source',
             'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' },
-            // ⚠️ Bridges are INCLUDED here since 2026-08-30. With the civil line
-            // solid across the gaps, an underlay that skipped them would show as a
-            // dashed wash under a continuous line — which looks like a fault.
-            'filter': ['all', ['==', ['get', 'align_type'], 'Main Track'],
+            'filter': ['all', ['!=', ['get', 'is_bridge'], true],
+                              ['==', ['get', 'align_type'], 'Main Track'],
                               ['!=', ['get', 'ipt'], 'Outside A1']],
             'paint': {
                 'line-color': (window.IPT_UNDERLAY || {}).colour || '#5B21B6',
@@ -772,36 +826,26 @@
             },
         });
 
-        // 2. Gap connectors — SOLID, at full opacity, in the band's own colour.
+        // 2. ⚠️ THE GAP BRIDGES ARE GONE (user decision, 2026-08-30).
         //
-        //    Where the alignment file has no surveyed Main Track, the corridor is
-        //    bridged so the line reads continuously. Drawn identically to real
-        //    track: same width, same colour, no transparency.
+        //    A 30%-opacity connector was drawn across each cut gap so the corridor
+        //    read continuously. Removed at the user's request: they did not want a
+        //    transparent line on the map.
         //
-        //    ⚠️ SAY THIS OUT LOUD, because it is the trade being made: the map is
-        //    now drawing railway on ground the survey does not cover, and nothing
-        //    on the line itself distinguishes the two. That was a deliberate
-        //    decision (2026-08-30) — the alternative was 60 km of visible breaks,
-        //    which read as a rendering fault.
+        //    ⚠️ CONSEQUENCE, since the opposite was argued for two days earlier:
+        //    the corridor now reads DASHED again. 31 stretches over 300 m have no
+        //    Main Track geometry — about 60 km in total, the largest 7.0 km — and
+        //    every one of them is now a visible break. That is the truth of the
+        //    data (open question H2) but it will look like missing rendering.
         //
-        //    ⭐ The honesty lives in the POPUP instead. Click any stretch and it
-        //    says whether there is surveyed alignment beneath it and, if not, why
-        //    the line is still drawn. That is the only place the distinction now
-        //    exists, so it must not be removed from there.
+        //    ⭐ What was kept is the INFORMATION, which is what the bridges were
+        //    really carrying: the three package boundaries that fall in a hole say
+        //    so on their own label and in their popup. Nothing is asserted about
+        //    ground the survey does not cover; it is simply named.
         //
-        //    The geometry cut is UNCHANGED: GAP_SPLIT still removes 239.5 km of
-        //    phantom straights from the underlying data. These connectors are
-        //    separate features, flagged is_bridge, and are presentation only.
-        map.addLayer({
-            'id': 'rail-alignment-bridge', 'type': 'line', 'source': 'alignment-source',
-            'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' },
-            'filter': ['all', ['==', ['get', 'is_bridge'], true],
-                              ['==', ['get', 'align_type'], 'Main Track']],
-            'paint': {
-                'line-color': ['coalesce', ['get', 'ipt_colour'], '#64748B'],
-                'line-width': 2.5,
-            },
-        });
+        //    The geometry cut itself is UNCHANGED — GAP_SPLIT still removes the
+        //    239.5 km of phantom straights, which is a separate and much older
+        //    decision. Do not undo that to make the line look continuous again.
 
         // 3. The IPT layer proper. `coalesce` keeps it drawable if ipt_segments.js
         //    failed to load — it falls back to neutral slate rather than to nothing.
@@ -841,7 +885,10 @@
         // a route, and giving it either palette would make it look like one.
         map.addLayer({
             'id': 'ws-boundary-ticks', 'type': 'symbol', 'source': 'ws-boundary-source',
-            'minzoom': 11,
+            // Phase 5b: 11 -> 8. At 11 the ticks were effectively absent — you had to
+            // already be looking at a package boundary to discover one existed. Seven
+            // features; showing them from corridor zoom costs nothing.
+            'minzoom': 8,
             'layout': {
                 'visibility': document.getElementById('layer-ws-bounds').checked ? 'visible' : 'none',
                 'text-field': '|',
@@ -849,7 +896,7 @@
                 // one, and a fontstack the style cannot serve makes a symbol layer
                 // render NOTHING, silently. Inheriting the style default is what
                 // every other label here does and what is known to work.
-                'text-size': ['interpolate', ['linear'], ['zoom'], 11, 18, 16, 30],
+                'text-size': ['interpolate', ['linear'], ['zoom'], 8, 13, 11, 18, 16, 30],
                 'text-rotate': ['get', 'tick_rotate'],
                 'text-rotation-alignment': 'map',
                 'text-allow-overlap': true,   // only seven, and they never collide
@@ -866,16 +913,37 @@
         });
         map.addLayer({
             'id': 'ws-boundary-labels', 'type': 'symbol', 'source': 'ws-boundary-source',
-            'minzoom': 13,
+            // Phase 5b: 13 -> 11.
+            //
+            // ⚠️ The three Pärnu boundaries (135400, 137685, 142000) are within a few km
+            // of each other, so at 11–12 all three labels want the same patch of screen.
+            // Below 13 only every OTHER boundary is labelled — see the text-field below.
+            'minzoom': 11,
             'layout': {
                 'visibility': document.getElementById('layer-ws-bounds').checked ? 'visible' : 'none',
                 // ⭐ Where the alignment file has no surveyed Main Track under a
                 // boundary, the label says so. This is what the 30% gap bridges used
                 // to carry: the bridges are gone, the information is not.
-                'text-field': ['concat',
-                    ['get', 'label'], '\n', ['get', 'chain_txt'],
-                    ['case', ['==', ['get', 'no_surveyed_track'], true],
-                        '\n⚠ no surveyed alignment here', '']],
+                // ⭐ Alternate labelling below zoom 13, done in the TEXT-FIELD rather
+                // than the filter: `['zoom']` cannot be used inside a layer `filter` —
+                // it is the obvious thing to reach for and it silently does not work.
+                // An outermost ['step', ['zoom'], …] over data expressions is the way.
+                //
+                // ⭐ And the odd ones out are hidden with an EMPTY text-field, never
+                // text-opacity: 0. An invisible label still occupies collision space
+                // and would push the labels that ARE showing off the map.
+                'text-field': ['step', ['zoom'],
+                    ['case', ['==', ['%', ['get', 'idx'], 2], 0],
+                        ['concat',
+                            ['get', 'label'], '\n', ['get', 'chain_txt'],
+                            ['case', ['==', ['get', 'no_surveyed_track'], true],
+                                '\n⚠ no surveyed alignment here', '']],
+                        ''],
+                    13,
+                    ['concat',
+                        ['get', 'label'], '\n', ['get', 'chain_txt'],
+                        ['case', ['==', ['get', 'no_surveyed_track'], true],
+                            '\n⚠ no surveyed alignment here', '']]],
                 'text-size': 10.5,
                 'text-offset': [0, -1.6],
                 'text-anchor': 'bottom',
@@ -954,7 +1022,6 @@
         applyFilters();
         setupHoverEvents();
         checkOverlayVersion();
-        renderIptSwatch();
         renderIptLegend();
         applyIptFilter();
         setupAlignmentPopup();
@@ -978,10 +1045,7 @@
         // The alignment answers the click. The bridge layer it used to share this
         // handler with was removed on 2026-08-30 — the gaps are now simply absent,
         // and what is said about them moved to the boundary ticks.
-        // Both layers answer the click, and the connectors matter MORE: they are
-        // the ones drawn over ground the survey does not cover, so they are where
-        // an explanation is owed.
-        ['rail-alignment', 'rail-alignment-bridge'].forEach(lId => {
+        ['rail-alignment'].forEach(lId => {
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
             map.on('click', lId, (e) => {
@@ -995,30 +1059,7 @@
                 // in p.ws are point assets — a station, a halt, a depot — sitting on
                 // the same ground without owning it, so naming them here would say
                 // something the scope diagram does not.
-                // ⭐ DERIVE it if the feature does not carry it.
-                //
-                // Two bugs met here on 2026-08-30. Clicking IPT 6 reported "Work
-                // section: none — outside A1 mainline scope" and then listed WS7–WS11
-                // underneath, which is self-contradicting nonsense.
-                //
-                //  1. The data file was older than the one index.html expected, so
-                //     ws_primary was never stamped. The version banner now catches
-                //     that, but the popup should not depend on it: the owning section
-                //     is derivable from the band table, which is in this same file.
-                //  2. Empty ws_primary was being READ as "outside A1". It is not —
-                //     Outside A1 is one specific band, and every other empty value
-                //     means the stamp is missing, which is a different sentence.
-                const bridge = p.is_bridge === true || p.is_bridge === 'true';
-                const outside = p.ipt === 'Outside A1';
-                let wsCode = p.ws_primary || '';
-                if (!wsCode && !outside) {
-                    const band = (window.IPT_SEGMENTS || []).find(b =>
-                        b.ipt === p.ipt &&
-                        (p.chain_from_m == null ||
-                         (p.chain_from_m >= b.chain_from && p.chain_from_m < b.chain_to)));
-                    wsCode = (band && band.ws_primary) ||
-                             (String(p.ws || '').split(',').filter(Boolean)[0] || '');
-                }
+                const wsCode = p.ws_primary || '';
                 const wsName = p.ws_name || (window.wsLabel ? window.wsLabel(wsCode) : '');
                 const wsMeta = (window.WS_NAMES || {})[wsCode] || {};
                 // the underlay note is conditional on the underlay actually being on
@@ -1037,10 +1078,8 @@
                         + `<b>${p.ipt || 'Unknown'}</b></div>`
                         + `<div style="color:#475569;margin-bottom:5px;">${p.ipt_label || 'Unassigned'}</div>`
                         + (wsCode
-                            ? `<div><b>Work section:</b> ${wsCode}${wsName ? ' — ' + wsName : ''}</div>`
-                            : outside
-                                ? `<div><b>Work section:</b> none — outside A1 mainline scope</div>`
-                                : `<div><b>Work section:</b> <span style="color:#b91c1c;">not recorded</span> — the overlay files are out of step, see the sidebar</div>`)
+                            ? `<div><b>Work section:</b> ${wsCode} — ${wsName}</div>`
+                            : `<div><b>Work section:</b> none — outside A1 mainline scope</div>`)
                         + (ws.length > 1
                             ? `<div style="font-size:11px;color:#64748b;">also on this ground: `
                               + `${ws.filter(w => w !== wsCode).join(', ')}</div>`
@@ -1097,12 +1136,6 @@
                               + `the alignment file, so there is no line to mark. The chainage is right; `
                               + `the survey data is short.</div>`
                             : '')
-                        + (bridge
-                            ? `<div style="margin-top:6px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`
-                              + `<b>No surveyed alignment here.</b> The alignment file has no Main Track `
-                              + `geometry across this stretch. The line is drawn so the corridor reads `
-                              + `continuously — it is reference only, and nothing is measured or routed on it.</div>`
-                            : '')
                         + (p.provisional === true || p.provisional === 'true'
                             ? `<div style="margin-top:6px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`
                               + `<b>Provisional.</b> This boundary is approximate and awaits the design drawings.</div>`
@@ -1139,6 +1172,17 @@
             new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat)
                 .setHTML(tempHaulPopupHTML(e.features[0].properties)).addTo(map);
         });
+        // Phase 5a: the gate popup. Registered here with the other layer handlers, which
+        // run once rather than on every style.load — see the IPT overlay's
+        // ALIGNMENT_POPUP_WIRED guard for what happens when that is got wrong.
+        map.on('mouseenter', 'site-gates', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'site-gates', () => { map.getCanvas().style.cursor = ''; });
+        map.on('click', 'site-gates', (e) => {
+            if (!e.features || !e.features.length) return;
+            new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat)
+                .setHTML(gatePopupHTML(e.features[0].properties)).addTo(map);
+        });
+
         ['restriction-points', 'restriction-lines'].forEach(lId => {
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
@@ -1154,7 +1198,10 @@
         nodeMarkersArray.forEach(el => el.remove && el.remove());
         nodeMarkersArray.length = 0;
         a1_data.features.forEach(f => {
-            if (f.geometry.type === 'Point') {
+            // Phase 5a: gates are Points too, and they are NOT sites. Without this test
+            // every gate would become a cyan 🏢 marker sitting next to the quarry it
+            // belongs to. Gates are drawn by the 'site-gates' circle layer instead.
+            if (f.geometry.type === 'Point' && f.properties.type !== 'Gate') {
                 const props = f.properties; const el = document.createElement('div');
                 let markerColor = '#00ffff'; let iconSymbol = '🏢';
 
@@ -1563,6 +1610,39 @@
     function tempHaulVisible() {
         const cb = document.getElementById('layer-temp');
         return !cb || cb.checked;
+    }
+
+    // Phase 5a. Read from the checkbox, never from a module variable — a basemap switch
+    // re-runs style.load and re-adds every layer, and a variable that drifted from the
+    // control would silently restore a layer the user had turned off.
+    function gatesVisible() {
+        const cb = document.getElementById('layer-gates');
+        return !cb || cb.checked;
+    }
+
+    function toggleGates(visible) {
+        ['site-gates', 'site-gates-label'].forEach(l => toggleLayer(l, visible));
+    }
+
+    function gatePopupHTML(p) {
+        const dir = p.direction === 'access' ? 'Entry only'
+                  : p.direction === 'egress' ? 'Exit only' : 'Entry and exit';
+        // the properties arrive stringified through Mapbox's feature-state boundary, so
+        // 'false' is a truthy string — compare against the string, not the value
+        const active = !(p.active === false || p.active === 'false');
+        let h = `<div style='min-width:170px;'>` +
+                `<h3 style='margin:0 0 5px 0;color:#003787;border-bottom:1px solid #eee;padding-bottom:4px;'>` +
+                `${p.name}</h3>` +
+                `<p style='margin:4px 0;'><b>Site:</b> ${p.location_name || p.location_id}</p>` +
+                `<p style='margin:4px 0;'><b>Direction:</b> ${dir}</p>`;
+        if (!active) h += `<p style='margin:4px 0;color:#BF2E55;'><b>Deactivated</b> — routes that ` +
+                          `select this gate will not bake.</p>`;
+        if (p.safety_minutes) h += `<p style='margin:4px 0;'><b>Induction:</b> ${p.safety_minutes} min</p>`;
+        if (p.internal_travel_minutes) h += `<p style='margin:4px 0;'><b>Gate to face:</b> ` +
+                                            `${p.internal_travel_minutes} min</p>`;
+        h += `<p style='margin:6px 0 0 0;font-size:11px;color:#8a9099;'>${p.gate_id} · ` +
+             `access point, not the site itself</p></div>`;
+        return h;
     }
 
     function toggleTempHaul(visible) {
