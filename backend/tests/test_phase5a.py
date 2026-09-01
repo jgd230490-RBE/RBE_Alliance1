@@ -114,7 +114,17 @@ _resp.FileResponse = lambda *a, **k: None
 sys.modules.setdefault("fastapi.responses", _resp)
 
 _static = types.ModuleType("fastapi.staticfiles")
-_static.StaticFiles = lambda *a, **k: None
+# a CLASS, not a lambda: main.py subclasses this since the /map/ no-cache fix,
+# and `class X(lambda)` is a TypeError
+class _StaticFiles:
+    def __init__(self, *a, **k):
+        pass
+
+    async def get_response(self, path, scope):
+        return None
+
+
+_static.StaticFiles = _StaticFiles
 sys.modules.setdefault("fastapi.staticfiles", _static)
 
 TMP = tempfile.mkdtemp(prefix="rbe_phase5a_")
@@ -676,6 +686,54 @@ ok("the diagnostic carries the gate blockers", diag.get("gate_blockers") == [])
 
 
 # =========================================================================== #
+#  11. 🔴 The public map: the site marker is the SITE                          #
+# =========================================================================== #
+#
+# Regression, found in the deployment on 2026-08-30. public_map_data() drew the node
+# marker at _waypoint(), i.e. the access point. That was invisible while almost no
+# location had a gate and wrong the moment one did: creating a gate visibly moved the
+# quarry on the client-facing map.
+reset_db()
+seed_two_locations()
+here_routing.configured = lambda: True
+add_geom("R1", leg="loaded", profile="P")
+add_geom("R1", leg="return", profile="P")
+
+gates.create_gate("L1", "Far gate", 58.99, 24.99, direction="both", is_default=True)
+
+fc = network.public_map_data(profile="P")
+nodes = {f["properties"]["id"]: f for f in fc["features"]
+         if f["properties"].get("type") == "Node"}
+ok("the public map still emits a Node per location", len(nodes) == 2, str(len(nodes)))
+ok("🔴 the site marker sits on the SITE, not on its gate",
+   nodes["L1"]["geometry"]["coordinates"] == [24.00, 58.5],
+   str(nodes["L1"]["geometry"]["coordinates"]))
+ok("...and not on the legacy gate pair either",
+   nodes["L1"]["geometry"]["coordinates"] != [24.01, 58.51])
+ok("a location with no gates is unaffected",
+   nodes["L2"]["geometry"]["coordinates"] == [25.00, 58.5])
+
+gate_feats = [f for f in fc["features"] if f["properties"].get("type") == "Gate"]
+ok("gates are emitted as their own features", len(gate_feats) == 1, str(len(gate_feats)))
+gp = gate_feats[0]["properties"]
+ok("the gate feature carries its own coordinate",
+   gate_feats[0]["geometry"]["coordinates"] == [24.99, 58.99])
+ok("the gate feature names the site it belongs to", gp["location_name"] == "West pit")
+ok("the gate feature carries its direction", gp["direction"] == "both")
+ok("the gate feature carries its active flag", gp["active"] is True)
+# populateFilters() on the map sweeps EVERY feature for 'origin'/'dest' to build its
+# dropdowns. A gate is not a routable endpoint and must not appear in them.
+ok("a gate feature carries no 'origin' or 'dest' key",
+   "origin" not in gp and "dest" not in gp)
+
+gates.update_gate(gate_feats[0]["properties"]["gate_id"], active=False)
+gate_feats = [f for f in network.public_map_data(profile="P")["features"]
+              if f["properties"].get("type") == "Gate"]
+ok("a deactivated gate is still drawn, flagged rather than dropped",
+   len(gate_feats) == 1 and gate_feats[0]["properties"]["active"] is False)
+
+
+# =========================================================================== #
 #  10. Source-level guards                                                     #
 # =========================================================================== #
 net_src = open(os.path.join(BACKEND, "network.py")).read()
@@ -683,8 +741,10 @@ main_src = open(os.path.join(BACKEND, "main.py")).read()
 gates_src = open(os.path.join(BACKEND, "gates.py")).read()
 
 import re as _re  # noqa: E402
+# every real call passes at least `loc`; an empty match is prose mentioning
+# `_waypoint()` in a comment, and the definition itself starts "loc, role"
 calls = [m for m in _re.findall(r"_waypoint\(([^)]*)\)", net_src)
-         if not m.startswith("loc, role")]
+         if m.strip() and not m.startswith("loc, role")]
 ok("every _waypoint call passes an explicit role",
    all(('"entry"' in c or '"exit"' in c or "role" in c) for c in calls),
    str([c for c in calls if not ('"entry"' in c or '"exit"' in c or "role" in c)]))
@@ -709,6 +769,20 @@ ok("the B5 decision is written down next to the code that implements it",
    "B5" in net_src and "drawn road wins" in net_src)
 ok("the 125% disagreement is cited where the total is computed",
    "125%" in net_src)
+ok("the site marker no longer resolves through _waypoint()",
+   'lat, lon = float(l["lat"]), float(l["lon"])' in net_src)
+# the deploy that looked like a failed deploy: a cached index.html surviving a hard
+# refresh, because FileResponse sends an ETag and no Cache-Control
+ok("the app's index.html is served no-cache",
+   'headers={"Cache-Control": "no-cache"}' in main_src)
+# /map/ had the same exposure and is where it actually bit: a half-upgraded pair,
+# new index.html with the old ipt_segments.js still running
+ok("the map's static files are served no-cache too",
+   "class NoCacheStatic(StaticFiles)" in main_src
+   and 'NoCacheStatic(directory=str(ROOT / "map")' in main_src)
+ok("...via get_response, not the internal file_response hook that fails silently",
+   "async def get_response(self, path, scope)" in main_src
+   and "def file_response" not in main_src)
 
 
 # =========================================================================== #

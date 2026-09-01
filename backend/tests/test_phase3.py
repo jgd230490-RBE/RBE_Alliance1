@@ -96,7 +96,17 @@ _resp.FileResponse = lambda *a, **k: None
 sys.modules.setdefault("fastapi.responses", _resp)
 
 _static = types.ModuleType("fastapi.staticfiles")
-_static.StaticFiles = lambda *a, **k: None
+# a CLASS, not a lambda: main.py subclasses this since the /map/ no-cache fix,
+# and `class X(lambda)` is a TypeError
+class _StaticFiles:
+    def __init__(self, *a, **k):
+        pass
+
+    async def get_response(self, path, scope):
+        return None
+
+
+_static.StaticFiles = _StaticFiles
 sys.modules.setdefault("fastapi.staticfiles", _static)
 
 TMP = tempfile.mkdtemp(prefix="rbe_phase3_")

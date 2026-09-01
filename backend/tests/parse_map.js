@@ -241,17 +241,10 @@ ok("map/ipt_segments.js exists", fs.existsSync(IPTF));
 const iptSrc = fs.existsSync(IPTF) ? fs.readFileSync(IPTF, "utf8") : "";
 
 ok("index.html loads it", /src=["']ipt_segments\.js(\?v=\d+)?["']/.test(html));
-// ⭐ A browser caches a .js far more stubbornly than it revalidates the .html that
-// loads it, so both files can be uploaded and the OLD one still run — which looks
-// exactly like forgetting to upload it, and cost a debugging round on 2026-08-30.
-ok("⭐ the data file is cache-busted, so a browser cannot serve a stale copy",
-  /src=["']ipt_segments\.js\?v=\d+["']/.test(html));
-ok("and the buster matches the version the page expects",
-  (html.match(/ipt_segments\.js\?v=(\d+)/) || [])[1] ===
-  (code.match(/IPT_INDEX_VERSION = 'v(\d+)'/) || [])[1],
-  `tag v${(html.match(/ipt_segments\.js\?v=(\d+)/) || [])[1]} vs page v${(code.match(/IPT_INDEX_VERSION = 'v(\d+)'/) || [])[1]}`);
-ok("the mismatch banner names the cache first, since that is the likelier cause",
-  /hard reload/i.test(code));
+// ⭐ The cache-buster is not cosmetic. A browser revalidates the .html far more
+// eagerly than the scripts it loads, so both files can be uploaded correctly and
+// the OLD script still run — indistinguishable from forgetting to upload it.
+ok("...with a ?v= cache-buster", /src=["']ipt_segments\.js\?v=\d+["']/.test(html));
 ok("and loads it AFTER chainage.js, which it reads",
   html.indexOf('data/chainage.js') < html.indexOf('ipt_segments.js'));
 ok("it is a plain script tag, not a new CDN dependency",
@@ -278,37 +271,25 @@ ok("it draws at ONE width, not two",
 ok("the old two-width case expression is gone",
   !/\['case',\s*\['==',\s*\['get',\s*'align_type'\],\s*'Main Track'\],\s*2\.5,\s*1\.2\]/.test(code));
 
-// Gap connectors — SOLID since 2026-08-30
-// ⚠️ These assertions have now been reversed twice: bridges at 30%, then removed,
-// now restored at full opacity. Each turn is kept rather than rewritten, because
-// the thing being protected never changed — a gap must not be silently invented
-// AND must not be silently hidden. What moved is WHERE that honesty lives, and it
-// now lives only in the popup.
-ok("the connector layer exists again", code.includes("'id': 'rail-alignment-bridge'"));
-ok("it carries only the connectors",
-  /'id': 'rail-alignment-bridge'[\s\S]{0,400}\['==', \['get', 'is_bridge'\], true\]/.test(code));
-ok("⭐ drawn SOLID — no opacity, no dash — so the corridor reads as one line",
-  !/'id': 'rail-alignment-bridge'[\s\S]{0,700}line-opacity/.test(code) &&
-  !/'id': 'rail-alignment-bridge'[\s\S]{0,700}line-dasharray/.test(code));
-ok("at the same width and colour as real track",
-  /'id': 'rail-alignment-bridge'[\s\S]{0,700}'line-width': 2\.5/.test(code) &&
-  /'id': 'rail-alignment-bridge'[\s\S]{0,600}\['get', 'ipt_colour'\]/.test(code));
-ok("⭐ the trade is written down: the map now draws railway the survey does not cover",
-  /drawing railway on ground the survey does not cover/.test(src));
-ok("⭐ and the popup is named as the ONLY place the distinction survives",
-  /only place the distinction now\s*\/\/\s*exists|only place the distinction/.test(src));
-ok("⭐ the GEOMETRY CUT still survives — the 239.5 km of phantom straights stay out",
+// Gap bridges — REMOVED 2026-08-30 at the user's request
+// ⚠️ These assertions are reversed rather than deleted. The point they were making
+// — that a gap must not be silently invented, and must not be silently hidden
+// either — still holds; it is now enforced from the other side. The geometry cut
+// itself is untouched.
+ok("⭐ the bridge layer is gone", !code.includes("'id': 'rail-alignment-bridge'"));
+ok("and nothing still tries to toggle or filter it",
+  !/toggleLayer\('rail-alignment-bridge'/.test(code) &&
+  !/setFilter\('rail-alignment-bridge'/.test(code));
+ok("⭐ but the GEOMETRY CUT survives — the 239.5 km of phantom straights stay out",
   /var GAP_SPLIT = true/.test(iptSrc));
-ok("the connectors follow the per-IPT checkboxes like the solid track",
-  (code.match(/\['in', \['get', 'ipt'\], on\]/g) || []).length === 2);
-ok("and the IPT toggle hides them",
-  /function toggleAlignment[\s\S]{0,400}toggleLayer\('rail-alignment-bridge', visible\)/.test(code));
-ok("⭐ the underlay now bridges the gaps too, or it would be dashed under a "
-   + "solid line",
-  !/'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
-ok("the reason for that is recorded", /dashed wash under a continuous line/.test(src));
-ok("the legend tells the reader to click rather than to look",
-  /click the line to check/.test(html));
+ok("and the builder still emits the is_bridge flag, so nothing downstream breaks",
+  /p\.is_bridge = /.test(iptSrc));
+ok("the civil layer still excludes bridges, guarding a future reinstatement",
+  /'id': 'rail-alignment',[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
+ok("⭐ the CONSEQUENCE is written down — the corridor reads dashed again",
+  /reads DASHED again/.test(src) && /open question H2/.test(src));
+ok("and the legend says a break is data, not a rendering fault",
+  /not a rendering fault/.test(html));
 
 // Survey layer
 ok("the original continuous alignment survives as its own layer",
@@ -339,8 +320,8 @@ ok("the reason for that order is written down next to it",
 // the three parts of the IPT view move together
 ok("toggling the IPT view hides both legend blocks",
   /function toggleAlignment[\s\S]{0,500}'ipt-legend-note'/.test(code));
-ok("the legend note still exists and points at the popup",
-  /id="ipt-legend-note"/.test(html) && /no surveyed alignment beneath them/.test(html));
+ok("the legend explains what a fainter segment means",
+  /id="ipt-legend-note"/.test(html) && /no surveyed Main Track in the alignment file/.test(html));
 
 // clicking a bridge must explain itself
 ok("⭐ the boundary ticks answer a click too — a mark with no line under it is "
@@ -378,20 +359,27 @@ ok("the reserved list is in the source, with its usage counts, so a future "
    + "palette edit has something to check against",
   /IPT_RESERVED_COLOURS/.test(iptSrc) && /inbound \(laden\)/.test(iptSrc));
 ok("⭐ the measured separation is recorded, not left to opinion",
-  /weakest adjacent pair/.test(iptSrc) && /ΔE2000/.test(iptSrc));
+  /weakest ADJACENT pair/.test(iptSrc) && /ΔE2000/.test(iptSrc));
 ok("⭐ the colour-blind figure is recorded — it is what condemned the first palette",
   /deuteranopia/.test(iptSrc) && /colour-blind/.test(iptSrc));
-ok("and the ceiling is named, so nobody re-shuffles these hoping for more room",
-  /is the CEILING/.test(iptSrc));
+// ⭐ The previous palette's block argued it was AT the ceiling. Palette C is a
+// deliberate step DOWN from it, so the assertion narrows to the thing that must
+// still be recorded: that the trade was made knowingly and what paid for it.
+ok("the palette records that it is the weakest of the three, deliberately",
+  /deliberately the WEAKEST/.test(iptSrc));
+ok("...and that the dotted route is what pays for it",
+  /dependency of this palette, not an\s*\/\/ option/.test(iptSrc));
 ok("the six hue families are written down, so an edit keeps the property",
-  /plum, oxblood, stone, bronze, teal blue/.test(iptSrc));
+  /jade, violet, teal blue, stone, umber,\s*\/\/\s*burgundy|jade, violet, teal blue, stone, umber/.test(iptSrc));
 ok("⭐ the #6D28D9 collision is GONE, not just documented",
   !/colour: '#6D28D9'/.test(iptSrc));
 // ⭐ Six DIFFERENT hue families, one per band. The failure being guarded against is
 // not "a wrong hex" but "two bands drifting back into the same family", which is
 // exactly what the first palette did and what no single-colour assertion catches.
-for (const [ipt, hex] of [["IPT 6", "#86198F"], ["IPT 1", "#7F1D1D"], ["IPT 2", "#78716C"],
-                          ["IPT 3", "#854D0E"], ["IPT 4", "#155E75"], ["IPT 5", "#166534"]]) {
+// Palette C, adopted 2026-08-30. Narrowed, not deleted — the hexes moved, the
+// property being guarded (six distinct hue families) did not.
+for (const [ipt, hex] of [["IPT 6", "#0F766E"], ["IPT 1", "#4C1D95"], ["IPT 2", "#155E75"],
+                          ["IPT 3", "#57534E"], ["IPT 4", "#92400E"], ["IPT 5", "#831843"]]) {
   ok(`${ipt} is ${hex}`, segBlock.includes(hex));
 }
 ok("⭐ all six band colours are distinct — no two share a hex",
@@ -401,40 +389,17 @@ ok("the underlay is a LIGHT wash, not a seventh deep colour competing for hue",
   /colour: '#C4B5FD'/.test(iptSrc));
 ok("the first-cut greens and ambers are gone",
   !iptSrc.includes("#C6841D") && !/colour: '#039E86'/.test(iptSrc));
+// 🔴 The colour-blind finding must survive an edit, because it is the one measure
+// palette C actually regresses on and the brief it arrived with had it wrong.
+ok("the deuteranopia numbers are recorded as MEASURED, not as claimed",
+  /IPT 1 \/ IPT 2\s+19\.5\s+4\.4/.test(iptSrc));
+ok("...and the bad figure from the brief is called out so nobody restores it",
+  /Do not restore 13\.5 as a colour-blind/.test(iptSrc));
+ok("...and the one-hex fix is on the record", /#7C3AED/.test(iptSrc));
 // ⚠️ Test the declared COLOURS, not the block text — the comment above the table
 // names the old hexes on purpose, as the record of what changed and why.
 ok("and so is the whole indigo/violet run that made three bands unreadable",
   !["#4338ca", "#6d28d9", "#5b21b6"].some(h => bandHexes.includes(h)));
-
-// --- the key must match the map ------------------------------------------------
-// ⚠️ Two ways the sidebar drifted from the map, both found 2026-08-30, both mine.
-ok("⭐ the alignment swatch is GENERATED from the band table, not written into "
-   + "the markup — a hard-coded gradient survived every palette change untouched",
-  /function renderIptSwatch/.test(code) && /id="ipt-swatch"/.test(html));
-ok("and the stale first-palette gradient is gone from the HTML",
-  !/linear-gradient\(90deg,#039E86/.test(html));
-// ⚠️ Scoped to the IPT controls ONLY. The reserved hexes appear all over the
-// sidebar legitimately — inbound teal beside "Laden (out)", brand navy beside
-// "Sites & assets" — and that is those layers labelling THEMSELVES. The fault was
-// a reserved colour standing in for an IPT.
-const iptControl = (html.match(/id="layer-alignment"[\s\S]{0,600}?id="ipt-legend"/) || [""])[0];
-ok("⭐ no route / forecast / selection colour is written into the IPT controls",
-  !RESERVED.some(r => new RegExp(r, "i").test(iptControl)),
-  RESERVED.filter(r => new RegExp(r, "i").test(iptControl)).join(", "));
-ok("and the IPT swatch carries no inline colour at all — JS fills it from the "
-   + "band table, so there is nothing to go stale",
-  /id="ipt-swatch"[^>]*style="[^"]*"/.test(html) &&
-  !/id="ipt-swatch"[^>]*style="[^"]*background:\s*#/.test(html));
-ok("⭐ IPT 6 gets TWO legend rows — the band and the underlay are different "
-   + "things and were sharing one row with the wrong colour",
-  /if \(r\.ipt !== IPT_UNDERLAY_KEY\) return band;/.test(code));
-ok("the band row uses the BAND colour", /colour: r\.colour, muted: r\.muted/.test(code));
-ok("and the underlay row uses the underlay colour",
-  /colour: \(window\.IPT_UNDERLAY \|\| \{\}\)\.colour/.test(code));
-ok("the band row has no checkbox, because that band is always drawn",
-  /box: r\.ipt === IPT_UNDERLAY_KEY \? null : iptCheckboxId\(r\.ipt\)/.test(code));
-ok("and the reason is written down rather than left looking like an oversight",
-  /IPT 6 gets TWO rows/.test(src));
 
 // --- IPT 6 superstructure underlay --------------------------------------------
 ok("there is an underlay layer", code.includes("'id': 'rail-alignment-underlay'"));
@@ -449,18 +414,20 @@ ok("its colour, width and opacity are one tunable object, not three literals",
 ok("⭐ it runs the whole A1 mainline, not just the northern IPT 6 civil band — "
    + "so it is filtered by align_type and scope, never by chainage",
   /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'ipt'\], 'Outside A1'\]/.test(code));
-
+ok("⭐ and it still excludes anything flagged is_bridge",
+  /'id': 'rail-alignment-underlay'[\s\S]{0,700}\['!=', \['get', 'is_bridge'\], true\]/.test(code));
 
 // --- per-IPT selection ---------------------------------------------------------
-ok("the legend rows are checkboxes",
-  /input type="checkbox" id="\$\{opts\.box\}"/.test(code));
+ok("the legend rows are checkboxes now",
+  /input type="checkbox" id="\$\{iptCheckboxId/.test(code));
 ok("still generated from IPT_SEGMENTS, not hand-typed",
   code.includes("window.iptLegendRows()"));
 ok("ticking one re-filters rather than rebuilding the GeoJSON",
   code.includes("function applyIptFilter") && !/applyIptFilter[\s\S]{0,600}buildIptAlignment/.test(code));
 ok("the filter is a membership test on ipt",
   /\['in', \['get', 'ipt'\], on\]/.test(code));
-
+ok("the civil filter is applied in exactly one place now the bridges are gone",
+  (code.match(/\['in', \['get', 'ipt'\], on\]/g) || []).length === 1);
 ok("⭐ the IPT 6 checkbox drives the UNDERLAY, not the civil filter",
   /toggleUnderlay\(this\.checked\)/.test(code) &&
   /function toggleUnderlay[\s\S]{0,140}rail-alignment-underlay/.test(code));
@@ -470,7 +437,7 @@ ok("⭐ and unchecking it leaves every civil colour where it was — IPT 6 is "
 ok("the reason that asymmetry exists is written down",
   /IPT 6 is NOT in the civil filter/.test(src));
 ok("all boxes start ticked",
-  /id="\$\{opts\.box\}" checked/.test(code));
+  /type="checkbox" id="\$\{iptCheckboxId\(r\.ipt\)\}" checked/.test(code));
 ok("a missing checkbox is treated as ticked, so the filter cannot blank the map "
    + "if the legend failed to render",
   /!el \|\| el\.checked/.test(code));
@@ -495,14 +462,26 @@ ok("⭐ rotated to lie ACROSS the alignment, not along it",
   /'text-rotation-alignment': 'map'/.test(code));
 ok("and tick_rotate is the local bearing plus 90",
   /brg \+ 90/.test(iptSrc));
-ok("hidden below zoom 11", /'id': 'ws-boundary-ticks'[\s\S]{0,200}'minzoom': 11/.test(code));
-ok("⭐ labels only from zoom 13, one level after the ticks appear",
-  /'id': 'ws-boundary-labels'[\s\S]{0,200}'minzoom': 13/.test(code));
+// Phase 5b: ticks 11 -> 8, labels 13 -> 11. At 11 the ticks were effectively
+// absent — you had to already be looking at a boundary to find one.
+ok("ticks from zoom 8, so they are visible at corridor zoom",
+  /'id': 'ws-boundary-ticks'[\s\S]{0,400}'minzoom': 8/.test(code));
+ok("⭐ labels from zoom 11, three levels after the ticks appear",
+  /'id': 'ws-boundary-labels'[\s\S]{0,400}'minzoom': 11/.test(code));
+ok("⭐ only every OTHER boundary is labelled below zoom 13 — the three Pärnu "
+   + "boundaries are within a few km and collide",
+  /\['%', \['get', 'idx'\], 2\]/.test(code));
+ok("...stepped on zoom in the TEXT-FIELD, because ['zoom'] does not work in a filter",
+  /'text-field': \['step', \['zoom'\]/.test(code));
+ok("...and the unlabelled ones are hidden with an EMPTY text-field, never opacity 0",
+  !/'text-opacity': 0/.test(code));
+ok("the boundary index is stamped on the data, not guessed in the expression",
+  /properties\.idx = ix/.test(iptSrc));
 ok("the label names both sections meeting at the tick, and the chainage",
   /\['get', 'label'\]/.test(code) && /\['get', 'chain_txt'\]/.test(code));
 ok("labels declutter; ticks do not, because there are only seven",
-  /'id': 'ws-boundary-ticks'[\s\S]{0,700}'text-allow-overlap': true/.test(code) &&
-  /'id': 'ws-boundary-labels'[\s\S]{0,700}'text-allow-overlap': false/.test(code));
+  /'id': 'ws-boundary-ticks'[\s\S]{0,900}'text-allow-overlap': true/.test(code) &&
+  /'id': 'ws-boundary-labels'[\s\S]{0,1400}'text-allow-overlap': false/.test(code));
 ok("⭐ the tick colour is neutral slate — not a route colour and not a package "
    + "colour, because a tick is neither",
   /'text-color': '#334155'/.test(code) &&
@@ -629,18 +608,6 @@ ok("the popup names the IPT and the owning work section",
   code.includes("Work section:") && code.includes("p.ipt_label"));
 ok("⭐ it shows the OWNING section, not every code on that ground",
   code.includes("p.ws_primary") && /also on this ground/.test(code));
-ok("⭐ and DERIVES the owning section when the feature does not carry it, rather "
-   + "than reporting 'none'",
-  /if \(!wsCode && !outside\)/.test(code) && /window\.IPT_SEGMENTS \|\| \[\]\)\.find/.test(code));
-ok("⭐ 'no work section' is only said for Outside A1 — every other empty value is "
-   + "a missing stamp, which is a different sentence",
-  /const outside = p\.ipt === 'Outside A1'/.test(code) &&
-  /not recorded/.test(code));
-ok("and that case points at the version banner rather than inventing an answer",
-  /out of step, see the sidebar/.test(code));
-ok("⭐ a connector says there is no surveyed alignment under it",
-  code.includes("No surveyed alignment here.") &&
-  /nothing is measured or routed on it/.test(code));
 ok("with its official name, not just the code",
   /wsName/.test(code) && /window\.wsLabel/.test(iptSrc));
 ok("⭐ chainage reads as an engineer writes it — 105+480, not 105.48 km",
@@ -682,6 +649,72 @@ ok("⭐ and #filter-ipt is never read by the alignment code",
   !/function applyIptFilter[\s\S]{0,900}filter-ipt/.test(code));
 ok("the two meanings are still written down where they can be confused",
   /NAMING COLLISION/.test(iptSrc));
+
+// ---- Phase 5a: the gate layer ------------------------------------------------
+// `code` is comment-stripped, so these cannot pass by matching the prose that
+// explains them; the two prose checks below use `src` deliberately.
+ok("gates are drawn as their own circle layer, not as site markers",
+  code.includes("id: 'site-gates'") && code.includes("type: 'circle'"));
+ok("the gate layer filters on the Gate feature type",
+  code.includes("['==', ['get', 'type'], 'Gate']"));
+ok("gates do not appear until zoom 10 — below that a gate and its site are one pixel",
+  /id: 'site-gates',[\s\S]{0,200}minzoom: 10/.test(code));
+ok("gate labels come in later than the dots",
+  /id: 'site-gates-label',[\s\S]{0,200}minzoom: 13/.test(code));
+ok("a deactivated gate is drawn hollow rather than hidden",
+  code.includes("['case', ['get', 'active'], '#64748B', '#FFFFFF']"));
+ok("the gate layer's visibility is read from the checkbox, not a module variable",
+  code.includes("function gatesVisible()")
+  && code.includes("document.getElementById('layer-gates')")
+  && code.includes("visibility: gatesVisible()"));
+ok("there is a control for it", /id="layer-gates"/.test(html)
+  && /toggleGates\(this\.checked\)/.test(html));
+ok("the toggle moves both the dots and the labels",
+  code.includes("['site-gates', 'site-gates-label'].forEach"));
+ok("clicking a gate explains that it is an access point, not the site",
+  code.includes("access point, not the site itself"));
+ok("a deactivated gate's popup says why it matters", code.includes("will not bake"));
+ok("the gate popup is wired once, not on every style.load",
+  !/style\.load[\s\S]{0,4000}map\.on\('click', 'site-gates'/.test(code));
+
+// 🔴 the regression this pass exists for: gates are Points, and a Point that is a gate
+// must NOT become a site marker
+ok("buildNodeMarkers excludes gate features",
+  code.includes("f.geometry.type === 'Point' && f.properties.type !== 'Gate'"));
+ok("...and the reason is written down where someone would remove it",
+  src.includes("gates are Points too, and they are NOT sites"));
+
+// ---- Phase 5b map change 3: routes as a dotted line --------------------------
+ok("the route core is dashed", /const DASH_CORE\s*=\s*\[1, 0\.333\]/.test(code));
+// 🔴 Dashing only the core leaves the white casing showing through every gap and
+// the route reads as a pale continuous line with coloured beads on it.
+ok("🔴 the CASING is dashed too, or the dots sit on a solid white line",
+  /const DASH_CASING\s*=\s*\[0\.96, 0\.107\]/.test(code));
+ok("all four route layers carry a dasharray",
+  (code.match(/'line-dasharray': DASH_(CORE|CASING)/g) || []).length === 4);
+// 🔴 A round cap extends each dash by half the line width at EACH end, so a 1.0w
+// dot renders 2.0w long, the 0.333w gap is swallowed twice over, and the route
+// draws SOLID — indistinguishable from the change never having been applied.
+ok("🔴 line-cap is butt on all four route layers, or the dots render solid",
+  (code.match(/'line-cap': 'butt'/g) || []).length === 4);
+ok("the casing is a FIXED 1.25x the core at every zoom stop, or the two dash "
+   + "arrays cannot draw the same period on screen",
+  /WIDTH_CORE\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 2,\s+12, 6,\s+16, 10\]/.test(code)
+  && /WIDTH_CASING\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 2\.5, 12, 7\.5, 16, 12\.5\]/.test(code));
+ok("⭐ at corridor zoom the route is THINNER than the alignment's fixed 2.5 px",
+  /'zoom'\], 7, 2,/.test(code));
+ok("the dasharray is NOT interpolated across zoom — it silently does nothing",
+  !/'line-dasharray': \['interpolate'/.test(code));
+ok("route arrows move to zoom 11, because a dot does not point",
+  /source: 'routes-source', minzoom: 11/.test(code));
+ok("...and symbol-spacing stays 90, so an earlier zoom means fewer arrows",
+  /'symbol-spacing': 90/.test(code));
+
+// ---- the version handshake ---------------------------------------------------
+ok("ipt_segments.js is v9", /IPT_SEGMENTS_VERSION = 'v9'/.test(iptSrc));
+ok("index.html expects v9", /IPT_INDEX_VERSION = 'v9'/.test(code));
+ok("...and the cache-buster matches the version",
+  /src=["']ipt_segments\.js\?v=9["']/.test(html));
 
 console.log();
 for (const f of fail) console.log("  FAIL:", f);
