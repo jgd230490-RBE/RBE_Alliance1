@@ -182,6 +182,14 @@
              route, no geometry, so there is nothing real to draw. Returns in Phase 4 as
              drawn polylines edited on the route itself. -->
         <div class="control-item"><label><input type="checkbox" id="layer-temp" checked onchange="toggleTempHaul(this.checked)"> Temporary haul</label><span class="color-dot" style="background:#C2790B;"></span></div>
+        <!-- Every other option HERE returned for a route. Context, not content:
+             drawn under both carriageways, thin, solid and translucent so a planner
+             can see a route had choices without the choices competing with it.
+             OFF by default — 107 routes with up to two alternatives each on both
+             legs is a lot of line, and this answers a question nobody asks
+             continuously. -->
+        <div class="control-item"><label><input type="checkbox" id="layer-alts" onchange="toggleAlts(this.checked)"> Alternative routes</label><span class="color-dot" style="background:#94a3b8; opacity:.6;"></span></div>
+        <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span id="alts-note" style="font-size:10.5px;color:#8a9099;">loading…</span></div>
     </div>
 
     <!-- Phase 2.5a — Estonian Transport Administration restriction layers, proxied and
@@ -250,6 +258,9 @@
     // alignment.js and chainage.js are unaffected — they are surveyed reference
     // geometry, not haul routes, and still load statically.
     let a1_data = { type: 'FeatureCollection', features: [] };
+    // Route alternatives, fetched separately and kept separately. Empty until the
+    // second fetch lands; the layer simply draws nothing until then.
+    let alts_data = { type: 'FeatureCollection', features: [] };
     const alignment_data = window.alignment_data;
     const chainage_global_data = window.chainage_global_data;
 
@@ -434,6 +445,26 @@
     // vehicles legitimately route differently, so the backend picks the default profile
     // where it is baked, falls back to any profile that is, and NAMES the vehicle it
     // used on every feature. Nothing here silently mixes vehicles without saying so.
+    async function loadAlternatives(){
+        try {
+            const r = await fetch(CONFIG.API_BASE + '/public/route-alternatives');
+            if(!r.ok) throw new Error('route-alternatives ' + r.status);
+            alts_data = await r.json();
+            const src = map.getSource('route-alts-source');
+            if (src) src.setData(alts_data);
+            const n = (alts_data.features || []).length;
+            const note = document.getElementById('alts-note');
+            if (note) note.textContent = n
+                ? n + ' alternative leg(s) HERE offered but the plan does not use'
+                : 'none baked — a route through a haul road has no alternatives';
+            console.log('[alts] ' + n + ' alternative geometries');
+        } catch(e){
+            console.warn('route alternatives unavailable', e);
+            const note = document.getElementById('alts-note');
+            if (note) note.textContent = 'could not be loaded';
+        }
+    }
+
     async function loadNetwork(){
         const r = await fetch(CONFIG.API_BASE + '/public/map-data');
         if(!r.ok) throw new Error('map-data ' + r.status);
@@ -571,6 +602,15 @@
 
     map.on('style.load', () => {
         if (!map.getSource('routes-source')) map.addSource('routes-source', { type: 'geojson', data: a1_data });
+        // ⚠️ ITS OWN SOURCE, and that is the whole point. Five separate things walk
+        // routes-source per feature matching "LineString with a route_id" — the KPI
+        // count, the leg filters, buildRouteInfo(), the forecast timeline's
+        // is_forecast stamping and the route-highlight lookup. An alternative in
+        // that collection would make a route's distance jump to whichever option is
+        // longest and would be painted as a forecast route. Zones were kept out of
+        // that endpoint for the same reason in Phase 3.
+        if (!map.getSource('route-alts-source')) map.addSource('route-alts-source',
+            { type: 'geojson', data: alts_data });
         if (!map.getSource('alignment-source')) map.addSource('alignment-source', { type: 'geojson', data: iptAlignmentData() });
         // the untouched survey geometry, its own source so the IPT layer's cuts and
         // bridges cannot affect what this draws
@@ -617,8 +657,11 @@
         // 2026-09-01: another ~15% off, at the user's request after seeing it live.
         // The 1.25x casing ratio is preserved at every stop — see below for why it
         // has to be.
-        const WIDTH_CORE   = ['interpolate', ['linear'], ['zoom'], 7, 1.7,  12, 5,    16, 8.5];
-        const WIDTH_CASING = ['interpolate', ['linear'], ['zoom'], 7, 2.13, 12, 6.25, 16, 10.6];
+        // 2026-09-01, second thinning: another 20% off the core. The casing keeps the
+        // fixed 1.25x ratio — it is not decoration, it is what makes the two dash
+        // arrays draw the same period on screen.
+        const WIDTH_CORE   = ['interpolate', ['linear'], ['zoom'], 7, 1.36, 12, 4,   16, 6.8];
+        const WIDTH_CASING = ['interpolate', ['linear'], ['zoom'], 7, 1.7,  12, 5,   16, 8.5];
 
         // The dash pattern, in multiples of each layer's own width, chosen so both
         // layers draw the SAME period on screen (1.333 x core width):
@@ -681,9 +724,52 @@
         //
         // ⚠️ Width and dash stay coupled: the array is in width multiples, so
         // changing line-width rescales the dots and gaps with it.
-        const DASH_CORE   = [1, 0.45];
-        const DASH_CASING = [0.96, 0.2];
+        // ⚠️ The gap ratio moved 0.45 -> 0.55 WITH the thinning, and it had to.
+        // The array is in width multiples, so a 20% thinner line is a 20% smaller
+        // gap: at the new 1.36 px zoom-7 width, 0.45 gives 0.61 px, which is where a
+        // dashed line aliases back to solid. 0.55 holds it at 0.75 px — about what
+        // it was before this thinning. The cost is at close zoom, where the dots are
+        // now spaced a little wider than the agreed 3:1.
+        //
+        //            core          casing
+        //   width      w            1.25w
+        //   dash      1.0w          1.2w      (0.1w of halo past each dot end)
+        //   gap       0.55w         0.28w
+        //   period    1.55w         1.55w     ✓
+        const DASH_CORE   = [1, 0.55];
+        const DASH_CASING = [0.96, 0.28];
 
+
+        // ===== Route alternatives ============================================
+        // Every non-primary option HERE returned, as a thin translucent grey line.
+        //
+        // ADDED FIRST, because add order is z-order and these must sit UNDER both
+        // carriageways: they are context, not content. A planner should see that a
+        // route had options without the options competing with the route.
+        //
+        // Solid, not dotted, and deliberately: the dots are what say "this is a
+        // haul route". An alternative drawn dotted would read as another one.
+        // Grey #94a3b8 is the same muted slate 'Outside A1' uses — the map's
+        // established colour for "real, and not the subject".
+        //
+        // No casing. A halo is what lifts a line off the basemap, and lifting these
+        // off the basemap is the opposite of what they are for.
+        //
+        // ⚠️ Not in the KPI count, not in the leg toggles, not in the forecast
+        // timeline. Its own source, its own checkbox, and `type` is
+        // 'Route Alternative' rather than either Highway string on purpose.
+        if (!map.getLayer('route-alt-lines')) map.addLayer({
+            'id': 'route-alt-lines',
+            'type': 'line',
+            'source': 'route-alts-source',
+            'layout': { visibility: altsVisible() ? 'visible' : 'none',
+                        'line-cap': 'round', 'line-join': 'round' },
+            'paint': {
+                'line-color': '#94a3b8',
+                'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.8, 12, 2.2, 16, 3.6],
+                'line-opacity': 0.45,
+            },
+        });
 
         // ⚠️ LAYER ADD ORDER IS Z-ORDER. Outbound is added FIRST so that inbound
         // (laden, out) draws ON TOP of it. The laden leg is the one the network is
@@ -1351,6 +1437,11 @@
         const src = map.getSource('routes-source');
         if (src) src.setData(a1_data);
 
+        // Alternatives are a second, independent fetch. Off the critical path on
+        // purpose: if it fails the map is exactly as it was, minus a grey underlay.
+        // Not awaited before the rest renders, for the same reason.
+        loadAlternatives();
+
         populateFilters();
         buildNodeMarkers();
         buildRouteInfo();
@@ -1706,6 +1797,16 @@
     // Phase 5a. Read from the checkbox, never from a module variable — a basemap switch
     // re-runs style.load and re-adds every layer, and a variable that drifted from the
     // control would silently restore a layer the user had turned off.
+    // read from the checkbox, never a module variable — style.load re-adds every
+    // layer on a basemap switch and a variable that drifted would restore a layer
+    // the user had turned off
+    function altsVisible() {
+        const cb = document.getElementById('layer-alts');
+        return !!(cb && cb.checked);
+    }
+
+    function toggleAlts(visible) { toggleLayer('route-alt-lines', visible); }
+
     function gatesVisible() {
         const cb = document.getElementById('layer-gates');
         return !cb || cb.checked;
