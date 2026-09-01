@@ -1379,13 +1379,55 @@ def diagnostics_streetview(lat: Optional[float] = None, lon: Optional[float] = N
 
 
 # ------------------------------------------------------------------ static
+class NoCacheStatic(StaticFiles):
+    """StaticFiles that revalidates instead of trusting the browser's guess.
+
+    Same fault as GET / had, and the same fix. Starlette sends an ETag and no
+    Cache-Control, so Chrome applies its own freshness heuristic and can serve a
+    stale map/index.html or ipt_segments.js straight through a hard refresh —
+    which on 2026-08-30 looked exactly like a failed deploy for an hour, and on
+    the map specifically produced a HALF-upgraded pair: new index.html, old JS.
+
+    `no-cache`, NOT `no-store`. The browser still revalidates with its ETag and
+    still gets a 304 when nothing changed, so map/data/alignment.js — 8.8 MB — is
+    re-downloaded only when it has actually changed. no-store would re-fetch it
+    on every page load.
+
+    ⚠️ This does NOT replace the ?v= cache-buster on ipt_segments.js. That guards
+    the same failure one layer up and costs nothing; belt and braces is the right
+    number of mechanisms for a bug that has now bitten twice.
+    """
+
+    # get_response() is the documented override point and has been stable across
+    # Starlette versions. `file_response()` is the more obvious hook and is the
+    # WRONG one to use here: it is internal, its signature has changed, and a
+    # subclass that overrides a method the installed version no longer calls adds
+    # no header and raises no error — it fails exactly as silently as the bug it
+    # is meant to fix.
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        try:
+            resp.headers["Cache-Control"] = "no-cache"
+        except Exception:
+            pass          # never let a header failure 500 the map
+        return resp
+
+
 # Map (Mapbox app) at /map/ ; must be mounted before the catch-all "/".
-app.mount("/map", StaticFiles(directory=str(ROOT / "map"), html=True), name="map")
+app.mount("/map", NoCacheStatic(directory=str(ROOT / "map"), html=True), name="map")
 
 
 @app.get("/")
 def frontend_index():
-    return FileResponse(str(ROOT / "frontend" / "index.html"))
+    # no-cache, NOT no-store: the browser still revalidates with its ETag and still gets
+    # a 304 when nothing has changed, so a normal load costs the same as before. Without
+    # it Starlette sends an ETag with no Cache-Control, Chrome applies its own freshness
+    # heuristic, and a deployed index.html can stay invisible behind a cached copy that
+    # survives Ctrl+Shift+R. That cost an hour on 2026-08-30 and looked exactly like a
+    # failed deploy: the new API answered, the new page did not appear, and the repo,
+    # the build and the commit were all correct.
+    return FileResponse(str(ROOT / "frontend" / "index.html"),
+                        headers={"Cache-Control": "no-cache"})
 
 
 if __name__ == "__main__":

@@ -739,10 +739,18 @@ def public_map_data(profile=None):
             aux += f"<p style='margin:4px 0;'><b>Vendor:</b> {l['vendor']}</p>"
         if l.get("detail"):
             aux += f"<p style='margin:4px 0;'><b>Detail:</b> {l['detail']}</p>"
-        # the marker is drawn at the point trucks arrive by, which is what the popup's
-        # "routes via" line has always meant. With no gates recorded this is the legacy
-        # pair and then the node itself, exactly as before 5a.
-        lat, lon = _waypoint(l, "entry")
+        # 🔴 The marker is the SITE, at the site's own coordinate — never a gate.
+        #
+        # This used to call _waypoint(), which resolves to the access point. That was
+        # invisible while almost no location had a gate recorded, and wrong the moment
+        # one did: creating a gate visibly moved the quarry on the public map. A site
+        # marker that walks to wherever someone last clicked a gate is not a site
+        # marker. Gates are their own features below, drawn as their own layer.
+        #
+        # Consequence, and it is correct rather than a defect: a route line now starts
+        # at the gate dot and not at the site marker, because that is where the truck
+        # actually joins the road. The two being in different places is the information.
+        lat, lon = float(l["lat"]), float(l["lon"])
         feats.append({
             "type": "Feature",
             "properties": {
@@ -759,6 +767,39 @@ def public_map_data(profile=None):
             },
             "geometry": {"type": "Point", "coordinates": [lon, lat]},
         })
+
+    # Phase 5a — gates as their own features, so the map can draw the access points
+    # separately from the sites they belong to. Reference geometry: nothing here
+    # changes routing, and a map with the gate layer switched off is the map as it was.
+    #
+    # Deactivated gates are emitted too, flagged rather than dropped. A gate that has
+    # been turned off is why a route refuses to bake, and a planner looking at the map
+    # to work out why needs to see it — an absent dot explains nothing.
+    try:
+        for g in gates.list_gates():
+            loc = locs.get(g["location_id"], {}) or {}
+            feats.append({
+                "type": "Feature",
+                "properties": {
+                    "type": "Gate",
+                    "gate_id": g["id"],
+                    "name": g["name"] or g["id"],
+                    "location_id": g["location_id"],
+                    # NOT called 'origin' or 'dest': populateFilters() on the map sweeps
+                    # every feature for those two keys to build its dropdowns, and a gate
+                    # is not a routable endpoint
+                    "location_name": loc.get("name") or g["location_id"],
+                    "direction": g["direction"],
+                    "active": bool(g["active"]),
+                    "is_default": bool(g["is_default"]),
+                    "safety_minutes": g.get("safety_minutes"),
+                    "internal_travel_minutes": g.get("internal_travel_minutes"),
+                },
+                "geometry": {"type": "Point",
+                             "coordinates": [float(g["lon"]), float(g["lat"])]},
+            })
+    except Exception:
+        pass   # location_gates may not exist yet on a cold database
 
     return {"type": "FeatureCollection", "features": feats}
 
