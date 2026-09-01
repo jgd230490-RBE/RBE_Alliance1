@@ -149,7 +149,7 @@
              colours are defined. -->
         <div class="control-item"><label><input type="checkbox" id="layer-alignment" checked onchange="toggleAlignment(this.checked)"> Rail alignment (by IPT)</label><span class="color-dot" style="background:linear-gradient(90deg,#039E86,#003787,#0E7490,#C6841D,#BF2E55); border-radius:0; width:13px; height:3px;"></span></div>
         <div id="ipt-legend" style="padding-left:23px;margin:-2px 0 4px;"></div>
-        <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Breaks in the line = no surveyed Main Track in the alignment file, not a rendering fault.</div>
+        <div id="ipt-legend-note" style="padding-left:23px;margin:-2px 0 6px;font-size:10.5px;color:#8a9099;line-height:1.45;">Drawn continuously. ~60&nbsp;km has no surveyed Main Track in the alignment file and is interpolated &mdash; click the line to see whether a stretch is measured.</div>
         <div class="control-item"><label><input type="checkbox" id="layer-ws-bounds" checked onchange="toggleWsBounds(this.checked)"> Work section boundaries</label><span class="color-dot" style="background:#334155; border-radius:0; width:3px; height:13px;"></span></div>
         <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">7 package edges · ticks from zoom 11, labels from 13</span></div>
         <!-- The alignment as it was drawn before the IPT overlay: every track type, one
@@ -356,8 +356,10 @@
     function applyIptFilter() {
         const on = ['literal', checkedIpts()];
         if (map.getLayer('rail-alignment')) {
+            // ⚠️ must match the layer's own filter above, minus the IPT clause. When
+            // these two drifted apart, ticking a checkbox silently reinstated the
+            // gaps the layer definition had just closed.
             map.setFilter('rail-alignment', ['all',
-                ['!=', ['get', 'is_bridge'], true],
                 ['==', ['get', 'align_type'], 'Main Track'],
                 ['in', ['get', 'ipt'], on]]);
         }
@@ -506,10 +508,19 @@
             inVis ? ['all', ['==', ['get', 'type'], 'Inbound Highway'], ...filterArr.slice(1)] : none);
         if (map.getLayer('outbound-lines')) map.setFilter('outbound-lines',
             outVis ? ['all', ['==', ['get', 'type'], 'Outbound Highway'], ...filterArr.slice(1)] : none);
-        // arrows carry the same filter as the line they belong to
-        if (map.getLayer('inbound-arrows')) map.setFilter('inbound-arrows',
+        // 🔴 THE CASINGS MUST CARRY THE SAME FILTER AS THE LINE THEY SIT UNDER.
+        //
+        // Found 2026-09-01 while removing the arrow layers, which is what used to be
+        // filtered here. The two casing layers never were: filtering to one origin
+        // hid the coloured cores and left EVERY other route's white casing drawn.
+        // On a light basemap a solid white line under nothing is easy to miss, which
+        // is presumably why it survived since Phase 2.5a — but the casings are dashed
+        // now, and a filtered-out route leaves a trail of white dots behind it.
+        //
+        // Pre-existing, not caused by the dotted restyle; made visible by it.
+        if (map.getLayer('inbound-lines-casing')) map.setFilter('inbound-lines-casing',
             inVis ? ['all', ['==', ['get', 'type'], 'Inbound Highway'], ...filterArr.slice(1)] : none);
-        if (map.getLayer('outbound-arrows')) map.setFilter('outbound-arrows',
+        if (map.getLayer('outbound-lines-casing')) map.setFilter('outbound-lines-casing',
             outVis ? ['all', ['==', ['get', 'type'], 'Outbound Highway'], ...filterArr.slice(1)] : none);
     }
 
@@ -573,8 +584,11 @@
         //    7.5, clearing by 0.5 px. At k = 1.4 the casings would be 8.4 px and would
         //    OVERLAP. The old casing (7 px) cleared by 1.0 px, so this does tighten it
         //    — worth a look at zoom 11–13 where two routes run parallel.
-        const WIDTH_CORE   = ['interpolate', ['linear'], ['zoom'], 7, 2,   12, 6,   16, 10];
-        const WIDTH_CASING = ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 7.5, 16, 12.5];
+        // 2026-09-01: another ~15% off, at the user's request after seeing it live.
+        // The 1.25x casing ratio is preserved at every stop — see below for why it
+        // has to be.
+        const WIDTH_CORE   = ['interpolate', ['linear'], ['zoom'], 7, 1.7,  12, 5,    16, 8.5];
+        const WIDTH_CASING = ['interpolate', ['linear'], ['zoom'], 7, 2.13, 12, 6.25, 16, 10.6];
 
         // The dash pattern, in multiples of each layer's own width, chosen so both
         // layers draw the SAME period on screen (1.333 x core width):
@@ -601,8 +615,27 @@
         // ⚠️ Width and dash are coupled: because the array is in width multiples,
         //    changing line-width rescales the dots and gaps with it. Usually what you
         //    want, but the three numbers cannot be retuned independently.
-        const DASH_CORE   = [1, 0.333];
-        const DASH_CASING = [0.96, 0.107];
+        // ⚠️ THINNER LINES MAKE THE GAP SMALLER, because the array is in width
+        // multiples. At the old zoom-7 width of 2 px the gap was 0.67 px; at 1.7 px
+        // it would be 0.57 px, which is where a dashed line starts aliasing to solid
+        // — at exactly the zoom this change exists for. So the array is STEPPED: a
+        // proportionally wider gap below zoom 10, the design value above it.
+        //
+        //   below z10   core dash 1.0w, gap 0.6w   -> 1.02 px gap at z7. period 1.6w
+        //   from z10    core dash 1.0w, gap 0.333w -> the agreed 3:1 dot spacing
+        //
+        // The casing arrays are the same pattern converted into CASING width units
+        // (divide by 1.25) with 0.1w of halo past each dot end, so both layers draw
+        // the same period on screen at every zoom:
+        //
+        //   below z10   dash (1.0w + 0.2w)/1.25w = 0.96 , period 1.6w/1.25w = 1.28
+        //               -> gap 1.28 - 0.96 = 0.32
+        //   from z10    dash 0.96, period 1.333/1.25 = 1.067 -> gap 0.107
+        //
+        // ⚠️ ['step'] is the ONLY thing that works here. `line-dasharray` cannot be
+        // interpolated across zoom — a smooth ramp silently does nothing.
+        const DASH_CORE   = ['step', ['zoom'], [1, 0.6],    10, [1, 0.333]];
+        const DASH_CASING = ['step', ['zoom'], [0.96, 0.32], 10, [0.96, 0.107]];
 
 
         // ⚠️ LAYER ADD ORDER IS Z-ORDER. Outbound is added FIRST so that inbound
@@ -747,40 +780,24 @@
                      'text-halo-width': 1.6 },
         });
 
-        // Direction of travel, from zoom 12 in. symbol-placement 'line' repeats the
-        // glyph along the geometry and rotates it to the bearing, so laden-out and
-        // empty-back read as opposite flows rather than two parallel lines.
-        ['inbound', 'outbound'].forEach(dir => {
-            const id = dir + '-arrows';
-            if (map.getLayer(id)) return;
-            map.addLayer({
-                // Phase 5b: 12 -> 11. A dot does not point, so the arrows stay and
-                // arrive one level earlier to carry the direction the dashes cannot.
-                // symbol-spacing stays 90 px: a zoom earlier means the route is shorter
-                // on screen, so the same spacing yields FEWER arrows — punctuation
-                // rather than a crowd.
-                // ⚠️ zoom 11 now switches on two things at once, arrows and work-section
-                // labels. Different features so they should not compete, but it is the
-                // busiest threshold in this design and worth one look on the live map.
-                id, type: 'symbol', source: 'routes-source', minzoom: 11,
-                filter: ['==', ['get', 'type'],
-                         dir === 'inbound' ? 'Inbound Highway' : 'Outbound Highway'],
-                layout: {
-                    'symbol-placement': 'line',
-                    'symbol-spacing': 90,
-                    'text-field': '▶',
-                    'text-size': 11,
-                    'text-keep-upright': false,
-                    'text-allow-overlap': false,
-                    'text-offset': [0, dir === 'inbound' ? -0.35 : 0.35],
-                },
-                paint: {
-                    'text-color': dir === 'inbound' ? '#039E86' : '#f59e0b',
-                    'text-halo-color': '#ffffff',
-                    'text-halo-width': 1.4,
-                },
-            });
-        });
+        // ===== Direction of travel — REMOVED 2026-09-01 ======================
+        // The inbound/outbound arrow symbol layers were deleted at the user's
+        // request after seeing the dotted routes live.
+        //
+        // ⚠️ WHAT WENT WITH THEM. Nothing on this map now indicates which way a
+        // route runs. A dot does not point, and the arrows were the whole of the
+        // direction channel — they shipped in the nine quick fixes precisely
+        // because the solid lines did not read as two flows. What remains is
+        // COLOUR (green laden-out, amber empty-back, both in the sidebar legend)
+        // and the ±4 px offset, which separates the two carriageways without
+        // saying which is which.
+        //
+        // ⭐ There is no cost to putting them back — the layers were self-contained
+        // and are recorded in git. If direction is ever wanted again, restore this
+        // block rather than inventing a new mechanism.
+        //
+        // Asserted GONE in parse_map.js rather than deleted from the tests, so a
+        // future edit cannot quietly reintroduce a layer this decision removed.
 
         // ===== Alignment =====================================================
         // Four layers over two sources, and the ADD ORDER IS THE Z-ORDER:
@@ -816,8 +833,9 @@
         map.addLayer({
             'id': 'rail-alignment-underlay', 'type': 'line', 'source': 'alignment-source',
             'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' },
-            'filter': ['all', ['!=', ['get', 'is_bridge'], true],
-                              ['==', ['get', 'align_type'], 'Main Track'],
+            // bridges included here too — an underlay with holes under a continuous
+            // civil line reads as a rendering fault rather than as missing data
+            'filter': ['all', ['==', ['get', 'align_type'], 'Main Track'],
                               ['!=', ['get', 'ipt'], 'Outside A1']],
             'paint': {
                 'line-color': (window.IPT_UNDERLAY || {}).colour || '#5B21B6',
@@ -858,8 +876,24 @@
         map.addLayer({
             'id': 'rail-alignment', 'type': 'line', 'source': 'alignment-source',
             'layout': { 'visibility': document.getElementById('layer-alignment').checked ? 'visible' : 'none' },
-            'filter': ['all', ['!=', ['get', 'is_bridge'], true],
-                              ['==', ['get', 'align_type'], 'Main Track']],
+            // 🔴 2026-09-01: bridges are drawn SOLID, at full opacity, in the band's
+            // own colour — the `is_bridge` exclusion is gone on purpose. The user
+            // asked for a continuous corridor and chose full continuity over the
+            // 30%-opacity version.
+            //
+            // ⚠️ WHAT THIS MEANS, AND IT IS NOT COSMETIC. A bridge is a straight line
+            // across a stretch where `alignment.js` has NO surveyed Main Track — 31
+            // stretches over 300 m, ~60 km in total, the longest 7.0 km. This layer
+            // now draws them identically to surveyed track on a client-visible map,
+            // so nothing in the picture distinguishes measured geometry from an
+            // interpolation. Three of the seven work-section boundary ticks sit on
+            // exactly these stretches; their labels still say "⚠ no surveyed
+            // alignment here", and that label is now the ONLY thing carrying the
+            // caveat. Do not remove it without putting the distinction back somewhere.
+            //
+            // The honest-presentation alternative is one number: set the bridge
+            // branch of line-opacity back to 0.3. See open-questions.md §H2.
+            'filter': ['==', ['get', 'align_type'], 'Main Track'],
             'paint': {
                 'line-color': ['coalesce', ['get', 'ipt_colour'], '#64748B'],
                 'line-width': 2.5,
@@ -1042,9 +1076,9 @@
     function setupAlignmentPopup() {
         if (ALIGNMENT_POPUP_WIRED) return;
         ALIGNMENT_POPUP_WIRED = true;
-        // The alignment answers the click. The bridge layer it used to share this
-        // handler with was removed on 2026-08-30 — the gaps are now simply absent,
-        // and what is said about them moved to the boundary ticks.
+        // The alignment answers the click. Since 2026-09-01 bridge features are on
+        // this same layer and drawn solid, so this handler answers for them too —
+        // and the popup is where the interpolation is declared.
         ['rail-alignment'].forEach(lId => {
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
             map.on('mouseleave', lId, () => { map.getCanvas().style.cursor = ''; });
@@ -1085,6 +1119,16 @@
                               + `${ws.filter(w => w !== wsCode).join(', ')}</div>`
                             : '')
                         + `<div><b>Track:</b> ${p.align_type || '–'}</div>`
+                        // 🔴 Bridges are drawn SOLID since 2026-09-01, so nothing in
+                        // the picture distinguishes them from surveyed track. The click
+                        // is now the only place that admits it. Do not remove this
+                        // without putting the visual distinction back.
+                        + (p.is_bridge
+                            ? `<div style="margin-top:5px;padding:5px 7px;background:#fef3c7;border-radius:3px;font-size:11.5px;color:#7c5e10;">`
+                              + `<b>No surveyed alignment on this stretch.</b> The line here is `
+                              + `interpolated across a hole in the survey file, drawn so the `
+                              + `corridor reads continuously. It is not measured geometry.</div>`
+                            : '')
                         + `<div><b>Chainage:</b> ${ch(p.chain_from_m)} – ${ch(p.chain_to_m)}</div>`
                         + (undOn
                             ? `<div style="margin-top:5px;padding:4px 7px;border-left:3px solid ${(window.IPT_UNDERLAY || {}).colour || '#C4B5FD'};font-size:11.5px;color:#475569;">`
