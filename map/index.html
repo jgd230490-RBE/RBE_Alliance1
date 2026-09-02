@@ -14,7 +14,7 @@
     <!-- IPT / Work Section bands for the alignment. Reference geometry only:
          reads nothing from the API and changes no routing behaviour. -->
     <script src="ipt_segments.js?v=9"></script>
-    <!-- Week 1, Task E. The existing EVR corridor, so a rail head has something to
+    <!-- Week 1, Task E. The existing EVR corridor, so a railhead has something to
          highlight. PROVISIONAL Natural Earth geometry, NOT OSM and NOT survey - the
          file's own header carries the measured error, including ~6.4 km at Lelle.
          ?v= for the same reason ipt_segments.js has one: a half-upgraded pair of
@@ -65,6 +65,21 @@
         .kpi-label{ font-size:9.5px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin-top:3px; line-height:1.25; }
         .kpi-note{ font-size:10px; color:var(--muted); margin-top:8px; line-height:1.45;
                    border-top:1px solid var(--line); padding-top:7px; }
+        .kpi-quiet{ font-size:10.5px; color:var(--navy-deep); margin-top:6px; line-height:1.4;
+                    font-variant-numeric:tabular-nums; }
+        .kpi-quiet:empty{ display:none; }
+        #tl-warnings{ display:none; position:absolute; left:calc(50% + 150px); transform:translateX(-50%);
+                      bottom:74px; z-index:24; width:min(560px, 92vw); flex-direction:column; gap:5px;
+                      pointer-events:none; }
+        body.sidebar-closed #tl-warnings{ left:50%; }
+        .tl-warn{ pointer-events:auto; background:rgba(255,255,255,.96); border:1px solid var(--line);
+                  border-left:4px solid #BF2E55; border-radius:9px; padding:7px 10px; font-size:11.5px;
+                  line-height:1.35; box-shadow:0 6px 20px rgba(16,24,40,.14); display:flex; gap:9px; align-items:flex-start; }
+        .tl-warn.warn{ border-left-color:#f59e0b; }
+        .tl-warn.note{ border-left-color:#64748B; }
+        .tl-warn b{ color:var(--navy-deep); }
+        .tl-warn .x{ margin-left:auto; border:none; background:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1; }
+        .tl-warn.more{ justify-content:center; color:var(--muted); font-weight:600; cursor:pointer; border-left-color:var(--line); }
         /* on a phone the note is the first thing to go, then the panel shrinks to the
            two numbers — see claude/mobile-analysis.md */
         @media (max-width:700px){
@@ -179,9 +194,10 @@
         <div class="control-item"><label><input type="checkbox" id="layer-zones" checked onchange="toggleZones(this.checked)"> Disruption zones</label><span class="color-dot" style="background:#BF2E55;"></span></div>
         <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">red = avoided by routing · grey = advisory</span></div>
         <!-- Week 1, Task E. The EXISTING railway, not the Rail Baltica alignment above.
-             Dim until an origin filter picks a Rail head, then bold. Default ON. -->
-        <div class="control-item"><label><input type="checkbox" id="layer-rail" checked onchange="toggleRail(this.checked)"> Rail network (EVR)</label><span class="color-dot" style="background:#0F766E; border-radius:0; width:13px; height:3px;"></span></div>
-        <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;" id="rail-note">provisional geometry · bolds when a rail head is the origin</span></div>
+             Dim until an origin filter picks a Railhead, then bold. Default ON. -->
+        <div class="control-item"><label><input type="checkbox" id="layer-rail" checked onchange="toggleRail(this.checked)"> Rail network (EVR)</label><span class="color-dot" style="background:repeating-linear-gradient(90deg,#64748B 0 2px,transparent 2px 6px); border-radius:0; width:13px; height:3px;"></span></div>
+        <div class="control-item" id="legend-railhead" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;">Railhead</span><span class="color-dot" title="Railhead" style="width:13px;height:13px;border-radius:3px;background:#fff;border:2px solid #0F766E;box-sizing:border-box;position:relative;"><span style="position:absolute;left:2px;right:2px;top:4px;height:2px;background:#0F766E;"></span></span></div>
+        <div class="control-item" style="padding-left:23px;margin-top:-4px;"><span style="font-size:10.5px;color:#8a9099;" id="rail-note">provisional geometry · bolds when a railhead is the origin</span></div>
     </div>
 
     <div class="control-group">
@@ -223,19 +239,40 @@
      actually changing and worth watching. Collapses to a single line on a narrow screen.
      (These cards previously existed only inside calculateKPIs(), which wrote to element
      ids that had been deleted from the page and so updated nothing.) -->
+<!-- 2026-09-02 (§9): four cards that follow the MONTH ON THE PLAYHEAD - the same month
+     Show forecast / Play / scrub are painting - recomputed on every tick, on the
+     forecast toggle and on every filter. Source: /api/public/month-kpis, Approved only,
+     never actuals. Empty month -> one sentence, no zeros. -->
 <div id="kpi-hud">
     <div class="kpi-row">
+        <div class="kpi-card">
+            <div class="kpi-value" id="kpi-vehicles">—</div>
+            <div class="kpi-label">Vehicles / day</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-value" id="kpi-trips">—</div>
+            <div class="kpi-label">Trips / day</div>
+        </div>
+    </div>
+    <div class="kpi-row" style="margin-top:7px;">
+        <div class="kpi-card">
+            <div class="kpi-value" id="kpi-material">—</div>
+            <div class="kpi-label" id="kpi-material-label">Material / day</div>
+        </div>
         <div class="kpi-card">
             <div class="kpi-value" id="kpi-routes">—</div>
             <div class="kpi-label" id="kpi-routes-label">Active routes</div>
         </div>
-        <div class="kpi-card">
-            <div class="kpi-value" id="kpi-capacity">—</div>
-            <div class="kpi-label">Trips / day</div>
-        </div>
     </div>
+    <div class="kpi-quiet" id="kpi-by-discipline"></div>
+    <div class="kpi-quiet" id="kpi-by-material"></div>
     <div class="kpi-note" id="kpi-note"></div>
 </div>
+
+<!-- 2026-09-02 (§8): warnings for the month on the playhead. A short stack above the
+     timeline: at most three, then "+N more". Rebuilt on every tick, so a January
+     warning cannot sit on screen in June. -->
+<div id="tl-warnings"></div>
 
 <div id="timeline-bar">
   <button class="tl-btn" id="tl-prev" onclick="stepTimeline(-1)" title="Previous month">◀</button>
@@ -488,14 +525,24 @@
     const nodeMarkersArray = [];
     let hoveredRouteId = null;
 
-    // ===== Week 1, Task E - the rail head highlight =============================
+    // ===== Week 1, Task E - the railhead highlight =============================
     // #0F766E is the build list's reserved rail colour. It is NOT reused anywhere
     // else on this map: the reserved set is inbound #039E86, outbound #f59e0b, temp
     // #C2790B, forecast #3398DB, selection #BF2E55, brand #003787/#0A1446 and the six
     // IPT band colours. parse_map.js asserts that.
     const RAIL_COLOR = '#0F766E';
-    const RAIL_DIM_WIDTH = 2, RAIL_DIM_OPACITY = 0.25;
-    const RAIL_BOLD_WIDTH = 4, RAIL_BOLD_OPACITY = 0.8;
+    // 2026-09-02 (§6a): a QUIET default so the corridor cannot be mistaken for a second
+    // alignment - grey casing under short grey ticks with big gaps - and the reserved
+    // rail colour only when highlighted. Two layers: a casing and a dashed core.
+    // ⭐ line-dasharray is in multiples of THAT LAYER'S width, so [2, 18] on a 2 px line
+    // is a 4 px tick and a 36 px gap. Plain constants, set by setPaintProperty -
+    // dasharray is cross-faded and expression support for it has been patchy.
+    const RAIL_DIM   = { casingW: 5, casingC: '#334155', casingO: 0.35,
+                         dashW: 2,   dashC: '#64748B',   dashO: 1.0, dash: [2, 18] };
+    const RAIL_BOLD  = { casingW: 7, casingC: RAIL_COLOR, casingO: 0.8,
+                         dashW: 2,   dashC: RAIL_COLOR,   dashO: 1.0, dash: [2, 12] };
+    // ⚠️ No IPT band colour and no reserved route colour appears in either style.
+    // parse_map.js asserts that against the reserved list.
 
     // Read from the CHECKBOX, never a module variable - style.load re-adds every
     // layer on a basemap switch and a drifted variable would restore a layer the user
@@ -504,22 +551,42 @@
         const cb = document.getElementById('layer-rail');
         return !cb || cb.checked;
     }
+    // The railhead mark: 32x32 at pixelRatio 2 (drawn at 64). A white rounded square
+    // pin edged in the rail colour, carrying one rail over two sleepers.
+    function railheadGlyph() {
+        const S = 64, c = document.createElement('canvas'); c.width = S; c.height = S;
+        const g = c.getContext('2d');
+        const rr = (x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r);
+            g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
+        rr(4, 4, S - 8, S - 8, 12); g.fillStyle = '#FFFFFF'; g.fill();
+        g.lineWidth = 5; g.strokeStyle = RAIL_COLOR; g.stroke();
+        g.fillStyle = RAIL_COLOR;
+        // two sleepers
+        g.fillRect(18, 20, 8, 26); g.fillRect(38, 20, 8, 26);
+        // the rail across them
+        g.fillRect(12, 29, 40, 7);
+        return { width: S, height: S, data: g.getImageData(0, 0, S, S).data };
+    }
+
     function toggleRail(visible) {
-        ['evr-rail-line', 'rail-heads'].forEach(l => toggleLayer(l, visible));
+        ['evr-rail-casing', 'evr-rail-line', 'railheads'].forEach(l => toggleLayer(l, visible));
     }
 
     // name -> loc_type, built from the Node features the API sends. The origin
     // dropdown holds NAMES (they come off the route features), so this is how
-    // "is the selected origin a rail head" gets answered.
+    // "is the selected origin a railhead" gets answered.
     function locTypeByName(name) {
         if (!name || name === 'ALL' || !a1_data || !a1_data.features) return null;
         const f = a1_data.features.find(x => x.properties
             && x.properties.type === 'Node' && x.properties.name === name);
-        return f ? (f.properties.node_type || null) : null;
+        // 'Rail head' -> 'Railhead' on 2026-09-02; the backend canonicalises, this is
+        // belt and braces for a cached map-data payload
+        const t = f ? (f.properties.node_type || null) : null;
+        return t === 'Rail head' ? 'Railhead' : t;
     }
 
     // Which rail features serve a given head. Matched CASE-INSENSITIVELY and by
-    // SUBSTRING both ways, so a location called "Lelle rail head" matches the head
+    // SUBSTRING both ways, so a location called "Lelle railhead" matches the head
     // "Lelle" and vice versa - the human names the locations, and requiring an exact
     // string match would mean the highlight silently does nothing.
     function railFeaturesFor(name) {
@@ -531,16 +598,58 @@
         })).map(f => f.properties.id);
     }
 
-    // Bold when the origin filter is a Rail head, dim otherwise. Called from
+    // Bold when the origin filter is a Railhead, dim otherwise. Called from
     // applyFilters(), so it follows the origin dropdown AND filterByNode().
+    // node id -> loc_type, for "does this route touch a railhead"
+    function locTypeById(id) {
+        if (!id || !a1_data || !a1_data.features) return null;
+        const f = a1_data.features.find(x => x.properties && x.properties.type === 'Node'
+                                              && x.properties.id === id);
+        const t = f ? (f.properties.node_type || null) : null;
+        return t === 'Rail head' ? 'Railhead' : t;
+    }
+    // does a route line pass the four sidebar filters? Shared by the KPI count and the
+    // rail rule so "in the current filter" means one thing.
+    function routePassesFilters(p) {
+        const o = document.getElementById('filter-origin').value, d = document.getElementById('filter-dest').value;
+        const disc = document.getElementById('filter-discipline').value, i = document.getElementById('filter-ipt').value;
+        return (o === 'ALL' || p.origin === o) && (d === 'ALL' || p.dest === d)
+            && (disc === 'ALL' || (p.disciplines || []).includes(disc)) && (i === 'ALL' || p.ipt === i);
+    }
+    // 2026-09-02 (§6b): forecast mode is on (the checkbox) or the timeline is open, AND
+    // some route carrying volume right now, inside the current filter, starts or ends
+    // at a railhead. is_forecast is stamped per feature by toggleForecastPlugin() and
+    // renderMonthFrame(), so this reads the month on screen without knowing which.
+    function railheadMovementOnScreen() {
+        const cb = document.getElementById('toggle-forecast');
+        const forecastOn = !!(cb && cb.checked) || (typeof TL !== 'undefined' && TL.on);
+        if (!forecastOn || !a1_data || !a1_data.features) return false;
+        return a1_data.features.some(f => f.geometry && f.geometry.type === 'LineString'
+            && f.properties.route_id && f.properties.is_forecast && routePassesFilters(f.properties)
+            && (locTypeById(f.properties.origin_id) === 'Railhead' || locTypeById(f.properties.dest_id) === 'Railhead'));
+    }
     function applyRailHighlight() {
         if (!map.getLayer('evr-rail-line')) return;
         const el = document.getElementById('filter-origin');
         const sel = el ? el.value : 'ALL';
-        const bold = sel !== 'ALL' && locTypeByName(sel) === 'Rail head';
-        map.setPaintProperty('evr-rail-line', 'line-width', bold ? RAIL_BOLD_WIDTH : RAIL_DIM_WIDTH);
-        map.setPaintProperty('evr-rail-line', 'line-opacity', bold ? RAIL_BOLD_OPACITY : RAIL_DIM_OPACITY);
-        const ids = bold ? railFeaturesFor(sel) : [];
+        const originIsHead = sel !== 'ALL' && locTypeByName(sel) === 'Railhead';
+        // bold on: a railhead origin, OR a railhead movement in the month on screen.
+        // Dim again when the origin is ALL, forecast is off and the timeline is closed -
+        // which is exactly when railheadMovementOnScreen() is false.
+        const bold = originIsHead || railheadMovementOnScreen();
+        const st = bold ? RAIL_BOLD : RAIL_DIM;
+        if (map.getLayer('evr-rail-casing')) {
+            map.setPaintProperty('evr-rail-casing', 'line-color', st.casingC);
+            map.setPaintProperty('evr-rail-casing', 'line-width', st.casingW);
+            map.setPaintProperty('evr-rail-casing', 'line-opacity', st.casingO);
+        }
+        map.setPaintProperty('evr-rail-line', 'line-color', st.dashC);
+        map.setPaintProperty('evr-rail-line', 'line-width', st.dashW);
+        map.setPaintProperty('evr-rail-line', 'line-opacity', st.dashO);
+        map.setPaintProperty('evr-rail-line', 'line-dasharray', st.dash);
+        // the head filter applies only to an explicit origin selection; a movement
+        // highlight shows the whole corridor
+        const ids = originIsHead ? railFeaturesFor(sel) : [];
         // ⭐ An array literal used as an expression OUTPUT must be wrapped in
         // ['literal', ...]. Style.addLayer/setFilter validates BEFORE applying and on
         // failure fires an error and returns having done nothing - which is how four
@@ -548,18 +657,20 @@
         //
         // ⚠️ DELIBERATE DEVIATION: with no matching feature the layer is bolded
         // UNFILTERED rather than filtered to nothing. The build list says "filter to
-        // those whose heads contains the selected name"; taken literally, a rail head
+        // those whose heads contains the selected name"; taken literally, a railhead
         // this provisional file does not name would make the whole layer disappear at
         // the moment somebody asked to see it. Showing the corridor unfiltered says
         // "here is the network, we cannot tell you which branch" - an empty map says
         // nothing at all. Revisit when the geometry is real.
-        map.setFilter('evr-rail-line',
-            (bold && ids.length) ? ['in', ['get', 'id'], ['literal', ids]] : null);
+        const idFilter = (originIsHead && ids.length) ? ['in', ['get', 'id'], ['literal', ids]] : null;
+        map.setFilter('evr-rail-line', idFilter);
+        if (map.getLayer('evr-rail-casing')) map.setFilter('evr-rail-casing', idFilter);
         const note = document.getElementById('rail-note');
         if (note) note.innerText = !bold
-            ? 'provisional geometry · bolds when a rail head is the origin'
-            : (ids.length ? `highlighted for ${sel}`
-                          : `${sel} is not named in the rail data - showing the whole corridor`);
+            ? 'provisional geometry · bolds for a railhead origin or a railhead movement on screen'
+            : originIsHead
+                ? (ids.length ? `highlighted for ${sel}` : `${sel} is not named in the rail data - showing the whole corridor`)
+                : 'a route on screen starts or ends at a railhead';
     }
 
     function toggleSidebar() { document.getElementById('main-sidebar').classList.toggle('closed'); document.body.classList.toggle('sidebar-closed'); setTimeout(() => map.resize(), 300); }
@@ -605,33 +716,125 @@
     // the network. renderMonthFrame() has already stamped is_forecast on each feature by
     // the time this runs, and a1_data is the same object the source holds, so the flag is
     // simply read rather than recomputed.
-    function calculateKPIs(oFilter, dFilter, discFilter, iFilter) {
-        const monthMode = (typeof TL !== 'undefined' && TL.on && TL.matrix);
-        let routesCount = 0, totalTrips = 0;
+    // ===== 2026-09-02 (§9) — the KPI cards follow the month on the playhead ==========
+    //
+    // Which month? The timeline's month when it is open; otherwise the Show-forecast
+    // window, averaged over its months that carry volume; otherwise none - and with
+    // none there is no forecast figure to show, so the cards say so instead of showing
+    // a network count dressed as a daily rate.
+    //
+    // Per-line figures come from /api/public/month-kpis, already converted, cached per
+    // month. The map only FILTERS (origin / dest / IPT on the route, discipline on the
+    // LINE) and sums. Working days = the server's factors.planning figure.
+    const KPI = { cache: {}, pending: {}, seq: 0 };
+    function kpiMonthsOnScreen() {
+        if (typeof TL !== 'undefined' && TL.on) return [TL.month];
+        const cb = document.getElementById('toggle-forecast');
+        if (cb && cb.checked) {
+            const f = parseInt(document.getElementById('forecast-from').value) || 1;
+            const t = parseInt(document.getElementById('forecast-to').value) || f;
+            const out = []; for (let m = Math.min(f, t); m <= Math.max(f, t); m++) out.push(m);
+            return out;
+        }
+        return [];
+    }
+    async function kpiFetchMonth(m) {
+        if (KPI.cache[m]) return KPI.cache[m];
+        if (!KPI.pending[m]) {
+            const unit = CONFIG.FORECAST_UNIT || 'vehicles';
+            KPI.pending[m] = fetch(`${CONFIG.API_BASE}/public/month-kpis?month=${m}&unit=${unit}`)
+                .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                .then(j => { KPI.cache[m] = j; return j; })
+                .finally(() => { delete KPI.pending[m]; });
+        }
+        return KPI.pending[m];
+    }
+    function routePropsById() {
+        const out = {};
         a1_data.features.forEach(f => {
-            if (f.geometry.type === 'LineString' && f.properties.type === 'Inbound Highway') {
-                const props = f.properties;
-                if (monthMode && !props.is_forecast) return;
-                if ((oFilter === 'ALL' || props.origin === oFilter) &&
-                    (dFilter === 'ALL' || props.dest === dFilter) &&
-                    (discFilter === 'ALL' || (props.disciplines || []).includes(discFilter)) &&
-                    (iFilter === 'ALL' || props.ipt === iFilter)) {
-                    routesCount++; totalTrips += parseFloat(props.trips_per_day) || 0;
-                }
-            }
+            if (f.geometry && f.geometry.type === 'LineString' && f.properties.route_id
+                && f.properties.type === 'Inbound Highway') out[f.properties.route_id] = f.properties;
         });
-        const er = document.getElementById('kpi-routes');
-        if (er) er.innerText = routesCount;
-        const ec = document.getElementById('kpi-capacity');
-        if (ec) ec.innerText = Math.round(totalTrips).toLocaleString();
-        // say WHICH question the numbers are answering, or a month figure reads as a
-        // network figure that has mysteriously dropped
-        const lb = document.getElementById('kpi-routes-label');
-        if (lb) lb.innerText = monthMode ? ('Routes in ' + monthLabel(TL.month)) : 'Active routes';
-        const nt = document.getElementById('kpi-note');
-        if (nt) nt.innerText = monthMode
-            ? 'Forecast routes carrying volume this month. Trips/day is the baked HERE cycle time, not the forecast quantity.'
-            : 'Every baked route matching the filters. Unbaked routes are not counted — they are not drawn either.';
+        return out;
+    }
+    const fmtN = (n, d) => (Math.round(n * Math.pow(10, d || 0)) / Math.pow(10, d || 0)).toLocaleString();
+    function calculateKPIs(oFilter, dFilter, discFilter, iFilter) {
+        const months = kpiMonthsOnScreen();
+        const seq = ++KPI.seq;              // a stale fetch must not overwrite a newer month
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.innerText = v; };
+        const setHTML = (id, v) => { const el = document.getElementById(id); if (el) el.innerHTML = v; };
+        const unitLbl = (CONFIG.FORECAST_UNIT === 'm3') ? 'm³' : (CONFIG.FORECAST_UNIT || 'vehicles');
+        set('kpi-material-label', `${unitLbl === 'vehicles' ? 'Loads' : unitLbl} / day`);
+
+        // no forecast on screen: nothing to rate per day. Active routes = every baked
+        // route in the filter, which is what the map is drawing.
+        if (!months.length) {
+            let n = 0;
+            a1_data.features.forEach(f => {
+                if (f.geometry.type === 'LineString' && f.properties.type === 'Inbound Highway'
+                    && routePassesFilters(f.properties)) n++;
+            });
+            set('kpi-vehicles', '—'); set('kpi-trips', '—'); set('kpi-material', '—');
+            set('kpi-routes', n); set('kpi-routes-label', 'Active routes');
+            setHTML('kpi-by-discipline', ''); setHTML('kpi-by-material', '');
+            set('kpi-note', 'Turn on Show forecast or the timeline for daily rates. Active routes = every baked route matching the filters.');
+            return;
+        }
+
+        Promise.all(months.map(kpiFetchMonth)).then(payloads => {
+            if (seq !== KPI.seq) return;
+            const routes = routePropsById();
+            const wd = payloads[0].working_days || 22;
+            const fbName = payloads[0].payload_fallback_vehicle;
+            // per month, sum the lines that pass the filters; then average over the
+            // months that had any
+            let mVeh = [], mQty = [], mRoutes = new Set(), byDisc = {}, byMat = {}, fellBack = 0;
+            payloads.forEach(p => {
+                let veh = 0, qty = 0, any = false;
+                p.lines.forEach(l => {
+                    const rp = routes[l.route_id];
+                    if (!rp) return;                       // unbaked: not drawn, not counted
+                    if ((oFilter !== 'ALL' && rp.origin !== oFilter) || (dFilter !== 'ALL' && rp.dest !== dFilter)
+                        || (iFilter !== 'ALL' && rp.ipt !== iFilter)
+                        || (discFilter !== 'ALL' && l.discipline !== discFilter)) return;
+                    any = true; veh += l.vehicle_loads; qty += l.qty_unit; mRoutes.add(l.route_id);
+                    if (l.payload_fallback) fellBack++;
+                    const dk = l.discipline || 'unassigned', mk = l.material_type || 'unknown';
+                    byDisc[dk] = (byDisc[dk] || 0) + l.qty_unit;
+                    byMat[mk] = (byMat[mk] || 0) + l.qty_unit;
+                });
+                if (any) { mVeh.push(veh); mQty.push(qty); }
+            });
+            const label = months.length === 1 ? monthLabel(months[0]) : `${monthLabel(months[0])}–${monthLabel(months[months.length - 1])}`;
+            if (!mVeh.length) {
+                set('kpi-vehicles', '—'); set('kpi-trips', '—'); set('kpi-material', '—'); set('kpi-routes', 0);
+                set('kpi-routes-label', 'Routes in ' + label);
+                setHTML('kpi-by-discipline', ''); setHTML('kpi-by-material', '');
+                set('kpi-note', 'No approved forecast in this month.');
+                return;
+            }
+            const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
+            const n = mVeh.length;                         // months with volume
+            const vehDay = avg(mVeh) / wd, qtyDay = avg(mQty) / wd;
+            set('kpi-vehicles', fmtN(vehDay, 1));
+            // ⭐ trips == vehicle-loads on every line (one vehicle, one load per trip),
+            // so the two cards agree by construction. See /api/public/month-kpis.
+            set('kpi-trips', fmtN(vehDay, 1));
+            set('kpi-material', fmtN(qtyDay, unitLbl === 'vehicles' ? 1 : 0));
+            set('kpi-routes', mRoutes.size); set('kpi-routes-label', 'Routes in ' + label);
+            const line = (obj, suffix) => Object.entries(obj).sort((a, b) => b[1] - a[1])
+                .map(([k, v]) => `${k} ${fmtN(v / n / wd, unitLbl === 'vehicles' ? 1 : 0)} ${suffix}`).join(' · ');
+            const perDayUnit = (unitLbl === 'vehicles' ? 'loads' : unitLbl) + '/d';
+            setHTML('kpi-by-discipline', line(byDisc, perDayUnit));
+            // by material only when the month actually mixes materials
+            setHTML('kpi-by-material', Object.keys(byMat).length > 1 ? line(byMat, perDayUnit) : '');
+            set('kpi-note', `Approved forecast, ${label}${n > 1 ? `, averaged over ${n} months with volume` : ''}. Per working day (${wd}/month). Trips = vehicle loads on every line.`
+                + (fellBack ? ` ${fellBack} line(s) use the ${fbName} payload because their vehicle is not in factors.json.` : ''));
+        }).catch(() => {
+            if (seq !== KPI.seq) return;
+            set('kpi-vehicles', '—'); set('kpi-trips', '—'); set('kpi-material', '—');
+            set('kpi-note', 'Could not load the month figures.');
+        });
     }
 
     function applyFilters() {
@@ -668,7 +871,7 @@
         if (map.getLayer('outbound-lines-casing')) map.setFilter('outbound-lines-casing',
             outVis ? ['all', ['==', ['get', 'type'], 'Outbound Highway'], ...filterArr.slice(1)] : none);
 
-        // Week 1, Task E. The road filter above is untouched: selecting a rail head as
+        // Week 1, Task E. The road filter above is untouched: selecting a railhead as
         // the origin still isolates the road hauls that start there. This only changes
         // how the rail corridor is DRAWN.
         applyRailHighlight();
@@ -684,12 +887,12 @@
         resetFilters();
         // network loc_types are Quarry | Port | Compound | Site | Other. 'Hub' was the
         // legacy file's name for what the network calls a Port.
-        // network loc_types now also include 'Rail head' and 'Stockpile'. A rail head
+        // network loc_types now also include 'Railhead' and 'Stockpile'. A railhead
         // is an ORIGIN, exactly like a quarry or a port - network._role_for() and the
         // frontend's LOC_TYPES carry the same rule and all three must agree. A
         // stockpile falls through to the destination branch, which is what it is.
         if (nodeType === 'Quarry' || nodeType === 'Hub' || nodeType === 'Port'
-            || nodeType === 'Rail head') { document.getElementById('filter-origin').value = nodeName; }
+            || nodeType === 'Railhead' || nodeType === 'Rail head') { document.getElementById('filter-origin').value = nodeName; }
         else { document.getElementById('filter-dest').value = nodeName; }
         applyFilters(); if(window.innerWidth <= 768) toggleSidebar();
     }
@@ -715,7 +918,7 @@
         // ===== Week 1, Task E - the existing EVR rail corridor ==================
         // ⚠️ NOT the Rail Baltica alignment. That is alignment-source above, a
         // different railway on a different gauge. This is the operating Eesti Raudtee
-        // line a rail head sits on, and it is here so "filter to this rail head" has
+        // line a railhead sits on, and it is here so "filter to this railhead" has
         // something to show.
         //
         // 🔴 PROVISIONAL. map/data/evr_rail.js is Natural Earth 10m, not OSM and not
@@ -728,15 +931,20 @@
         // is reference geometry that must sit UNDER the hauls.
         if (!map.getSource('evr-rail')) map.addSource('evr-rail',
             { type: 'geojson', data: (window.evr_rail_data || { type: 'FeatureCollection', features: [] }) });
-        if (!map.getLayer('evr-rail-line')) map.addLayer({
-            id: 'evr-rail-line', type: 'line', source: 'evr-rail',
+        if (!map.getLayer('evr-rail-casing')) map.addLayer({
+            id: 'evr-rail-casing', type: 'line', source: 'evr-rail',
             layout: { visibility: railVisible() ? 'visible' : 'none',
                       'line-cap': 'round', 'line-join': 'round' },
-            // Plain constants, not expressions: applyRailHighlight() swaps them with
-            // setPaintProperty when a rail head is selected. Defaults are the build
-            // list's - 2 px at 25%.
-            paint: { 'line-color': RAIL_COLOR, 'line-width': RAIL_DIM_WIDTH,
-                     'line-opacity': RAIL_DIM_OPACITY },
+            paint: { 'line-color': RAIL_DIM.casingC, 'line-width': RAIL_DIM.casingW,
+                     'line-opacity': RAIL_DIM.casingO },
+        });
+        if (!map.getLayer('evr-rail-line')) map.addLayer({
+            id: 'evr-rail-line', type: 'line', source: 'evr-rail',
+            // ⭐ line-cap butt, or the dashes draw solid
+            layout: { visibility: railVisible() ? 'visible' : 'none',
+                      'line-cap': 'butt', 'line-join': 'round' },
+            paint: { 'line-color': RAIL_DIM.dashC, 'line-width': RAIL_DIM.dashW,
+                     'line-opacity': RAIL_DIM.dashO, 'line-dasharray': RAIL_DIM.dash },
         });
 
         // --- PROFESSIONAL MAPBOX STYLING (Corporate Palette + Highway Offsets) ---
@@ -1023,26 +1231,31 @@
                 'circle-opacity': 0.95,
             },
         });
-        // Week 1, Task E - rail heads as a LAYER, not only a DOM marker.
+        // Week 1, Task E - railheads as a LAYER, not only a DOM marker.
         //
         // The site markers are DOM elements outside the WebGL canvas, which is what
-        // blocks PNG export; a rail head added as one more of those would make that
+        // blocks PNG export; a railhead added as one more of those would make that
         // worse. This is a real layer, like the gates, so it draws under the same
         // rules and exports with the canvas if that ever ships. The DOM marker stays
         // as well - it carries the popup and the "Filter Routes to this Location"
-        // button, which is how a rail head gets selected in the first place.
-        if (!map.getLayer('rail-heads')) map.addLayer({
-            id: 'rail-heads', type: 'circle', source: 'routes-source', minzoom: 7,
+        // button, which is how a railhead gets selected in the first place.
+        // 2026-09-02 (§5): a railhead has its OWN mark - a rail glyph (rail over two
+        // sleepers) on a white rounded pin, in the rail colour - so it cannot be read
+        // as a quarry, port, compound or stockpile. A symbol layer with an image
+        // generated on a canvas: still a real layer, still exports with the canvas,
+        // and no image file to keep in sync with a colour constant.
+        // ⚠️ A basemap switch drops images with the style, so this is re-added from
+        // style.load, guarded by hasImage.
+        if (!map.hasImage('railhead-glyph')) map.addImage('railhead-glyph', railheadGlyph(), { pixelRatio: 2 });
+        if (!map.getLayer('railheads')) map.addLayer({
+            id: 'railheads', type: 'symbol', source: 'routes-source', minzoom: 7,
             filter: ['all', ['==', ['get', 'type'], 'Node'],
-                            ['==', ['get', 'node_type'], 'Rail head']],
-            layout: { visibility: railVisible() ? 'visible' : 'none' },
-            paint: {
-                'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 4, 12, 7, 16, 10],
-                'circle-color': RAIL_COLOR,
-                'circle-stroke-width': 2,
-                'circle-stroke-color': '#FFFFFF',
-                'circle-opacity': 0.9,
-            },
+                            ['==', ['get', 'node_type'], 'Railhead']],
+            layout: { visibility: railVisible() ? 'visible' : 'none',
+                      'icon-image': 'railhead-glyph',
+                      'icon-size': ['interpolate', ['linear'], ['zoom'], 7, 0.55, 12, 0.85, 16, 1.1],
+                      'icon-allow-overlap': true, 'icon-ignore-placement': true,
+                      'icon-anchor': 'center' },
         });
         if (!map.getLayer('site-gates-label')) map.addLayer({
             id: 'site-gates-label', type: 'symbol', source: 'routes-source', minzoom: 13,
@@ -1513,8 +1726,8 @@
             new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat)
                 .setHTML(railPopupHTML(e.features[0].properties)).addTo(map);
         });
-        map.on('mouseenter', 'rail-heads', () => { map.getCanvas().style.cursor = 'pointer'; });
-        map.on('mouseleave', 'rail-heads', () => { map.getCanvas().style.cursor = ''; });
+        map.on('mouseenter', 'railheads', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'railheads', () => { map.getCanvas().style.cursor = ''; });
 
         ['restriction-points', 'restriction-lines'].forEach(lId => {
             map.on('mouseenter', lId, () => { map.getCanvas().style.cursor = 'pointer'; });
@@ -1783,7 +1996,15 @@
                     .then(r => r.json());
                 SV_SEEN[key] = meta;
             }
-            if(!meta || !meta.available) return;   // no imagery, or no key configured: show nothing
+            // §4 (2026-09-02): one quiet line when Google has looked and found nothing —
+            // ZERO_RESULTS — instead of a blank slot. No key configured, or a fetch
+            // failure, still shows nothing at all: neither is a fact about the place.
+            // No image request is made in any of these cases.
+            if(meta && !meta.available && meta.status === 'ZERO_RESULTS'){
+                box.innerHTML = '<div style="font-size:10px;color:#8a9099;">No Street View here</div>';
+                return;
+            }
+            if(!meta || !meta.available) return;   // no key / fetch failed: show nothing
             const src = CONFIG.API_BASE + '/streetview?lat=' + lat + '&lon=' + lon + '&size=260x150';
             // how far Google had to move to find a panorama. On a long approach road that
             // can be a picture of somewhere else entirely, so it is stated rather than
@@ -2233,6 +2454,10 @@
 
             if (!isChecked) {
                 ['forecast-labels','forecast-layer','forecast-casing','forecast-flow'].forEach(l => { if(map.getLayer(l)) map.removeLayer(l); });
+                const sd = map.getSource('routes-source');
+                if (sd) { const d = sd._data; d.features.forEach(f => { if (f.properties) f.properties.is_forecast = false; }); sd.setData(d); }
+                applyRailHighlight();      // §6b: forecast off -> dim, unless a railhead origin is selected
+                applyFilters();            // §9: and the cards drop back to the network count
                 status.innerHTML = "Approved forecasts only.";
                 status.style.color = "#6b7280";
                 const bd = document.getElementById('btn-detail'); if(bd) bd.style.display = 'none';
@@ -2283,6 +2508,8 @@
                     }
                 });
                 src.setData(currentData);
+                applyRailHighlight();      // §6b: a railhead movement in the window bolds the corridor
+                applyFilters();            // §9: the KPI cards follow the window
 
                 if (!map.getLayer('forecast-layer')) {
                     map.addLayer({
@@ -2380,8 +2607,11 @@
         });
     }
     async function fetchMeta(){
-        try{ const r=await fetch(CONFIG.API_BASE+'/meta'); META.factors = r.ok ? (await r.json()).factors : FALLBACK_FACTORS; }
-        catch(e){ META.factors=FALLBACK_FACTORS; }
+        try{ const r=await fetch(CONFIG.API_BASE+'/meta'); const j = r.ok ? await r.json() : null;
+             META.factors = j ? j.factors : FALLBACK_FACTORS;
+             META.seasonal = (j && j.seasonal_restrictions) || [];    // §8: the calendar-month windows
+        }
+        catch(e){ META.factors=FALLBACK_FACTORS; META.seasonal=[]; }
         META.ready=true;
     }
     async function fetchMatrix(unit){
@@ -2590,11 +2820,13 @@
     }
     function closeTimeline(){
         stopTimeline(); TL.on=false;
+        renderTimelineWarnings(null);      // §8: no month on screen, no warnings
         const bar=document.getElementById('timeline-bar'); if(bar) bar.style.display='none';
         const src=map.getSource('routes-source');
         if(src){ const d=src._data; d.features.forEach(f=>{ if(f.geometry.type==='LineString'||f.geometry.type==='MultiLineString') f.properties.is_forecast=false; }); src.setData(d); }
         ['forecast-labels','forecast-layer','forecast-casing','forecast-flow'].forEach(l=>{ if(map.getLayer(l)) map.removeLayer(l); });
         applyZoneMonth(null);   // no month on screen: show every active zone again
+        applyFilters();         // KPI cards and the rail rule follow the timeline closing
     }
     function toggleTimeline(){ if(TL.playing) stopTimeline(); else startTimeline(); }
     function startTimeline(){
@@ -2619,6 +2851,8 @@
         // dragging through a year left "Active routes: 43" frozen above a map that was
         // visibly changing \u2014 the one number on screen that was wrong.
         applyFilters();
+        // §8: and the warnings. Rebuilt for THIS month, every tick.
+        renderTimelineWarnings(m);
     }
     function onTimelineScrub(v){ stopTimeline(); setTimelineMonth(parseInt(v)); }
     // step one month at a time — scrubbing a 60-wide slider by hand cannot reliably
@@ -2627,6 +2861,102 @@
         stopTimeline();
         const max = CONFIG.MONTH_COUNT || 60;
         setTimelineMonth(Math.min(max, Math.max(1, (TL.month || 1) + delta)));
+    }
+
+    // ===== 2026-09-02 (§8) — warnings for the month on the playhead ==================
+    //
+    // Three sources, all already in the product, filtered to the APPROVED routes that
+    // carry volume in the month on screen and pass the sidebar filters:
+    //   1. Tark Tee hits on a baked route   (/api/routes/restrictions, fetched once, cached)
+    //   2. a stockpile over capacity        (/api/public/stockpile-timeline, fetched once)
+    //   3. a seasonal window from factors.json that matches the calendar month and the
+    //      line's vehicle                    (/api/meta, already fetched)
+    // No new warning types and no weather API. At most three on screen plus "+N more";
+    // dismissing hides that warning for that month only. Rebuilt on every tick.
+    const WARN = { restr: null, restrPending: null, piles: null, pilesPending: null, dismissed: {} };
+    async function warnRestrictions() {
+        if (WARN.restr) return WARN.restr;
+        if (!WARN.restrPending) WARN.restrPending = fetch(CONFIG.API_BASE + '/routes/restrictions')
+            .then(r => r.ok ? r.json() : { routes: {} })
+            .then(j => { WARN.restr = (j && j.routes) || {}; return WARN.restr; })
+            .catch(() => { WARN.restr = {}; return WARN.restr; });
+        return WARN.restrPending;
+    }
+    async function warnPiles() {
+        if (WARN.piles) return WARN.piles;
+        if (!WARN.pilesPending) WARN.pilesPending = fetch(CONFIG.API_BASE + '/public/stockpile-timeline?from=1&to=' + (CONFIG.MONTH_COUNT || 60))
+            .then(r => r.ok ? r.json() : { stockpiles: [] })
+            .then(j => { WARN.piles = (j && j.stockpiles) || []; return WARN.piles; })
+            .catch(() => { WARN.piles = []; return WARN.piles; });
+        return WARN.pilesPending;
+    }
+    // the approved lines carrying volume this month, per route, from the timeline matrix
+    function linesOnScreen(m) {
+        const out = [];
+        if (!TL.matrix) return out;
+        a1_data.features.forEach(f => {
+            if (!(f.geometry && f.geometry.type === 'LineString' && f.properties.type === 'Inbound Highway')) return;
+            if (!f.properties.is_forecast || !routePassesFilters(f.properties)) return;
+            out.push(f.properties);
+        });
+        return out;
+    }
+    function dismissWarning(key) { WARN.dismissed[key] = true; renderTimelineWarnings(TL.month); }
+    function renderTimelineWarnings(m) {
+        const box = document.getElementById('tl-warnings');
+        if (!box) return;
+        if (!m || !TL.on) { box.innerHTML = ''; box.style.display = 'none'; return; }
+        const month = m;
+        Promise.all([warnRestrictions(), warnPiles(), kpiFetchMonth(month).catch(() => null)]).then(([restr, piles, kp]) => {
+            if (TL.month !== month || !TL.on) return;     // the playhead moved on
+            const items = [];
+            const routes = linesOnScreen(month);
+            const cal = ((month - 1) % 12) + 1;
+            // 1. Tark Tee, per visible route
+            routes.forEach(p => {
+                const hit = restr[p.route_id];
+                if (!hit || !hit.hits) return;
+                const worst = hit.hits[0];
+                const n = hit.hits.length;
+                items.push({ key: `r|${p.route_id}|${month}`, sev: worst.severity === 'breach' ? 'breach' : (worst.severity === 'warn' ? 'warn' : 'note'),
+                    who: p.route_id, what: (worst.label || worst.kind || 'restriction') + (worst.what ? ' — ' + worst.what : '') + (n > 1 ? ` (+${n - 1})` : ''),
+                    sort: worst.severity === 'breach' ? 0 : 1 });
+            });
+            // 2. stockpiles over at the end of this month
+            (piles || []).forEach(sp => {
+                const mm = sp.months && sp.months[String(month)];
+                if (!mm || !mm.over) return;
+                const u = sp.unit === 'm3' ? 'm³' : (sp.unit || 't');
+                items.push({ key: `s|${sp.location_id}|${month}`, sev: 'breach', who: sp.name,
+                    what: `over capacity — ${Math.round(mm.balance_end).toLocaleString()} / ${Math.round(sp.capacity_qty).toLocaleString()} ${u}`, sort: 0 });
+            });
+            // 3. seasonal windows, per visible line's vehicle
+            const vehByRoute = {};
+            (kp && kp.lines || []).forEach(l => { (vehByRoute[l.route_id] = vehByRoute[l.route_id] || new Set()).add(l.vehicle_type); });
+            (META.seasonal || []).forEach(w => {
+                if (!(w.months || []).includes(cal)) return;
+                const rv = w.restricted_vehicles || [];
+                routes.forEach(p => {
+                    const vs = vehByRoute[p.route_id];
+                    if (!vs) return;
+                    const applies = rv.length === 0 || [...vs].some(v => rv.includes(v));
+                    if (!applies) return;
+                    items.push({ key: `w|${w.name}|${p.route_id}|${month}`, sev: 'warn', who: p.route_id,
+                        what: `${w.name}: ${(w.message || '').split(/[.—]/)[0]}`, sort: 2 });
+                });
+            });
+            const live = items.filter(i => !WARN.dismissed[i.key]).sort((a, b) => a.sort - b.sort);
+            if (!live.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
+            const show = box.dataset.expanded === '1' ? live : live.slice(0, 3);
+            const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+            box.innerHTML = show.map(i =>
+                `<div class="tl-warn ${i.sev}"><span><b>${esc(i.who)}</b> · ${esc(i.what)} · ${esc(monthLabel(month))}</span>` +
+                `<button class="x" title="Dismiss for this month" onclick="dismissWarning('${esc(i.key).replace(/'/g, '')}')">&times;</button></div>`).join('')
+                + (live.length > show.length
+                    ? `<div class="tl-warn more" onclick="this.parentNode.dataset.expanded='1';renderTimelineWarnings(${month})">+${live.length - show.length} more</div>`
+                    : (box.dataset.expanded === '1' && live.length > 3 ? `<div class="tl-warn more" onclick="this.parentNode.dataset.expanded='';renderTimelineWarnings(${month})">show fewer</div>` : ''));
+            box.style.display = 'flex';
+        });
     }
 
     (function initAnalysis(){
