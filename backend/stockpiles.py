@@ -48,7 +48,7 @@ import weeks as weeks_mod
 # Location types that can hold stock. The build list names these four for the capacity
 # fields; a Quarry or a Port is a source, not a store, and showing it a capacity box
 # invites a number nobody means.
-STORAGE_TYPES = ("Stockpile", "Site", "Compound", "Rail head")
+STORAGE_TYPES = ("Stockpile", "Site", "Compound", "Railhead")
 
 # The build list's default. Applied on WRITE, not as a column default — see the note in
 # db.init_weeks_db() for why "not recorded" has to stay distinguishable from "tonnes".
@@ -114,6 +114,9 @@ def storage_locations():
         "SELECT id, name, loc_type, role, material, capacity_qty, capacity_unit, "
         "opening_qty FROM locations WHERE tenant_id = ? ORDER BY id",
         (db.current_tenant(),))
+    import network  # local: network imports stockpiles, so this cannot be top-level
+    for r in rows:
+        r["loc_type"] = network.canonical_loc_type(r.get("loc_type"))
     return [r for r in rows
             if (r.get("loc_type") or "") in STORAGE_TYPES
             or r.get("capacity_qty") is not None

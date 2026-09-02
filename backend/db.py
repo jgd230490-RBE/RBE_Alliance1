@@ -160,6 +160,15 @@ def init_db():
         _create_tenanted(cur, "forecasts")
         conn.commit()
         _migrate_forecasts_to_phase2(conn, cur)
+        # Task F: the line's IPT. Plain ADD COLUMN on both backends; in _TENANT_DDL too.
+        try:
+            if IS_PG:
+                cur.execute("ALTER TABLE forecasts ADD COLUMN IF NOT EXISTS ipt TEXT")
+            else:
+                cur.execute("ALTER TABLE forecasts ADD COLUMN ipt TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()  # column already present - fine
     finally:
         conn.close()
 
@@ -569,6 +578,16 @@ def init_weeks_db():
         _create_tenanted(cur, "forecast_weeks")
         _create_tenanted(cur, "stockpile_weeks")
         conn.commit()
+        # 2026-09-02: 'Rail head' -> 'Railhead', one word, everywhere. The build list's
+        # one-line migration, verbatim. Idempotent — a second boot matches nothing.
+        # Deliberately unscoped by tenant: this is a spelling fix to a type value, not a
+        # row operation on one client's data, and every tenant gets the same rename.
+        try:
+            cur.execute("UPDATE locations SET loc_type = 'Railhead' "
+                        "WHERE loc_type = 'Rail head'")
+            conn.commit()
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -603,6 +622,13 @@ _TENANT_DDL = {
             submitted_by         TEXT,
             status               TEXT NOT NULL DEFAULT 'Pending',
             reject_reason        TEXT,
+            -- 2026-09-02 (Task F): which IPT this LINE belongs to. 'IPT1'..'IPT6'.
+            -- The source of truth for who can see the line - not routes.ipt, which
+            -- reads "IPT 3 / IPT 6" on a shared route, and not the section. NULL on
+            -- every line written before this shipped; those are visible to planners
+            -- and admins only until somebody sets it. Listed here AND ALTERed in
+            -- init_db(), or the SQLite tenant rebuild drops it.
+            ipt                  TEXT,
             PRIMARY KEY (tenant_id, id),
             UNIQUE (tenant_id, route_id, month_index, discipline, section_id)
         )

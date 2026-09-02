@@ -69,6 +69,35 @@ def planning_vehicle_names(factors):
     return out
 
 
+VEHICLE_LANGS = ("en", "eu", "ee")
+
+
+def vehicle_labels(factors):
+    """
+    {vehicle_key: {"en": ..., "eu": ..., "ee": ...}} with every slot filled.
+
+    A missing label falls back to the KEY — never to another language and never to an
+    invented trade name (the 2026-09-02 feedback is explicit: fall back to the EU string
+    rather than invent). The key is the canonical id a forecast line stores; a label only
+    changes what a picker shows. `fallbacks` says which slots were filled that way, so a
+    UI can mark them rather than pass a fallback off as a translation.
+    """
+    out, fallbacks = {}, {}
+    for k, v in (factors.get("vehicles", {}) or {}).items():
+        if k.startswith("_"):
+            continue
+        lab = (v or {}).get("labels") or {}
+        out[k] = {}
+        for lang in VEHICLE_LANGS:
+            val = (lab.get(lang) or "").strip() if isinstance(lab.get(lang), str) else ""
+            if val:
+                out[k][lang] = val
+            else:
+                out[k][lang] = k
+                fallbacks.setdefault(k, []).append(lang)
+    return {"labels": out, "fallbacks": fallbacks, "langs": list(VEHICLE_LANGS)}
+
+
 def flat_factors(factors):
     """
     Backward-compatible flat maps for clients that read the old shape

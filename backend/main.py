@@ -34,6 +34,7 @@ import streetview    # Phase 2.5a — Google Street View proxy (key stays server
 import gates         # Phase 5a — multiple gates per location, with a direction on each
 import weeks         # Week 1 — the 4-week look-ahead and typed actuals (Tasks C, D)
 import stockpiles    # Week 1 — stockpile capacity and typed consumption (Task D2)
+import access        # 2026-09-02 — IPT access codes (Task F)
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -88,6 +89,14 @@ async def lifespan(app: FastAPI):
         counts = taxonomy.seed_taxonomy()
         if any(counts.values()):
             print("Seeded taxonomy:", counts)
+        # Task F: lines written before `ipt` existed. Filled ONLY where the route names
+        # exactly one IPT ("IPT 5"); a shared route ("IPT 3 / IPT 6") tells us nothing
+        # about which of the two a line belongs to, and those stay NULL for a planner
+        # to set. Idempotent — touches only NULLs.
+        back = network.backfill_forecast_ipt()
+        if back.get("filled"):
+            print(f"Task F: ipt filled on {back['filled']} line(s) from single-IPT routes; "
+                  f"{back.get('left', 0)} left NULL (shared or unknown route IPT).")
         meta = network.apply_node_meta()
         if meta.get("applied"):
             print(f"Applied salvaged vendor/detail to {meta['applied']} location(s).")
@@ -101,6 +110,69 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
+
+
+# ------------------------------------------------------------------ access (Task F)
+# The X-Access-Code header is resolved ONCE per request into a contextvar, the same
+# shape the tenant uses, so no endpoint takes a code argument — each one asks
+# access.current(). Registered only when the real FastAPI is present: the test
+# harnesses stub the app class, run endpoint bodies directly, and set the contextvar
+# themselves. That is the "HTTP layer is stubbed" caveat every test file carries, and
+# it now covers this too — nothing here proves the header is actually read.
+try:
+    from fastapi import Request as _Request
+except Exception:      # stubbed fastapi in the sandbox harnesses
+    _Request = None
+
+if _Request is not None and hasattr(app, "middleware"):
+    @app.middleware("http")
+    async def _access_middleware(request, call_next):
+        token = access.set_current(request.headers.get(access.HEADER))
+        try:
+            return await call_next(request)
+        finally:
+            access.reset_current(token)
+
+
+def _require_access():
+    """Any valid code. 401 otherwise."""
+    acc = access.current()
+    if not acc:
+        raise HTTPException(401, "sign in — a valid access code is required")
+    return acc
+
+
+def _require_approver():
+    acc = _require_access()
+    if not access.can_approve(acc):
+        raise HTTPException(403, f"{acc['label']} cannot approve or reject")
+    return acc
+
+
+def _require_line(route_id, month_index, discipline, section_id):
+    """The line must exist AND be visible to this code. 404 either way — an IPT code
+    must not learn that another IPT's line exists."""
+    acc = _require_access()
+    row = {"ipt": access.line_ipt(route_id, month_index, discipline, section_id)}
+    if not access.line_visible(row, acc):
+        raise HTTPException(404, "no such forecast line")
+    return acc
+
+
+class AuthIn(BaseModel):
+    code: str
+
+
+@app.post("/api/auth")
+def auth(body: AuthIn):
+    """
+    Turn a code into a role. The frontend keeps the code and sends it on every
+    request; this only tells it what it got. Nothing is stored server-side.
+    """
+    acc = access.resolve(body.code)
+    if not acc:
+        raise HTTPException(401, "unknown access code")
+    return access.describe(acc)
 
 
 # ------------------------------------------------------------------ schemas
@@ -138,6 +210,9 @@ class MatrixRow(BaseModel):
     unit: str                                  # 'm3' | 't' | 'vehicles'
     cells: List[Cell]
     status: str = "Pending"
+    # Task F: which IPT this line belongs to. Forced to the caller's IPT for an IPT
+    # code; required from a planner; see access.ipt_for_save().
+    ipt: Optional[str] = None
 
 
 class StatusUpdate(BaseModel):
@@ -185,6 +260,10 @@ def meta():
         # `vehicles` and `factors.vehicle_payload_t` by name, so the full set has to stay
         # complete and in its existing order.
         "planning_vehicles": conversions.planning_vehicle_names(factors),
+        # 2026-09-02: the EN / EU / EE label toggle. Labels only — vehicle_type on a
+        # forecast line stays the canonical key. Every slot is filled, a missing one
+        # with the key itself, and `fallbacks` says which.
+        "vehicle_labels": conversions.vehicle_labels(factors),
         # rich taxonomy for the new submission matrix (Commit 2)
         "material_categories": strip(factors.get("material_categories", {})),
         "vehicle_details": strip(factors.get("vehicles", {})),
@@ -239,9 +318,10 @@ def list_forecasts(submitted_by: Optional[str] = None, route_id: Optional[str] =
     # filter is in the SQL text on every branch (there is no longer a no-WHERE branch) and
     # its ? is always first — which is why db.current_tenant() leads the params tuple.
     where = "".join(" AND " + c for c in clauses)
-    return db.query(
+    acc = _require_access()
+    return access.filter_lines(db.query(
         f"SELECT * FROM forecasts WHERE tenant_id = ?{where} ORDER BY route_id, month_index",
-        tuple([db.current_tenant()] + params))
+        tuple([db.current_tenant()] + params)), acc)
 
 
 @app.delete("/api/forecasts/{route_id}")
@@ -259,6 +339,11 @@ def withdraw_route(route_id: str, submitted_by: Optional[str] = None,
     The My-submissions view sends the line keys.
     """
     clauses, params = ["route_id = ?"], [route_id]
+    # Task F: an IPT code can only withdraw its own lines. Added as a predicate rather
+    # than checked afterwards, so the DELETE itself cannot reach another IPT's rows.
+    acc = _require_access()
+    if access.ipt_scope(acc):
+        clauses.append("ipt = ?"); params.append(access.ipt_scope(acc))
     if submitted_by:
         clauses.append("submitted_by = ?"); params.append(submitted_by)
     if from_ is not None and to is not None:
@@ -281,7 +366,9 @@ def withdraw_route(route_id: str, submitted_by: Optional[str] = None,
 @app.get("/api/forecasts/summary")
 def forecasts_summary():
     """One row per route: status, span, and window total in vehicles — for the ledger/approvals view."""
-    rows = db.query("SELECT * FROM forecasts WHERE tenant_id = ?", (db.current_tenant(),))
+    rows = access.filter_lines(
+        db.query("SELECT * FROM forecasts WHERE tenant_id = ?", (db.current_tenant(),)),
+        _require_access())
     factors = conversions.load_factors()
     by_line = {}
     for r in rows:
@@ -296,6 +383,7 @@ def forecasts_summary():
             "months": [], "statuses": set(),
             "unit": r["unit"], "material_type": r["material_type"],
             "vehicle_type": r["vehicle_type"], "submitted_by": r.get("submitted_by"),
+            "ipt": r.get("ipt"),
             # the rejection reason was being written and then never read by anything,
             # so a submitter saw "Rejected" and no explanation
             "reject_reason": None,
@@ -347,6 +435,22 @@ def save_matrix_row(row: MatrixRow):
 
     disc = row.discipline or ""
     sect = row.section_id or ""
+    # Task F. The IPT written on the line is decided HERE, not trusted from the body:
+    # an IPT code's own IPT, or a planner's explicit choice, never a silent default.
+    acc = _require_access()
+    ipt, err = access.ipt_for_save(row.ipt, acc)
+    if err:
+        raise HTTPException(400, err)
+    # ...and an IPT code cannot overwrite a line that belongs to another IPT. The line
+    # key is (route, discipline, section) across the cells; one check covers them all.
+    if access.ipt_scope(acc):
+        owner = db.query(
+            "SELECT DISTINCT ipt FROM forecasts WHERE tenant_id = ? AND route_id = ? "
+            "AND discipline = ? AND section_id = ?",
+            (db.current_tenant(), row.route_id, disc, sect))
+        foreign = [o["ipt"] for o in owner if access.canonical_ipt(o["ipt"]) != ipt]
+        if foreign:
+            raise HTTPException(404, "no such forecast line")
     touched = 0
 
     for c in row.cells:
@@ -360,8 +464,8 @@ def save_matrix_row(row: MatrixRow):
                     (tenant_id, id, route_id, month_index, discipline, section_id,
                      quantity, unit,
                      material_type, material_description, vehicle_type, submitted_by,
-                     status, reject_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     status, reject_reason, ipt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 -- must match the widened UNIQUE key exactly; see MatrixRow's docstring
                 ON CONFLICT (tenant_id, route_id, month_index, discipline, section_id)
                 DO UPDATE SET
@@ -372,12 +476,13 @@ def save_matrix_row(row: MatrixRow):
                     vehicle_type         = EXCLUDED.vehicle_type,
                     submitted_by         = EXCLUDED.submitted_by,
                     status               = EXCLUDED.status,
-                    reject_reason        = NULL
+                    reject_reason        = NULL,
+                    ipt                  = COALESCE(EXCLUDED.ipt, forecasts.ipt)
                 """,
                 (db.current_tenant(),
                  rid, row.route_id, c.month_index, disc, sect, float(c.quantity), row.unit,
                  row.material_type, row.material_description, row.vehicle_type,
-                 row.submitted_by, row.status, None),
+                 row.submitted_by, row.status, None, ipt),
             )
             touched += 1
         else:
@@ -433,6 +538,7 @@ def set_route_status(route_id: str, req: StatusUpdate,
     means approving another discipline's forecast as a side effect. The Approvals view
     should send the line keys.
     """
+    _require_approver()
     clauses, params = ["route_id = ?"], [route_id]
     scoped = discipline is not None or section_id is not None
     if scoped:
@@ -542,7 +648,8 @@ def list_forecast_weeks(from_month: int = Query(1, ge=1, le=MONTH_COUNT),
     empty Look-ahead for an approved line reads as a broken feature rather than a
     missing migration. See weeks.list_weeks().
     """
-    rows = weeks.list_weeks(from_month, to_month, route_id=route_id)
+    acc = _require_access()
+    rows = access.filter_lines(weeks.list_weeks(from_month, to_month, route_id=route_id), acc)
     nm, nw = weeks.editable_week(START_YEAR)
     return {"from": min(from_month, to_month), "to": max(from_month, to_month),
             "weeks": rows,
@@ -557,6 +664,7 @@ def list_forecast_weeks(from_month: int = Query(1, ge=1, le=MONTH_COUNT),
 @app.put("/api/forecast-weeks")
 def edit_forecast_week(body: WeekEdit):
     """Edit one week's planned quantity and/or flags. Sets status `edited`."""
+    _require_line(body.route_id, body.month_index, body.discipline, body.section_id)
     res = weeks.set_week(body.route_id, body.month_index, body.discipline,
                          body.section_id, body.week_index,
                          planned_qty=body.planned_qty, flags=_flags_of(body),
@@ -569,6 +677,7 @@ def edit_forecast_week(body: WeekEdit):
 @app.post("/api/forecast-weeks/confirm")
 def confirm_forecast_week(body: WeekConfirm):
     """Confirm one week, with the four optional flags. Sets status `confirmed`."""
+    _require_line(body.route_id, body.month_index, body.discipline, body.section_id)
     res = weeks.confirm_week(body.route_id, body.month_index, body.discipline,
                              body.section_id, body.week_index,
                              by=body.confirmed_by, flags=_flags_of(body))
@@ -585,6 +694,7 @@ def set_forecast_week_actual(body: WeekActual):
     ⭐ Does NOT calibrate. Variance appears immediately; next week's plan does not
     move until /api/forecast-weeks/calibrate is called.
     """
+    _require_line(body.route_id, body.month_index, body.discipline, body.section_id)
     res = weeks.set_actual(body.route_id, body.month_index, body.discipline,
                            body.section_id, body.week_index,
                            actual_qty=body.actual_qty, actual_note=body.actual_note,
@@ -602,6 +712,7 @@ def calibrate_forecast_week(body: WeekCalibrate):
     400 when next week is already confirmed. The response's `blocked_by` says so, so
     the UI can disable the button rather than discovering it on click.
     """
+    _require_line(body.route_id, body.month_index, body.discipline, body.section_id)
     res = weeks.calibrate(body.route_id, body.month_index, body.discipline,
                           body.section_id, body.week_index,
                           override_qty=body.override_qty, by=body.by)
@@ -653,6 +764,9 @@ def list_stockpiles(from_month: int = Query(1, ge=1, le=MONTH_COUNT),
     A read model — nothing here is stored. Inbound comes from typed week ACTUALS, so a
     week nobody has reported shows inbound 0 rather than a quarter of the forecast.
     """
+    # Task F: any valid code. ⚠️ NOT filtered by IPT — a pile has no IPT, and inferring
+    # one from the routes that feed it would be a guess. An IPT code sees every pile.
+    _require_access()
     out = stockpiles.balances(from_month, to_month, location_id=location_id)
     out["storage_types"] = list(stockpiles.STORAGE_TYPES)
     out["capacity_units"] = list(stockpiles.CAPACITY_UNITS)
@@ -662,6 +776,7 @@ def list_stockpiles(from_month: int = Query(1, ge=1, le=MONTH_COUNT),
 @app.put("/api/stockpiles/consume")
 def consume_stockpile(body: ConsumeIn):
     """One week's typed consumption. There is no file and no importer."""
+    _require_access()
     res = stockpiles.consume(body.location_id, body.month_index, body.week_index,
                              consumed_qty=body.consumed_qty, unit=body.unit,
                              note=body.note, by=body.updated_by)
@@ -709,6 +824,85 @@ def public_route_forecasts(
             "unit": unit,
         }
     return out
+
+
+@app.get("/api/public/month-kpis")
+def public_month_kpis(month: int = Query(..., ge=1, le=MONTH_COUNT),
+                      unit: str = Query("vehicles")):
+    """
+    2026-09-02 (§9). One month of APPROVED forecast, per LINE, with every figure the
+    map's KPI cards need already converted — so the map aggregates after its own
+    filters and never guesses a payload.
+
+    Per line: the typed quantity in the map unit, in tonnes, and in vehicle-loads.
+    Vehicle-loads = tonnes ÷ that line's payload; a vehicle_type factors.json does not
+    know falls back to the first PLANNING vehicle (V07, 18 t) and says so in
+    `payload_fallback`, rather than to _default's 20 t.
+
+    Trips == vehicle-loads on one line — one vehicle, one load per trip — whatever
+    unit it was typed in. The two cards will read the same unless a future line model
+    changes that, and the map says so in its note rather than inventing a difference.
+
+    Approved only. Never actuals — those stay off the public map.
+    """
+    if unit not in conversions.UNITS:
+        raise HTTPException(400, f"unit must be one of {conversions.UNITS}")
+    factors = conversions.load_factors()
+    plan = factors.get("planning", {}) or {}
+    wd = float(plan.get("working_days_per_month") or 22)
+    vs = factors.get("vehicles", {}) or {}
+    planning = conversions.planning_vehicle_names(factors)
+    fb_name = planning[0] if planning else None
+    fb_payload = float((vs.get(fb_name) or {}).get("payload_t") or 18.0)
+    rows = db.query(
+        "SELECT * FROM forecasts WHERE tenant_id = ? AND status = 'Approved' "
+        "AND month_index = ? ORDER BY route_id, discipline, section_id",
+        (db.current_tenant(), int(month)))
+    lines = []
+    for r in rows:
+        v = r.get("vehicle_type")
+        known = bool(v and vs.get(v) and (vs.get(v) or {}).get("payload_t"))
+        payload = float(vs[v]["payload_t"]) if known else fb_payload
+        t = conversions.to_tonnes(r["quantity"], r["unit"], r.get("material_type"), v, factors)
+        lines.append({
+            "route_id": r["route_id"], "discipline": r.get("discipline") or "",
+            "section_id": r.get("section_id") or "", "ipt": r.get("ipt"),
+            "material_type": r.get("material_type") or "",
+            "vehicle_type": v, "unit": r["unit"],
+            "qty_unit": conversions.round_for_unit(conversions.convert_row(r, unit, factors), unit),
+            "qty_t": round(t, 3),
+            "vehicle_loads": round(t / payload, 3) if payload else 0.0,
+            "payload_t": payload, "payload_fallback": (None if known else fb_name),
+        })
+    return {"month": int(month), "unit": unit, "working_days": wd,
+            "payload_fallback_vehicle": fb_name, "lines": lines}
+
+
+@app.get("/api/public/stockpile-timeline")
+def public_stockpile_timeline(from_: int = Query(1, alias="from", ge=1, le=MONTH_COUNT),
+                              to: int = Query(MONTH_COUNT, ge=1, le=MONTH_COUNT)):
+    """
+    2026-09-02 (§8). Per location, per month: is the pile over capacity at the END of
+    that month, and by how much. Read from the same balance read model the Look-ahead
+    uses; nothing stored, nothing new computed. Only piles with a recorded capacity can
+    be over, so only those appear. No week detail — the public map stays monthly.
+    """
+    lo, hi = min(from_, to), max(from_, to)
+    out = []
+    for sp in stockpiles.balances(lo, hi)["stockpiles"]:
+        if sp["capacity_qty"] is None:
+            continue
+        months = {}
+        for w in sp["weeks"]:
+            months[w["month_index"]] = w      # the last week of each month wins
+        out.append({
+            "location_id": sp["location_id"], "name": sp["name"],
+            "capacity_qty": sp["capacity_qty"], "unit": sp["capacity_unit"],
+            "months": {str(m): {"balance_end": w["balance_end"], "over": w["over"],
+                                "remaining": w["remaining"]}
+                       for m, w in months.items()},
+        })
+    return {"from": lo, "to": hi, "stockpiles": out}
 
 
 @app.get("/api/public/forecast-matrix")

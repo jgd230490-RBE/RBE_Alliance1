@@ -93,7 +93,10 @@
         "axle_count": 2
       },
       "load_minutes": 8,
-      "unload_minutes": 5
+      "unload_minutes": 5,
+      "labels": {
+        "en": "Rigid 7.5t"
+      }
     },
     "Rigid 4-wheeler (18t)": {
       "eu_category": "N3",
@@ -109,7 +112,10 @@
         "axle_count": 2
       },
       "load_minutes": 10,
-      "unload_minutes": 6
+      "unload_minutes": 6,
+      "labels": {
+        "en": "Rigid 4-wheeler (18t)"
+      }
     },
     "Rigid 6-wheeler (26t)": {
       "eu_category": "N3",
@@ -125,7 +131,10 @@
         "axle_count": 3
       },
       "load_minutes": 11,
-      "unload_minutes": 7
+      "unload_minutes": 7,
+      "labels": {
+        "en": "Rigid 6-wheeler (26t)"
+      }
     },
     "Rigid 8-wheeler (32t)": {
       "eu_category": "N3",
@@ -141,7 +150,10 @@
         "axle_count": 4
       },
       "load_minutes": 12,
-      "unload_minutes": 8
+      "unload_minutes": 8,
+      "labels": {
+        "en": "Rigid 8-wheeler (32t)"
+      }
     },
     "Artic Tipper (44t)": {
       "eu_category": "N3",
@@ -157,7 +169,10 @@
         "axle_count": 5
       },
       "load_minutes": 15,
-      "unload_minutes": 9
+      "unload_minutes": 9,
+      "labels": {
+        "en": "Artic Tipper (44t)"
+      }
     },
     "Artic Flatbed (44t)": {
       "eu_category": "N3",
@@ -173,7 +188,10 @@
         "axle_count": 5
       },
       "load_minutes": 25,
-      "unload_minutes": 20
+      "unload_minutes": 20,
+      "labels": {
+        "en": "Artic Flatbed (44t)"
+      }
     },
     "N3 lorry (BA) 4-axle TPMLM 32 t tipper": {
       "code": "V07",
@@ -194,7 +212,11 @@
         "gross_weight_kg": 32000,
         "axle_count": 4
       },
-      "_routing_note": "height_cm / width_cm / length_cm are ABSENT because the build list does not give them. here_routing._truck_params() sends only the keys present, so HERE routes this on weight and axle count alone - it does not borrow another vehicle's dimensions."
+      "_routing_note": "height_cm / width_cm / length_cm are ABSENT because the build list does not give them. here_routing._truck_params() sends only the keys present, so HERE routes this on weight and axle count alone - it does not borrow another vehicle's dimensions.",
+      "labels": {
+        "en": "8x4 rigid tipper (32 t)",
+        "eu": "N3 lorry (BA) 4-axle TPMLM 32 t tipper"
+      }
     },
     "N3 lorry (BA) 4-axle mixer 32 t": {
       "code": "V10",
@@ -216,7 +238,11 @@
         "gross_weight_kg": 32000,
         "axle_count": 4
       },
-      "_routing_note": "Dimensions absent - not given. See the V07 note."
+      "_routing_note": "Dimensions absent - not given. See the V07 note.",
+      "labels": {
+        "en": "8x4 rigid mixer (32 t)",
+        "eu": "N3 lorry (BA) 4-axle mixer 32 t"
+      }
     },
     "N3 tractor (BC) + O4 semi (DA) GCW 40 t": {
       "code": "V11",
@@ -237,7 +263,11 @@
       "routing": {
         "gross_weight_kg": 40000
       },
-      "_routing_note": "axle_count is ABSENT as well as the dimensions: the build list says 'tractor (BC) + semi (DA)' with no axle count, and a 40 t combination is 5 or 6 axles depending on configuration. Guessing it would change which roads HERE allows."
+      "_routing_note": "axle_count is ABSENT as well as the dimensions: the build list says 'tractor (BC) + semi (DA)' with no axle count, and a 40 t combination is 5 or 6 axles depending on configuration. Guessing it would change which roads HERE allows.",
+      "labels": {
+        "en": "Artic (40 t)",
+        "eu": "N3 tractor (BC) + O4 semi (DA) GCW 40 t"
+      }
     },
     "N3 tractor (BC) + O4 tipping semi (DA) GCW 40/44 t": {
       "code": "V12",
@@ -258,7 +288,11 @@
       "routing": {
         "gross_weight_kg": 40000
       },
-      "_routing_note": "axle_count and dimensions absent - not given. See the V11 note."
+      "_routing_note": "axle_count and dimensions absent - not given. See the V11 note.",
+      "labels": {
+        "en": "Artic tipper (40/44 t)",
+        "eu": "N3 tractor (BC) + O4 tipping semi (DA) GCW 40/44 t"
+      }
     },
     "_default": {
       "payload_t": 20,
@@ -309,5 +343,6 @@
     }
   ],
   "_routing_note": "vehicles[].routing holds HGV dimensions for HERE truck routing (weight kg, sizes cm, axle count).",
-  "_materials_vehicles_note": "Which of the four new planning vehicles each category lists is CLAUDE'S INFERENCE, 2026-09-01, not sourced from the build list: V07/V12 tippers on soil and aggregates, V10 mixer on concrete, V11 flat semi on concrete/steel/general. It had to be decided because the Submit Forecast picker DISABLES a vehicle a category does not list, so an unlisted planning vehicle would be unselectable. The join is advisory in the UI, not enforced - correct any line of it freely."
+  "_materials_vehicles_note": "Which of the four new planning vehicles each category lists is CLAUDE'S INFERENCE, 2026-09-01, not sourced from the build list: V07/V12 tippers on soil and aggregates, V10 mixer on concrete, V11 flat semi on concrete/steel/general. It had to be decided because the Submit Forecast picker DISABLES a vehicle a category does not list, so an unlisted planning vehicle would be unselectable. The join is advisory in the UI, not enforced - correct any line of it freely.",
+  "_labels_note": "labels.{en,eu,ee} per vehicle - 2026-09-02, the EN/EU/EE toggle. The KEY is the canonical id and is what a forecast line stores; a label only changes what the picker shows. Missing en/eu/ee falls back to the key, never to an invented name. EU strings exist only for the four planning vehicles (the key IS the EU 2018/858 string); the six legacy keys are UK trade names, so their EU label falls back to the key. ee is ABSENT on every entry: the build list names 'veoauto, sadulveduk, kallur' as examples of EE official aliases but does not say which vehicle each belongs to, and the EU matrix that carries them is not in this repo. Fill labels.ee here and the toggle picks it up."
 }

@@ -102,7 +102,7 @@ def _coord_or_none(v):
 
 # Week 1, Task E/D2. Two new types.
 #
-#   Rail head   an ORIGIN, exactly like a quarry or a port — material arrives by rail
+#   Railhead   an ORIGIN, exactly like a quarry or a port — material arrives by rail
 #               and leaves by road. map/index.html's filterByNode() has the matching
 #               rule, and the two must agree or the public map's origin filter and the
 #               route authoring disagree about the same location.
@@ -112,9 +112,22 @@ def _coord_or_none(v):
 #
 # This is a DEFAULT for a newly created location, not a constraint: role is a column
 # and the form always wins.
+# 2026-09-02: 'Rail head' became 'Railhead' (one word, everywhere). Rows written before
+# that carry the old spelling until init_weeks_db()'s UPDATE has run against them, and a
+# client can still POST the old string. Both are read as the new one; only the new one is
+# ever written. Old rows must not vanish from the map or the storage panel in between.
+LEGACY_LOC_TYPES = {"Rail head": "Railhead", "rail head": "Railhead"}
+
+
+def canonical_loc_type(loc_type):
+    if loc_type is None:
+        return None
+    return LEGACY_LOC_TYPES.get(loc_type, LEGACY_LOC_TYPES.get(loc_type.strip(), loc_type))
+
+
 def _role_for(loc_type):
-    t = (loc_type or "").strip().lower()
-    if t in ("quarry", "port", "rail head"):
+    t = (canonical_loc_type(loc_type) or "").strip().lower()
+    if t in ("quarry", "port", "railhead"):
         return "origin"
     if t in ("compound", "site", "stockpile"):
         return "destination"
@@ -218,6 +231,30 @@ def backfill_supplies_receives():
 
 
 _NODE_META = os.path.join(os.path.dirname(__file__), "seed_data", "node_meta.json")
+
+
+def backfill_forecast_ipt():
+    """
+    Task F, one-off and idempotent. A forecast line written before `ipt` existed gets
+    its route's IPT — but ONLY where the route names exactly one ("IPT 5"). Most routes
+    read "IPT 3 / IPT 6": shared, and nothing on the line says which of the two it is,
+    so those stay NULL for a planner to set. Reading data is not guessing; picking one
+    half of a shared route would be.
+    """
+    import access
+    filled, left = 0, 0
+    routes = {r["id"]: r.get("ipt") for r in db.query(
+        "SELECT id, ipt FROM routes WHERE tenant_id = ?", (db.current_tenant(),))}
+    for f in db.query("SELECT id, route_id FROM forecasts WHERE tenant_id = ? AND ipt IS NULL",
+                      (db.current_tenant(),)):
+        one = access.canonical_ipt(routes.get(f["route_id"]))
+        if one:
+            db.execute("UPDATE forecasts SET ipt = ? WHERE tenant_id = ? AND id = ?",
+                       (one, db.current_tenant(), f["id"]))
+            filled += 1
+        else:
+            left += 1
+    return {"filled": filled, "left": left}
 
 
 def apply_node_meta():
@@ -804,7 +841,7 @@ def public_map_data(profile=None):
                 # the map disambiguates nothing itself, and C01/C02 are both called
                 # 'Parnu terminal', so the id rides along in the label
                 "name": l["name"],
-                "node_type": l.get("loc_type") or "Other",
+                "node_type": canonical_loc_type(l.get("loc_type")) or "Other",
                 "material": l.get("material") or "",   # popup calls .toLowerCase() on this
                 "ipt": "",
                 "vendor": l.get("vendor") or "",
@@ -927,7 +964,8 @@ def locations_geojson():
         receives = _parse(l.get("receives"))
         feats.append({
             "type": "Feature",
-            "properties": {"id": l["id"], "name": l["name"], "loc_type": l["loc_type"],
+            "properties": {"id": l["id"], "name": l["name"],
+                           "loc_type": canonical_loc_type(l["loc_type"]),
                            "role": l.get("role") or "both", "materials": mats,
                            "supplies": supplies, "receives": receives,
                            "lat": l["lat"], "lon": l["lon"],
@@ -984,7 +1022,8 @@ def create_location(name, role, materials=None, lat=None, lon=None, loc_type=Non
         "INSERT INTO locations (tenant_id, id, name, loc_type, role, materials, supplies, receives, "
         "lat, lon, gate_lat, gate_lon, vendor, detail, material) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (db.current_tenant(), lid, name, loc_type or role, role, json.dumps(supplies),
+        (db.current_tenant(), lid, name, canonical_loc_type(loc_type) or role, role,
+         json.dumps(supplies),
          json.dumps(supplies),
          json.dumps(receives), float(lat), float(lon), g_lat, g_lon,
          (vendor or None), (detail or None), None),
@@ -1038,7 +1077,7 @@ def update_location(location_id, name=None, role=None, materials=None, lat=None,
         "receives = ?, lat = ?, lon = ?, gate_lat = ?, gate_lon = ?, vendor = ?, detail = ? "
         "WHERE tenant_id = ? AND id = ?",
         (name if name is not None else cur["name"],
-         loc_type if loc_type is not None else cur["loc_type"],
+         canonical_loc_type(loc_type) if loc_type is not None else cur["loc_type"],
          role if role is not None else cur["role"],
          materials_json, supplies_json, receives_json,
          float(lat) if lat is not None else cur["lat"],

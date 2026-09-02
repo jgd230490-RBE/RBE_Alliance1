@@ -120,7 +120,7 @@ def _parent_lines(from_month, to_month, approved_only=True):
     status_clause = " AND status = 'Approved'" if approved_only else ""
     return db.query(
         "SELECT route_id, month_index, discipline, section_id, quantity, unit, "
-        "material_type, vehicle_type, submitted_by, status FROM forecasts "
+        "material_type, vehicle_type, submitted_by, status, ipt FROM forecasts "
         "WHERE tenant_id = ? AND month_index BETWEEN ? AND ?" + status_clause +
         " ORDER BY route_id, month_index, discipline, section_id",
         (db.current_tenant(), int(from_month), int(to_month)))
@@ -198,6 +198,8 @@ def list_weeks(from_month, to_month, route_id=None):
         r["material_type"] = p["material_type"] if p else None
         r["vehicle_type"] = p["vehicle_type"] if p else None
         r["parent_status"] = p["status"] if p else None
+        # Task F: the parent line's IPT rides along so the endpoint can filter on it
+        r["ipt"] = p.get("ipt") if p else None
         out.append(r)
     return out
 
