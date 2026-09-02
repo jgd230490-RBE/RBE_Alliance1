@@ -40,10 +40,27 @@ const API = "/api";
 const MAP_URL = "/map/?v=" + Date.now();  // per-load cache-buster so the iframe never serves a stale map
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-// Demo login. NOTE: these are client-side only and NOT secure — replace with
-// real authentication before any production/public use.
-const LOGINS = { submitter123: "Submitter", planner123: "Planner", admin123: "Admin" };
-const CAN_APPROVE = { Planner: true, Admin: true, Submitter: false };
+// ---- 2026-09-02, Task F: access codes are resolved by the SERVER --------------
+// The client-side LOGINS dict with plaintext codes in view-source is gone. The code is
+// POSTed to /api/auth, which says what it grants (role, IPT scope, can_approve), and is
+// then sent on EVERY /api request as the X-Access-Code header — the server filters on
+// it. The code lives in sessionStorage for the tab only.
+//
+// ⚠️ Still not authentication in the Phase 6 sense: a shared code per role, no rate
+// limit, no per-person identity beyond the name you type. Do not call this secure.
+const ACCESS = { code: "", info: null };
+try { ACCESS.code = sessionStorage.getItem("rbe_access_code") || ""; } catch(e){}
+// one place adds the header, so no fetch() call site can forget it
+const _rawFetch = window.fetch.bind(window);
+window.fetch = (url, opts) => {
+  const u = typeof url === "string" ? url : (url && url.url) || "";
+  if(u.startsWith(API) && ACCESS.code){
+    const o = { ...(opts || {}) };
+    o.headers = { ...(o.headers || {}), "X-Access-Code": ACCESS.code };
+    return _rawFetch(url, o);
+  }
+  return _rawFetch(url, opts);
+};
 
 // ---- client-side conversion preview (mirrors backend factors.json) ----
 const density = (f, m) => (f.material_density_t_per_m3[m] ?? f.material_density_t_per_m3._default);
@@ -238,7 +255,7 @@ function Dashboard({ meta }){
           <select className={sel} value={status} onChange={e=>setStatus(e.target.value)}>{["Approved","Pending","All"].map(s=><option key={s}>{s}</option>)}</select>
           <select className={sel} value={unit} onChange={e=>setUnit(e.target.value)}>{units.map(u=><option key={u} value={u}>{u==="t"?"tonnes":u==="m3"?"m³":"vehicles"}</option>)}</select>
           <select className={sel} value={material} onChange={e=>setMaterial(e.target.value)}><option>All</option>{materials.map(m=><option key={m}>{m}</option>)}</select>
-          <select className={sel} value={vehicle} onChange={e=>setVehicle(e.target.value)}><option>All</option>{vehicles.map(v=><option key={v}>{v}</option>)}</select>
+          <select className={sel} value={vehicle} onChange={e=>setVehicle(e.target.value)}><option>All</option>{vehicles.map(v=><option key={v} value={v}>{vehLabel(v)}</option>)}</select>
           <select className={sel} value={fromM} onChange={e=>setFromM(+e.target.value)}>{Array.from({length:months.count},(_,i)=>i+1).map(i=><option key={i} value={i}>{monthLabelAbs(i,months.start_year)}</option>)}</select>
           <span className="self-center text-slate-400 text-sm">→</span>
           <select className={sel} value={toM} onChange={e=>setToM(+e.target.value)}>{Array.from({length:months.count},(_,i)=>i+1).map(i=><option key={i} value={i}>{monthLabelAbs(i,months.start_year)}</option>)}</select>
@@ -358,27 +375,44 @@ function App(){
   const [who, setWho] = useState(() => { try { return localStorage.getItem("rbe_who") || ""; } catch(e){ return ""; } });
   const [meta, setMeta] = useState(null);
   const [metaErr, setMetaErr] = useState(false);
+  // the label language. Held in App so the header control and every table re-render
+  // together; mirrored into the module-level VEH so plain helpers can read it.
+  const [vehLang, setVehLangState] = useState(VEH.lang);
+  const setVehLang = (l) => { VEH.lang = l; try { localStorage.setItem("rbe_veh_lang", l); } catch(e){} setVehLangState(l); };
 
   useEffect(() => {
-    fetch(`${API}/meta`).then(r => r.json()).then(setMeta).catch(() => setMetaErr(true));
+    fetch(`${API}/meta`).then(r => r.json()).then(m => {
+      const vl = m && m.vehicle_labels;
+      if(vl){ VEH.labels = vl.labels || {}; VEH.fallbacks = vl.fallbacks || {}; }
+      setMeta(m);
+    }).catch(() => setMetaErr(true));
   }, []);
 
-  const signIn = (r, name) => {
+  // `role` is now the /api/auth payload: {role, label, ipt, can_approve, ipt_locked,
+  // ipt_required, demo, ipts}. Every permission the UI shows comes from it, not from a
+  // client-side table.
+  const signIn = (info, name, code) => {
     const n = (name || "").trim();
-    setRole(r); setWho(n);
+    ACCESS.code = code; ACCESS.info = info;
+    try { sessionStorage.setItem("rbe_access_code", code); } catch(e){}
+    setRole(info); setWho(n);
     try { localStorage.setItem("rbe_who", n); } catch(e){}
     setView("portal");
   };
-  const signOut = () => { setRole(null); setView("public"); };
+  const signOut = () => {
+    ACCESS.code = ""; ACCESS.info = null;
+    try { sessionStorage.removeItem("rbe_access_code"); } catch(e){}
+    setRole(null); setView("public");
+  };
 
   return (
     <div className="h-full flex flex-col">
-      <Header view={view} role={role} setView={setView} signOut={signOut} />
+      <Header view={view} role={role} setView={setView} signOut={signOut} vehLang={vehLang} setVehLang={setVehLang} />
       <main className="flex-1 min-h-0 flex flex-col">
         {view === "public" && <PublicMap onLogin={() => setView("login")} />}
         {view === "login" && <Login onSignIn={signIn} onBack={() => setView("public")} savedName={who} />}
         {view === "portal" && (
-          <Portal role={role} who={who} meta={meta} metaErr={metaErr} />
+          <Portal role={role} who={who} meta={meta} metaErr={metaErr} vehLang={vehLang} />
         )}
       </main>
     </div>
@@ -386,7 +420,7 @@ function App(){
 }
 
 // ================================================================= Header
-function Header({ view, role, setView, signOut }){
+function Header({ view, role, setView, signOut, vehLang, setVehLang }){
   return (
     <header className="brand-bar text-white shrink-0">
       <div className="max-w-7xl mx-auto px-5 h-16 flex items-center justify-between">
@@ -406,7 +440,17 @@ function Header({ view, role, setView, signOut }){
           )}
           {role && (
             <>
-              <span className="hidden sm:inline text-white/70 mr-1">{role}</span>
+              {/* Vehicle names: EN / EU / EE. Label only — see vehLabel(). */}
+              <span className="hidden md:inline-flex rounded-md overflow-hidden border border-white/20 text-[11px] mr-2"
+                title="How vehicle names are shown. Changes the label only; nothing stored changes.">
+                {VEH_LANGS.map(([k, l]) => (
+                  <button key={k} onClick={() => setVehLang(k)}
+                    className={"px-2 py-1 " + (vehLang === k ? "bg-white/25 font-semibold" : "hover:bg-white/10 text-white/70")}>
+                    {l}
+                  </button>
+                ))}
+              </span>
+              <span className="hidden sm:inline text-white/70 mr-1">{role.label}{role.ipt ? ` · ${role.ipt}` : ""}</span>
               <button onClick={signOut}
                 className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 font-medium transition">
                 Sign out
@@ -443,11 +487,18 @@ function Login({ onSignIn, onBack, savedName }){
   const [pw, setPw] = useState("");
   const [name, setName] = useState(savedName || "");
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
   const submit = () => {
-    const r = LOGINS[pw.trim()];
-    if(!r){ setErr("That access code isn't recognised."); return; }
     if(!name.trim()){ setErr("Please enter your name."); return; }
-    setErr(""); onSignIn(r, name);
+    const code = pw.trim();
+    if(!code){ setErr("Enter your access code."); return; }
+    setBusy(true); setErr("");
+    fetch(`${API}/auth`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }) })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(info => onSignIn(info, name, code))
+      .catch(e => setErr(e === 401 ? "That access code isn't recognised." : `Couldn't sign in (${e}).`))
+      .finally(() => setBusy(false));
   };
   return (
     <div className="flex-1 grid place-items-center px-5">
@@ -469,17 +520,18 @@ function Login({ onSignIn, onBack, savedName }){
           className="w-full border border-slate-300 rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-[color:var(--blue)]"
         />
         {err && <p className="text-sm mt-2" style={{color:"var(--red)"}}>{err}</p>}
-        <button onClick={submit}
-          className="w-full mt-4 py-2.5 rounded-lg text-white font-semibold transition"
+        <button onClick={submit} disabled={busy}
+          className="w-full mt-4 py-2.5 rounded-lg text-white font-semibold transition disabled:opacity-50"
           style={{background:"var(--navy)"}}>
-          Sign in
+          {busy ? "Checking…" : "Sign in"}
         </button>
         <button onClick={onBack} className="w-full mt-2 py-2 text-sm text-slate-500 hover:text-slate-700">
           Back to public map
         </button>
         <p className="text-[11px] text-slate-400 mt-5 leading-relaxed">
-          Demo codes — Submitter: <code>submitter123</code>, Planner: <code>planner123</code>, Admin: <code>admin123</code>.
-          Replace with real authentication before production use.
+          Your IPT's code shows only your IPT's forecast lines. The planner code sees every IPT and can
+          approve. Codes are checked by the server; with none configured, the three demo codes
+          (<code>submitter123</code> / <code>planner123</code> / <code>admin123</code>) still work.
         </p>
       </div>
     </div>
@@ -487,8 +539,8 @@ function Login({ onSignIn, onBack, savedName }){
 }
 
 // ================================================================= Portal (tabbed)
-function Portal({ role, who, meta, metaErr }){
-  const canApprove = CAN_APPROVE[role];
+function Portal({ role, who, meta, metaErr, vehLang }){
+  const canApprove = !!(role && role.can_approve);
   // ⚠️ Look-ahead is visible to EVERYONE on staff, submitters included, because until
   // Task F lands /api/forecast-weeks has exactly the same visibility as
   // /api/forecasts — everyone sees every line. Hiding the tab from submitters would
@@ -526,7 +578,7 @@ function Portal({ role, who, meta, metaErr }){
       </nav>
       <div className="flex-1 min-h-0 overflow-auto">
         {tab === "Dashboard" && <Dashboard meta={meta} />}
-        {tab === "Submit Forecast" && <Matrix meta={meta} who={who} editTarget={editTarget} />}
+        {tab === "Submit Forecast" && <Matrix meta={meta} who={who} editTarget={editTarget} vehLang={vehLang} access={role} />}
         {tab === "Look-ahead" && <LookAhead meta={meta} who={who} />}
         {tab === "My submissions" && <MySubmissions meta={meta} who={who} onEdit={editInMatrix} />}
         {tab === "Approvals" && canApprove && <Approvals />}
@@ -549,14 +601,17 @@ function Portal({ role, who, meta, metaErr }){
 // vehicle list changed could not be re-saved.
 function vehOption(v, suggested, current){
   const fits = suggested.includes(v);
+  // value = the canonical id, ALWAYS. Only the text follows the language toggle, and a
+  // slot that fell back to the id is marked so a fallback is not mistaken for a
+  // translation.
   return <option key={v} value={v} disabled={!fits && v !== current}
     style={{ color: fits ? undefined : "#cbd5e1" }}>
-    {v}{fits ? "" : " · not used for this material"}
+    {vehLabel(v)}{vehIsFallback(v) && VEH.lang !== "eu" ? " *" : ""}{fits ? "" : " · not used for this material"}
   </option>;
 }
 
 // ================================================================= Matrix
-function Matrix({ meta, who, editTarget }){
+function Matrix({ meta, who, editTarget, vehLang, access }){
   const { routes, materials, vehicles, units, months, factors,
           material_categories = {}, seasonal_restrictions = [],
           disciplines = [], work_sections = [], planning_vehicles = [] } = meta;
@@ -619,6 +674,12 @@ function Matrix({ meta, who, editTarget }){
   // section can be inferred from the destination.
   const [discipline, setDiscipline] = useState("");
   const [sectionId, setSectionId] = useState("");
+  // Task F: which IPT this line belongs to. Locked to the caller's IPT for an IPT code;
+  // a planner must pick one — empty until they do, NEVER silently IPT 1. Written on the
+  // line and it is what decides who can see it afterwards.
+  const iptLocked = !!(access && access.ipt_locked);
+  const iptRequired = !!(access && access.ipt_required && !access.demo);
+  const [ipt, setIpt] = useState((access && access.ipt) || "");
   const [siblings, setSiblings] = useState([]);   // other lines already on this route
   const [caution, setCaution] = useState(null);   // returned by the save
 
@@ -720,6 +781,7 @@ function Matrix({ meta, who, editTarget }){
       setVals(next);
       const first = mine[0];
       if(first){
+        if(first.ipt && !iptLocked) setIpt(first.ipt);
         if(first.unit) setUnit(first.unit);
         if(first.material_type && materials.includes(first.material_type)) setMaterial(first.material_type);
         if(first.vehicle_type) setVehicle(first.vehicle_type);
@@ -773,14 +835,29 @@ function Matrix({ meta, who, editTarget }){
     // Still per WORKING month, and now over the whole range — the average is across
     // the months actually entered, not across every month the range spans. A range of
     // 2026-2030 with three months filled in must not report a twelfth of the traffic.
-    const monthlyT = inRange
-      .map(([, q]) => toTonnes(q, unit, material, vehicle, factors))
-      .filter(t => t > 0);
-    if(!monthlyT.length || wd <= 0) return { avgT:0, peakT:0, avgVeh:0, peakVeh:0, months:0 };
-    const avgT = (monthlyT.reduce((a, b) => a + b, 0) / monthlyT.length) / wd;
+    //
+    // 2026-09-02, §3 of the feedback: six figures, all per working day, all across the
+    // selected year range, all over months-with-qty:
+    //   vehicles/day  = vehicle-loads (tonnes ÷ payload)   avg and peak month
+    //   trips/day     = the same figure. On ONE line with ONE vehicle a trip IS a
+    //                   vehicle-load, whatever unit the line was typed in — t and m³
+    //                   both convert via the payload, exactly as the brief says. The
+    //                   two only diverge on the dashboard, where lines mix vehicles.
+    //   material/day  = the typed quantity in the CHOSEN unit, avg and peak month
+    const months = inRange.filter(([, q]) => +q > 0);
+    if(!months.length || wd <= 0) return { avgT:0, peakT:0, avgVeh:0, peakVeh:0,
+      avgTrips:0, peakTrips:0, avgQty:0, peakQty:0, months:0, wd };
+    const monthlyT = months.map(([, q]) => toTonnes(q, unit, material, vehicle, factors));
+    const monthlyQ = months.map(([, q]) => +q);
+    const sum = (a) => a.reduce((x, y) => x + y, 0);
+    const avgT = (sum(monthlyT) / months.length) / wd;
     const peakT = Math.max(...monthlyT) / wd;
     const p = effPayload || 1;
-    return { avgT, peakT, avgVeh: avgT / p, peakVeh: peakT / p, months: monthlyT.length };
+    const avgVeh = avgT / p, peakVeh = peakT / p;
+    return { avgT, peakT, avgVeh, peakVeh,
+      avgTrips: avgVeh, peakTrips: peakVeh,
+      avgQty: (sum(monthlyQ) / months.length) / wd, peakQty: Math.max(...monthlyQ) / wd,
+      months: months.length, wd };
   }, [inRange, unit, material, vehicle, factors, effPayload]);
 
   const warnings = useMemo(() => {
@@ -801,6 +878,7 @@ function Matrix({ meta, who, editTarget }){
 
   const save = () => {
     if(!routeId){ setMsg({ ok: false, text: "Pick an origin and destination that map to a route first." }); return; }
+    if(iptRequired && !ipt){ setMsg({ ok: false, text: "Pick which IPT this line belongs to before saving." }); return; }
     setBusy(true); setMsg(null); setCaution(null);
     // ONE POST for the whole range. The backend upserts a cell with a quantity and
     // DELETES one at zero, both on the full widened key, so an emptied month inside
@@ -815,6 +893,8 @@ function Matrix({ meta, who, editTarget }){
         material_type: material, material_description: description || null,
         vehicle_type: vehicle, submitted_by: who || null,
         unit, cells, status: "Pending",
+        // the server forces this to the caller's IPT for an IPT code regardless
+        ipt: (iptLocked ? access.ipt : ipt) || null,
       }),
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
@@ -880,7 +960,22 @@ function Matrix({ meta, who, editTarget }){
         {/* Discipline and section sit on the LINE. Ballast to a substructure section is
             still superstructure traffic, and sections overlap, so neither can be derived
             from the route or the destination. */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Field label={iptRequired ? "IPT (required)" : "IPT"}>
+            {iptLocked ? (
+              <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm font-medium text-slate-700"
+                title="Your access code is for this IPT. Every line you save belongs to it.">
+                {access.ipt} <span className="text-slate-400 font-normal">· your IPT</span>
+              </div>
+            ) : (
+              <select value={ipt} onChange={e => setIpt(e.target.value)} className={selCls}>
+                <option value="">— pick an IPT —</option>
+                {((access && access.ipts) || ["IPT1","IPT2","IPT3","IPT4","IPT5","IPT6"]).map(i => (
+                  <option key={i} value={i}>{i.replace(/^IPT/, "IPT ")}</option>
+                ))}
+              </select>
+            )}
+          </Field>
           <Field label="Discipline">
             <select value={discipline} onChange={e => setDiscipline(e.target.value)} className={selCls}>
               <option value="">— unassigned —</option>
@@ -1024,21 +1119,44 @@ function Matrix({ meta, who, editTarget }){
           </div>
         )}
 
-        <div className="rounded-lg bg-slate-50 border border-slate-200 p-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
-          <Stat label={`${fromYear === toYear ? "Year" : "Range"} total · ${rangeLabel} (${unit === "m3" ? "m³" : unit})`}
-            value={fmt(totalUnit, unit)} />
-          <Stat label="≈ tonnes" value={fmt(totalT, "t")} />
-          <Stat label="≈ vehicle loads" value={fmt(totalVeh, "vehicles")} tone="var(--navy)" />
-          {/* Per working DAY, not per calendar day — the peak month is what sizes a
-              fleet and a site gate, and an annual total hides it entirely. Averaged
-              across the months actually entered, not across all twelve. */}
-          <Stat label="Avg / day" value={`${fmt(perDay.avgVeh, "vehicles")} veh · ${fmt(perDay.avgT, "t")} t`} />
-          <Stat label="Peak month / day" value={`${fmt(perDay.peakVeh, "vehicles")} veh · ${fmt(perDay.peakT, "t")} t`}
-            tone="var(--red)" />
-          <span className="text-xs text-slate-400 self-center">
-            {volumeOk ? `${density(factors, material)} t/m³ · ` : ""}
-            {`${payload(factors, vehicle)} t/load`}
-          </span>
+        {/* The range strip. Totals first, then the six per-working-day cards the
+            2026-09-02 feedback asks for: avg and peak of vehicles, trips and material.
+            Per WORKING day (factors.planning.working_days_per_month), across the
+            selected range, averaged over the months actually entered — a 2026-2030
+            range with three months filled in must not report a twelfth of the traffic.
+            Peak = the single busiest month ÷ working days; that is what sizes a fleet
+            and a site gate, and a range total hides it. */}
+        <div className="rounded-lg border border-slate-200 overflow-hidden text-sm">
+          <div className="bg-slate-50 p-4 flex flex-wrap gap-x-8 gap-y-2 border-b border-slate-200">
+            <Stat label={`${fromYear === toYear ? "Year" : "Range"} total · ${rangeLabel} (${unit === "m3" ? "m³" : unit})`}
+              value={fmt(totalUnit, unit)} />
+            <Stat label="≈ tonnes" value={fmt(totalT, "t")} />
+            <Stat label="≈ vehicle loads" value={fmt(totalVeh, "vehicles")} tone="var(--navy)" />
+            <span className="text-xs text-slate-400 self-center">
+              {volumeOk ? `${density(factors, material)} t/m³ · ` : ""}
+              {`${payload(factors, vehicle)} t/load · ${vehLabel(vehicle)}`}
+              {` · ${perDay.wd} working days/month · ${perDay.months} month${perDay.months === 1 ? "" : "s"} with a figure`}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-6 divide-x divide-slate-200 text-white kpi-num" style={{ background: "var(--navy)" }}>
+            {[
+              ["Avg vehicles / day",  fmt(perDay.avgVeh, "vehicles"),   ""],
+              ["Peak vehicles / day", fmt(perDay.peakVeh, "vehicles"),  "peak"],
+              ["Avg trips / day",     fmt(perDay.avgTrips, "vehicles"), ""],
+              ["Peak trips / day",    fmt(perDay.peakTrips, "vehicles"),"peak"],
+              [`Avg ${unit === "m3" ? "m³" : unit === "t" ? "t" : "loads"} / day`,  fmt(perDay.avgQty, unit),  ""],
+              [`Peak ${unit === "m3" ? "m³" : unit === "t" ? "t" : "loads"} / day`, fmt(perDay.peakQty, unit), "peak"],
+            ].map(([label, value, tone]) => (
+              <div key={label} className="px-3 py-2.5">
+                <div className="text-[10px] uppercase tracking-wide text-white/60">{label}</div>
+                <div className={"text-lg font-bold tabular-nums " + (tone === "peak" ? "text-[color:var(--gold)]" : "")}>{value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="px-3 py-1.5 text-[10.5px] text-slate-400 bg-white">
+            Trips equal vehicle loads on a single line — one vehicle, one load per trip — whether the line is typed
+            in tonnes, m³ or loads. They diverge only where lines with different vehicles are combined.
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -1105,7 +1223,7 @@ function MySubmissions({ meta, who, onEdit }){
       const disc = r.discipline || "", sect = r.section_id || "";
       const key = [r.route_id, disc, sect].join("|");
       const e = g[key] || (g[key] = {
-        routeId: r.route_id, discipline: disc, sectionId: sect,
+        routeId: r.route_id, discipline: disc, sectionId: sect, ipt: r.ipt || "",
         statuses: new Set(), material: r.material_type,
         material_description: r.material_description, vehicle: r.vehicle_type,
         unit: r.unit, months: 0, quantity: 0, rejectReason: null,
@@ -1229,7 +1347,9 @@ function MySubmissions({ meta, who, onEdit }){
                   const r = routeById[g.routeId] || {};
                   return (
                     <tr key={`${g.routeId}|${g.discipline}|${g.sectionId}`} className="border-t border-slate-100 hover:bg-slate-50">
-                      <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{g.routeId}</td>
+                      <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{g.routeId}
+                        {g.ipt && <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{g.ipt}</span>}
+                      </td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         {g.discipline
                           ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
@@ -1240,7 +1360,7 @@ function MySubmissions({ meta, who, onEdit }){
                       <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{r.origin || "—"} → {r.dest || "—"}</td>
                       <td className="px-3 py-2 tabular-nums whitespace-nowrap">{g.yearLabel}</td>
                       <td className="px-3 py-2 text-slate-600">{g.material}{g.material_description ? <span className="text-slate-400"> · {g.material_description}</span> : null}</td>
-                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{g.vehicle}</td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap" title={g.vehicle}>{vehLabel(g.vehicle)}</td>
                       <td className="px-3 py-2 text-center tabular-nums">{g.months}</td>
                       <td className="px-3 py-2">
                         {badge(g.status)}
@@ -1464,7 +1584,7 @@ function LookAhead({ meta, who }){
                         <div className="text-[11px] text-slate-500">
                           {line.discipline || "unassigned"}{line.section_id ? ` · ${line.section_id}` : ""}
                         </div>
-                        <div className="text-[10px] text-slate-400">{line.unit === "m3" ? "m³" : line.unit} · {line.vehicle_type || "—"}</div>
+                        <div className="text-[10px] text-slate-400" title={line.vehicle_type}>{line.unit === "m3" ? "m³" : line.unit} · {line.vehicle_type ? vehLabel(line.vehicle_type) : "—"}</div>
                         {/* Reopening a month does NOT delete its weeks — a confirmed week
                             with an actual against it is a record of what happened. */}
                         {line.parent_status && line.parent_status !== "Approved" && (
@@ -1666,7 +1786,7 @@ function Stockpiles({ meta, who, from, to, tick }){
       {!data ? <div className="p-6 text-center text-slate-400 text-sm">Loading…</div>
         : piles.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-500 text-sm">
-          No locations that hold stock yet. Set a type of Stockpile, Site, Compound or Rail head in Data
+          No locations that hold stock yet. Set a type of Stockpile, Site, Compound or Railhead in Data
           Management, and give it a capacity there.
         </div>
       ) : (
@@ -1750,7 +1870,7 @@ const MAP_H = "62vh";     // map height — the right-hand column matches it and
 // IPT colour. Change it here and the legend follows, because both are generated from
 // this object.
 const NODE_COLORS = { "Quarry": "#C6841D", "Port": "#003787", "Compound": "#039E86",
-                      "Site": "#6D28D9", "Rail head": "#0F766E", "Stockpile": "#78350F" };
+                      "Site": "#6D28D9", "Railhead": "#0F766E", "Stockpile": "#78350F" };
 
 // Phase 3 zones. The colour carries the only distinction that matters at a glance:
 // red means the router is steered away from this area, grey means it is drawn for
@@ -1816,20 +1936,36 @@ function maaametStyle(){
 }
 
 // Week 1: two new types.
-//   Rail head  where material arrives by rail and leaves by road. An ORIGIN, like a
+//   Railhead  where material arrives by rail and leaves by road. An ORIGIN, like a
 //              quarry or a port — map/index.html's filterByNode() and
 //              network._role_for() carry the matching rule and all three must agree.
 //   Stockpile  somewhere material is held. A DESTINATION by default.
-const LOC_TYPES = ["Quarry", "Port", "Compound", "Site", "Rail head", "Stockpile", "Other"];
+const LOC_TYPES = ["Quarry", "Port", "Compound", "Site", "Railhead", "Stockpile", "Other"];
+// 2026-09-02: 'Rail head' -> 'Railhead'. The backend rewrites old rows on boot and
+// canonicalises on read, but this client can meet a row the backend has not touched yet
+// (a stale /api/locations/geojson in the tab). Read either spelling; write only the new.
+const locTypeOf = (t) => (t === "Rail head" ? "Railhead" : t);
 // Types that can hold stock — the capacity fields appear for these. Mirrors
 // stockpiles.STORAGE_TYPES on the backend.
-const STORAGE_TYPES = ["Stockpile", "Site", "Compound", "Rail head"];
+const STORAGE_TYPES = ["Stockpile", "Site", "Compound", "Railhead"];
 const ROLE_OPTIONS = [["origin", "Origin (supplier)"], ["destination", "Destination (site)"], ["both", "Both"]];
 const ROLE_LABEL = { origin: "Origin", destination: "Destination", both: "Both" };
 const asArray = (v) => Array.isArray(v) ? v : (() => { try { return JSON.parse(v || "[]"); } catch(e){ return []; } })();
 
 // "Artic Tipper (44t)" -> "Tipper (44t)". Full name stays in the chip's tooltip.
-const vehShort = (v) => (v || "").replace(/^(Artic|Rigid)\s+/, "");
+// ---- 2026-09-02: one vehicle, three labels ------------------------------------
+// VEH.lang is the toggle (en | eu | ee); VEH.labels comes off /api/meta. vehLabel()
+// changes ONLY what is shown — the string a forecast line stores, the payload it
+// converts on and the emissions factor are all keyed on the canonical id, which is
+// the EU string for the four planning vehicles and the trade name for the six legacy
+// ones. A missing label falls back to that id, never to an invented name.
+const VEH = { lang: "eu", labels: {}, fallbacks: {} };
+try { const l = localStorage.getItem("rbe_veh_lang"); if(["en","eu","ee"].includes(l)) VEH.lang = l; } catch(e){}
+const VEH_LANGS = [["en", "English"], ["eu", "European"], ["ee", "Estonian"]];
+const vehLabel = (v, lang) => ((VEH.labels[v] || {})[lang || VEH.lang]) || v || "";
+const vehIsFallback = (v, lang) => ((VEH.fallbacks[v] || []).includes(lang || VEH.lang));
+// short form for tables: the label, minus the leading 'Artic'/'Rigid' of the trade names
+const vehShort = (v) => vehLabel(v).replace(/^(Artic|Rigid)\s+/, "");
 
 // Which vehicle profiles a route is baked for, and how that went.
 // A route is baked in two directions now, so a chip is only "fully baked" (solid) when
@@ -3077,7 +3213,7 @@ function DataManagement({ meta, who }){
     const p = feat.properties;
     const supplies = asArray(p.supplies).length ? asArray(p.supplies) : asArray(p.materials);
     setSelected(null); setLocMsg("");
-    setForm({ id: p.id, name: p.name || "", role: p.role || "both", loc_type: p.loc_type || "Other",
+    setForm({ id: p.id, name: p.name || "", role: p.role || "both", loc_type: locTypeOf(p.loc_type) || "Other",
       supplies, receives: asArray(p.receives),
       lat: feat.geometry.coordinates[1], lon: feat.geometry.coordinates[0],
       // blank means no gate surveyed — routing falls back to the marker above
@@ -3121,7 +3257,7 @@ function DataManagement({ meta, who }){
   });
 
   // The build list's rule: the three storage fields show for Stockpile / Site /
-  // Compound / Rail head, and on the other types only when the location actually
+  // Compound / Railhead, and on the other types only when the location actually
   // receives material. A Quarry that only supplies has nothing to hold.
   const showCapacity = !!form && (STORAGE_TYPES.includes(form.loc_type)
     || form.role === "destination" || form.role === "both");
@@ -3299,7 +3435,7 @@ function DataManagement({ meta, who }){
     const p = feat ? feat.properties : {};
     const supplies = asArray(p.supplies).length ? asArray(p.supplies) : asArray(p.materials);
     const body = {
-      name: p.name || id, role: p.role || "both", loc_type: p.loc_type || p.role || "both",
+      name: p.name || id, role: p.role || "both", loc_type: locTypeOf(p.loc_type) || p.role || "both",
       supplies, receives: asArray(p.receives), materials: supplies,
       // this body is a full replace, so omitting these would clear an operator name
       // just because someone nudged the marker
@@ -4115,14 +4251,14 @@ function DataManagement({ meta, who }){
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <label className="block">
-                          <span className="text-[11px] uppercase tracking-wide text-slate-400">Induction (min)</span>
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400" title="Safety / briefing at this gate. Once per arrival.">Induction (min)</span>
                           <input value={gateForm.safety_minutes}
                             onChange={e => setGateForm(g => ({ ...g, safety_minutes: e.target.value }))}
                             inputMode="decimal" placeholder="0"
                             className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
                         </label>
                         <label className="block">
-                          <span className="text-[11px] uppercase tracking-wide text-slate-400">Gate → face (min)</span>
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400" title="Drive from this gate to the face. Ignored if the route uses a drawn haul road.">Gate → face (min)</span>
                           <input value={gateForm.internal_travel_minutes}
                             onChange={e => setGateForm(g => ({ ...g, internal_travel_minutes: e.target.value }))}
                             inputMode="decimal" placeholder="0"
@@ -4142,11 +4278,14 @@ function DataManagement({ meta, who }){
                         </label>
                       </div>
                       <p className="text-[11px] text-slate-400">
-                        Induction is charged once per arrival at this gate. <strong>Gate → face</strong> is a
-                        flat allowance and is <em>ignored</em> on a route that runs through a drawn haul
-                        road — that road already carries the time, and counting both would inflate every
-                        cycle. Deactivating a gate a route has selected makes that route refuse to bake,
-                        by name.
+                        {/* Copy from the 2026-09-02 feedback, verbatim. The model behind it is
+                            unchanged: both are per-gate planning assumptions, both NULL on every
+                            migrated gate, and an empty box means 0. */}
+                        <strong>Induction</strong> — safety / briefing at this gate, once per arrival.
+                        {" "}<strong>Gate → face</strong> — drive from this gate to the face; ignored if the
+                        route uses a drawn haul road, so the minutes are not counted twice. Both are
+                        planning assumptions; an empty box means 0. Deactivating a gate a route has
+                        selected makes that route refuse to bake, by name.
                       </p>
                       <div className="flex items-center gap-2">
                         <button onClick={saveGate}
@@ -4829,7 +4968,11 @@ function Approvals(){
               const key = `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}`;
               return (
               <tr key={key} className="border-b border-slate-100 last:border-0">
-                <td className="px-4 py-3 font-medium text-[color:var(--navy-deep)]">{r.route_id}</td>
+                <td className="px-4 py-3 font-medium text-[color:var(--navy-deep)]">{r.route_id}
+                  {r.ipt
+                    ? <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{r.ipt}</span>
+                    : <span className="ml-1.5 text-[10px] text-slate-400" title="No IPT on this line — only planners can see it until one is set. Edit and re-save it from Submit Forecast.">no IPT</span>}
+                </td>
                 <td className="px-4 py-3">
                   {r.discipline
                     ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
@@ -4837,7 +4980,7 @@ function Approvals(){
                         title={r.section_id ? `Section ${r.section_id}` : "No section set"}>{r.discipline}</span>
                     : <span className="text-slate-300">—</span>}
                 </td>
-                <td className="px-4 py-3 text-slate-600">{r.material_type} · {r.vehicle_type}</td>
+                <td className="px-4 py-3 text-slate-600" title={r.vehicle_type}>{r.material_type} · {vehLabel(r.vehicle_type)}</td>
                 <td className="px-4 py-3 text-slate-600">{r.span} <span className="text-slate-400">({r.month_count} mo)</span></td>
                 <td className="px-4 py-3 text-right tabular-nums">{r.total_vehicles.toLocaleString()}</td>
                 <td className="px-4 py-3">
