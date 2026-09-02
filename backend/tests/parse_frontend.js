@@ -150,6 +150,24 @@ ok("a vehicle outside the material's list is still visible, just disabled",
 ok("...and the currently-selected vehicle is never disabled",
   /disabled=\{!fits && v !== current\}/.test(code));
 
+// ---- 4b2. 2026-09-02 — one vehicle, three labels -------------------------------
+ok("there is a label language toggle with exactly EN / EU / EE",
+  /const VEH_LANGS = \[\["en", "English"\], \["eu", "European"\], \["ee", "Estonian"\]\]/.test(code));
+ok("the default is European", /const VEH = \{ lang: "eu"/.test(code));
+ok("labels come off /api/meta, not a second list in the client",
+  code.includes("m.vehicle_labels") && code.includes("VEH.labels = vl.labels"));
+// ⭐ THE INVARIANT. The <option value> is the canonical id; only the text changes.
+ok("⭐ the picker's option VALUE is the canonical id, the text is the label",
+  /<option key=\{v\} value=\{v\} disabled=[\s\S]{0,160}\{vehLabel\(v\)\}/.test(code));
+ok("a fallback slot is marked, not passed off as a translation",
+  /vehIsFallback\(v\) && VEH\.lang !== "eu" \? " \*"/.test(code));
+ok("vehLabel falls back to the id itself", /\|\| v \|\| ""/.test(code));
+ok("the save still posts the stored id", code.includes("vehicle_type: vehicle,"));
+ok("tables show the label with the stored id in the title",
+  code.includes('title={g.vehicle}>{vehLabel(g.vehicle)}')
+  && code.includes('title={r.vehicle_type}>{r.material_type} · {vehLabel(r.vehicle_type)}'));
+ok("the header carries the control", /VEH_LANGS\.map\(\(\[k, l\]\) =>/.test(code));
+
 // ---- 4c. Task B — the multi-year matrix ---------------------------------------
 // The single-year state has to be GONE, not shadowed. A surviving setYear would be a
 // second source of truth for the same window.
@@ -205,6 +223,24 @@ ok("...and the confirmation says how many months go",
 ok("edit reopens the line on its full span",
   code.includes("year: g.fromYear, toYear: g.toYear"));
 ok("...and the matrix accepts that span", code.includes("setToYear(editTarget.toYear || editTarget.year)"));
+
+// ---- 4c2. 2026-09-02 §3 — the six per-day cards ---------------------------------
+for (const card of ["Avg vehicles / day", "Peak vehicles / day", "Avg trips / day", "Peak trips / day"]) {
+  ok(`the range strip carries '${card}'`, code.includes(`"${card}"`));
+}
+ok("...and avg / peak material in the CHOSEN unit",
+  code.includes('`Avg ${unit === "m3" ? "m³"') && code.includes('`Peak ${unit === "m3" ? "m³"'));
+ok("working days come from factors.planning, defaulting to 22",
+  /working_days_per_month\) \|\| 22/.test(code));
+ok("averages are over months WITH a figure, not the whole range",
+  code.includes("inRange.filter(([, q]) => +q > 0)") && code.includes("/ months.length) / wd"));
+ok("peak is the busiest single month per working day",
+  code.includes("Math.max(...monthlyT) / wd") && code.includes("Math.max(...monthlyQ) / wd"));
+ok("vehicle loads convert through the payload", code.includes("avgT / p, peakVeh = peakT / p"));
+ok("trips are stated to equal vehicle loads on one line", code.includes("avgTrips: avgVeh, peakTrips: peakVeh"));
+ok("the cards sit in the navy strip with tabular numerals, no new fonts",
+  code.includes('style={{ background: "var(--navy)" }}') && code.includes("tabular-nums")
+  && !/fontFamily/.test(code.slice(code.indexOf("Avg vehicles / day") - 2000, code.indexOf("Avg vehicles / day") + 2000)));
 
 // ---- 4d. Tasks C + D — the Look-ahead tab -------------------------------------
 ok("there is a Look-ahead tab", code.includes('"Look-ahead"'));
@@ -277,7 +313,7 @@ ok("over capacity uses the existing red, not a reserved route colour",
 ok("the panel says inbound comes from typed actuals only",
   code.includes("a week with no") && code.includes("actual counts as nothing"));
 ok("the capacity fields appear for the four storage types",
-  /const STORAGE_TYPES = \["Stockpile", "Site", "Compound", "Rail head"\]/.test(code)
+  /const STORAGE_TYPES = \["Stockpile", "Site", "Compound", "Railhead"\]/.test(code)
   && /STORAGE_TYPES\.includes\(form\.loc_type\)/.test(code));
 ok("...and on other types only when the location receives material",
   /form\.role === "destination" \|\| form\.role === "both"/.test(code));
@@ -285,10 +321,32 @@ ok("capacity has ONE write path, its own endpoint",
   (code.match(/\/capacity\$\{qs\}/g) || []).length === 1);
 
 // ---- 4f. Task E — the two new location types -----------------------------------
-ok("Rail head and Stockpile are offered as location types",
-  /const LOC_TYPES = \["Quarry", "Port", "Compound", "Site", "Rail head", "Stockpile", "Other"\]/.test(code));
-ok("Rail head is drawn in the reserved rail colour",
-  /"Rail head": "#0F766E"/.test(code));
+ok("Railhead and Stockpile are offered as location types",
+  /const LOC_TYPES = \["Quarry", "Port", "Compound", "Site", "Railhead", "Stockpile", "Other"\]/.test(code));
+ok("Railhead is drawn in the reserved rail colour",
+  /"Railhead": "#0F766E"/.test(code));
+
+// ---- 4h. 2026-09-02 Task F — access codes resolved by the server ----------------
+ok("⭐ the client-side LOGINS dict with plaintext codes is GONE",
+  !/const LOGINS\s*=/.test(code) && !/CAN_APPROVE\s*=/.test(code));
+ok("sign-in POSTs the code to /api/auth", code.includes("`${API}/auth`"));
+ok("⭐ every /api request carries the code in X-Access-Code, from ONE wrapper",
+  code.includes('"X-Access-Code": ACCESS.code') && /window\.fetch = \(url, opts\) =>/.test(code)
+  && (code.match(/X-Access-Code/g) || []).length === 1);
+ok("the code lives in sessionStorage, not localStorage",
+  code.includes('sessionStorage.setItem("rbe_access_code"') && !code.includes('localStorage.setItem("rbe_access_code"'));
+ok("sign-out clears it", code.includes('sessionStorage.removeItem("rbe_access_code")'));
+ok("canApprove comes from the server payload", /const canApprove = !!\(role && role\.can_approve\)/.test(code));
+ok("the form has an IPT field", code.includes('label={iptRequired ? "IPT (required)" : "IPT"}'));
+ok("⭐ an IPT code's field is locked to its IPT", code.includes("Your access code is for this IPT"));
+ok("⭐ a planner's default is EMPTY, never IPT 1",
+  code.includes('useState((access && access.ipt) || "")') && code.includes("— pick an IPT —")
+  && !/useState\("IPT1"\)/.test(code));
+ok("...and the save refuses without one when required",
+  code.includes("Pick which IPT this line belongs to before saving."));
+ok("the save posts ipt on the line", /ipt: \(iptLocked \? access\.ipt : ipt\) \|\| null/.test(code));
+ok("a line with no IPT is flagged in Approvals as planner-only",
+  code.includes("no IPT") && code.includes("only planners can see it until one is set"));
 
 // ---- 4g. NOTHING may upload ----------------------------------------------------
 // "Never build: file upload, OCR..." — asserted at source level so a later edit that
@@ -457,8 +515,17 @@ ok("the three directions are offered by their meaning, not by their column value
 ok("induction time is editable per gate (B3)", code.includes("safety_minutes"));
 ok("the flat gate-to-face allowance is editable per gate (B5)",
   code.includes("internal_travel_minutes"));
+// copy replaced 2026-09-02 with the human's wording; the B5(c) statement survives
 ok("the UI says the flat allowance is IGNORED where a haul road is drawn — B5(c)",
-  src.includes("ignored") && src.includes("counting both would inflate every"));
+  src.includes("ignored if the") && src.includes("not counted twice"));
+ok("the two gate fields carry the 2026-09-02 label copy",
+  src.includes("Safety / briefing at this gate. Once per arrival.")
+  && src.includes("Drive from this gate to the face. Ignored if the route uses a drawn haul road."));
+// §2 — old spelling accepted on read, never written
+ok("the old 'Rail head' spelling is read as 'Railhead'",
+  /const locTypeOf = \(t\) => \(t === "Rail head" \? "Railhead" : t\)/.test(code)
+  && (code.match(/locTypeOf\(p\.loc_type\)/g) || []).length >= 2);
+ok("...and appears nowhere else in the app", (code.match(/"Rail head"/g) || []).length === 1);
 ok("a deactivated gate is shown as deactivated rather than just missing",
   src.includes("deactivated"));
 

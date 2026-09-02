@@ -103,7 +103,13 @@ ok("the filter disables itself when no forecasts exist",
 
 // ---- capacity KPI ------------------------------------------------------------
 ok("max_loads is no longer summed", !code.includes("max_loads"));
-ok("capacity comes from trips_per_day", code.includes("trips_per_day"));
+// 2026-09-02 (§9): the Trips/day CARD no longer reads the baked cycle's trips_per_day —
+// it is the forecast's vehicle-loads per working day, from /api/public/month-kpis.
+// trips_per_day survives on the route popup / drawer, which is where a cycle figure
+// belongs.
+ok("the old 'capacity' card is gone", !/id="kpi-capacity"/.test(html));
+ok("the baked cycle's trips_per_day no longer feeds any KPI card",
+  !/function calculateKPIs[\s\S]{0,6000}trips_per_day/.test(code));
 
 // ---- layer filters were repaired ---------------------------------------------
 // the casing layers filtered on `route_leg`, a property that never existed in the data,
@@ -192,7 +198,8 @@ ok("a large offset between the gate and the nearest panorama is disclosed",
   src.includes("nearest imagery is"));
 
 ok("the KPI cards actually exist in the page now",
-  /id="kpi-routes"/.test(html) && /id="kpi-capacity"/.test(html));
+  /id="kpi-routes"/.test(html) && /id="kpi-vehicles"/.test(html)
+  && /id="kpi-trips"/.test(html) && /id="kpi-material"/.test(html));
 ok("⭐ the KPIs are ON THE MAP, not in the sidebar", /id="kpi-hud"/.test(html));
 ok("and are positioned over the map canvas", /#kpi-hud\{[^}]*position:absolute/.test(html));
 ok("clear of the Mapbox navigation control at top-right",
@@ -203,7 +210,31 @@ ok("the KPI block is outside the sidebar element",
 ok("and calculateKPIs writes to ids that are really there",
   /id="kpi-routes-label"/.test(html) && code.includes("kpi-routes-label"));
 ok("KPIs follow the timeline, not just the filters",
-  code.includes("TL.on && TL.matrix"));
+  /if \(typeof TL !== 'undefined' && TL\.on\) return \[TL\.month\]/.test(code));
+// §9 — the four cards
+ok("§9: the month comes from the playhead, else the Show-forecast window, else nothing",
+  /function kpiMonthsOnScreen\(\)/.test(code) && code.includes("forecast-from") && /return \[\];\s*\}/.test(code));
+ok("§9: figures come from /api/public/month-kpis, cached per month",
+  code.includes("/public/month-kpis?month=") && /KPI\.cache\[m\] = j/.test(code));
+ok("§9: working days come from the server payload", /const wd = payloads\[0\]\.working_days \|\| 22/.test(code));
+ok("§9: vehicles/day = vehicle-loads over months with volume, per working day",
+  /const vehDay = avg\(mVeh\) \/ wd/.test(code));
+ok("§9: trips/day is stated equal to vehicle-loads, not a second formula",
+  /set\('kpi-trips', fmtN\(vehDay, 1\)\)/.test(code));
+ok("§9: material/day is in the map unit", /qtyDay = avg\(mQty\) \/ wd/.test(code) && code.includes("kpi-material-label"));
+ok("§9: filters apply - origin/dest/IPT on the route, discipline on the LINE",
+  /discFilter !== 'ALL' && l\.discipline !== discFilter/.test(code));
+ok("§9: an empty month says so and hides the breakdown, no zeros",
+  code.includes("No approved forecast in this month.")
+  && /if \(!mVeh\.length\) \{[\s\S]{0,400}setHTML\('kpi-by-discipline', ''\)/.test(code));
+ok("§9: by-discipline and by-material lines under the cards",
+  /id="kpi-by-discipline"/.test(html) && /id="kpi-by-material"/.test(html)
+  && /Object\.keys\(byMat\)\.length > 1 \? line\(byMat/.test(code));
+ok("§9: a stale fetch cannot overwrite a newer month", /if \(seq !== KPI\.seq\) return;/.test(code));
+ok("§9: the forecast toggle recomputes the cards",
+  /src\.setData\(currentData\);\s*applyRailHighlight\(\);\s*applyFilters\(\);/.test(code)
+  || /applyRailHighlight\(\);[\s\S]{0,120}applyFilters\(\);[\s\S]{0,60}\/\/ §9/.test(src));
+ok("§9: never actuals", !/actual/.test(code.slice(code.indexOf("function calculateKPIs"), code.indexOf("function calculateKPIs") + 5000)));
 ok("scrubbing the timeline recalculates them",
   /applyZoneMonth\(m\);[\s\S]{0,500}applyFilters\(\);/.test(code));
 ok("the card label says which question it is answering", code.includes("'Routes in '"));
@@ -740,8 +771,10 @@ ok("all four route layers carry a dasharray",
 // 🔴 A round cap extends each dash by half the line width at EACH end, so a 1.0w
 // dot renders 2.0w long, the 0.333w gap is swallowed twice over, and the route
 // draws SOLID — indistinguishable from the change never having been applied.
+// 2026-09-02: a fifth butt-capped dashed layer, the EVR rail core, joined the four
 ok("🔴 line-cap is butt on all four route layers, or the dots render solid",
-  (code.match(/'line-cap': 'butt'/g) || []).length === 4);
+  (code.match(/'line-cap': 'butt'/g) || []).length === 5
+  && /id: 'evr-rail-line'[\s\S]{0,300}'line-cap': 'butt'/.test(code));
 ok("the casing is a FIXED 1.25x the core at every zoom stop, or the two dash "
    + "arrays cannot draw the same period on screen",
   /WIDTH_CORE\s*=\s*\['interpolate', \['linear'\], \['zoom'\], 7, 1\.36, 12, 4,\s+16, 6\.8\]/.test(code)
@@ -831,7 +864,7 @@ ok("...and it says how many there are, or why there are none",
 
 
 // =============================================================================
-//  Week 1, Task E — the EVR rail layer and the rail-head highlight
+//  Week 1, Task E — the EVR rail layer and the railhead highlight
 // =============================================================================
 ok("the rail data file is loaded statically", /src=["']data\/evr_rail\.js\?v=\d+["']/.test(html));
 // ⚠️ The half-upgraded pair (new index.html, old data file behind a browser cache)
@@ -849,10 +882,33 @@ ok("and an evr-rail-line layer on it",
 
 // the build list's numbers, exactly
 ok("the rail colour is the reserved #0F766E", /const RAIL_COLOR = '#0F766E'/.test(code));
-ok("default paint is 2 px at 25%",
-  /RAIL_DIM_WIDTH = 2, RAIL_DIM_OPACITY = 0\.25/.test(code));
-ok("highlighted paint is 4 px at 80%",
-  /RAIL_BOLD_WIDTH = 4, RAIL_BOLD_OPACITY = 0\.8/.test(code));
+// 2026-09-02 §6a restyle: a quiet grey casing + short-tick dash by default; the
+// reserved rail colour only when highlighted. The old 2px/25% single line is gone.
+ok("§6a: default = casing 5 px #334155 at 35%",
+  /RAIL_DIM\s*=\s*\{ casingW: 5, casingC: '#334155', casingO: 0\.35/.test(code));
+ok("§6a: ...under a 2 px #64748B dash with [2, 18]",
+  /dashW: 2,\s*dashC: '#64748B',\s*dashO: 1\.0, dash: \[2, 18\]/.test(code));
+ok("§6a: highlight = casing 7 px in the rail colour at 80%",
+  /RAIL_BOLD\s*=\s*\{ casingW: 7, casingC: RAIL_COLOR, casingO: 0\.8/.test(code));
+ok("§6a: ...and a rail-coloured dash with [2, 12]",
+  /dashC: RAIL_COLOR,\s*dashO: 1\.0, dash: \[2, 12\]/.test(code));
+ok("§6a: two rail layers, casing under core", /id: 'evr-rail-casing'[\s\S]{0,900}id: 'evr-rail-line'/.test(code));
+ok("§6a: no IPT or reserved route colour in either rail style",
+  !/(RAIL_DIM|RAIL_BOLD)\s*=[^}]*(#039E86|#f59e0b|#C2790B|#3398DB|#BF2E55|#003787|#0A1446|#4338CA|#6D28D9|#57534E|#9A3412|#9F1239|#5B21B6)/i.test(code));
+ok("the old single 2px/25% style is gone", !/RAIL_DIM_WIDTH/.test(code));
+// §6b — when it goes bold
+ok("§6b: bold on a railhead origin OR a railhead movement on screen",
+  /const bold = originIsHead \|\| railheadMovementOnScreen\(\)/.test(code));
+ok("§6b: 'movement on screen' needs forecast on or the timeline open",
+  /const forecastOn = !!\(cb && cb\.checked\) \|\| \(typeof TL !== 'undefined' && TL\.on\)/.test(code));
+ok("§6b: ...and a route carrying volume NOW, inside the current filter, touching a railhead",
+  /f\.properties\.is_forecast && routePassesFilters\(f\.properties\)/.test(code)
+  && /locTypeById\(f\.properties\.origin_id\) === 'Railhead' \|\| locTypeById\(f\.properties\.dest_id\) === 'Railhead'/.test(code));
+ok("§6b: the forecast toggle recomputes it, both on and off",
+  (src.match(/applyRailHighlight\(\);\s*\/\/ §6b/g) || []).length === 2);
+ok("§6b: turning forecast off clears is_forecast so the rule sees no movement",
+  /if \(f\.properties\) f\.properties\.is_forecast = false; \}\); sd\.setData\(d\); \}\s*applyRailHighlight/.test(code));
+ok("§6b: closing the timeline re-runs the filters", /applyZoneMonth\(null\);[^\n]*\n\s*applyFilters\(\);/.test(code));
 // ⭐ #0F766E must not collide with anything already meaning something on this map.
 for (const reserved of ["#039E86", "#f59e0b", "#C2790B", "#3398DB", "#BF2E55",
                         "#003787", "#0A1446", "#4338CA", "#6D28D9", "#57534E",
@@ -868,16 +924,16 @@ ok("rail visibility is read from the checkbox",
   && /visibility: railVisible\(\)/.test(code));
 ok("there is a Rail network control, ON by default",
   /id="layer-rail" checked/.test(html));
-ok("toggling it moves the line AND the rail-head dots",
-  /function toggleRail\(visible\) \{[\s\S]{0,160}'evr-rail-line', 'rail-heads'/.test(code));
+ok("toggling it moves the line AND the railhead dots",
+  /function toggleRail\(visible\) \{[\s\S]{0,160}'evr-rail-line', 'railheads'/.test(code));
 
 // the highlight
 ok("the highlight follows the origin filter", /function applyRailHighlight\(\)/.test(code)
   && /applyRailHighlight\(\);/.test(code));
 ok("...and applyFilters is what calls it",
   /function applyFilters\(\)[\s\S]{0,2600}applyRailHighlight\(\);/.test(code));
-ok("it bolds only when the selected origin is a Rail head",
-  /locTypeByName\(sel\) === 'Rail head'/.test(code));
+ok("it bolds only when the selected origin is a Railhead",
+  /locTypeByName\(sel\) === 'Railhead'/.test(code));
 ok("the loc_type comes from the Node features, not a hard-coded list",
   /function locTypeByName\(name\)/.test(code)
   && /x\.properties\.type === 'Node'/.test(code));
@@ -890,23 +946,33 @@ ok("heads are matched case-insensitively and by substring, both ways",
   && /toLowerCase\(\)\.trim\(\)/.test(code)
   && /n\.indexOf\(hh\) >= 0 \|\| hh\.indexOf\(n\) >= 0/.test(code));
 ok("origin back to ALL returns the layer to the dim default",
-  /bold \? RAIL_BOLD_WIDTH : RAIL_DIM_WIDTH/.test(code)
-  && /bold \? RAIL_BOLD_OPACITY : RAIL_DIM_OPACITY/.test(code));
-// ⭐ the road filter must be untouched: a rail head origin still isolates its hauls
+  /const st = bold \? RAIL_BOLD : RAIL_DIM/.test(code)
+  && /setPaintProperty\('evr-rail-line', 'line-dasharray', st\.dash\)/.test(code));
+// ⭐ the road filter must be untouched: a railhead origin still isolates its hauls
 ok("⭐ the existing road-route filter is not disturbed",
   /setFilter\('inbound-lines',/.test(code) && /setFilter\('outbound-lines',/.test(code)
   && /setFilter\('inbound-lines-casing',/.test(code));
 
-// filterByNode must treat a rail head as an origin, like a quarry or a port
-ok("filterByNode treats a Rail head as an origin",
-  /nodeType === 'Rail head'/.test(code)
+// filterByNode must treat a railhead as an origin, like a quarry or a port
+ok("filterByNode treats a Railhead as an origin",
+  /nodeType === 'Railhead'/.test(code)
   && /nodeType === 'Quarry' \|\| nodeType === 'Hub' \|\| nodeType === 'Port'[\s\S]{0,120}filter-origin/.test(code));
 
-// rail heads drawn as a LAYER, not only a DOM marker
-ok("rail heads are drawn as a real layer",
-  /id: 'rail-heads', type: 'circle'/.test(code));
+// railheads drawn as a LAYER, not only a DOM marker
+// §5 — its own mark, a symbol layer, generated glyph
+ok("§5: railheads are drawn as a real SYMBOL layer, not a circle and not a DOM marker",
+  /id: 'railheads', type: 'symbol'/.test(code) && !/id: 'railheads', type: 'circle'/.test(code));
+ok("§5: the glyph is generated on a canvas in the rail colour",
+  /function railheadGlyph\(\)/.test(code) && /g\.strokeStyle = RAIL_COLOR/.test(code)
+  && /'icon-image': 'railhead-glyph'/.test(code));
+ok("§5: two sleepers and a rail", (code.match(/g\.fillRect\(/g) || []).length === 3);
+ok("§5: the image is re-added on style.load, guarded by hasImage",
+  /if \(!map\.hasImage\('railhead-glyph'\)\) map\.addImage/.test(code));
+ok("§5: there is a Railhead legend entry", /id="legend-railhead"/.test(html) && />Railhead</.test(html));
+ok("§5: the rail toggle moves casing, core and heads together",
+  /'evr-rail-casing', 'evr-rail-line', 'railheads'/.test(code));
 ok("...filtered to Node features of that type",
-  /\['==', \['get', 'node_type'\], 'Rail head'\]/.test(code));
+  /\['==', \['get', 'node_type'\], 'Railhead'\]/.test(code));
 
 // ⭐ the honesty channel. The picture reads as authoritative; the popup is where the
 // caveat lives, exactly as the alignment's gap bridges do.
@@ -958,6 +1024,35 @@ ok("...and there is no chart", !/new Chart\(/.test(code));
 ok("the timeline is still monthly — no week scrubber",
   !/week_index/.test(code) && !/scrubber/i.test(code));
 ok("actuals are not painted on the public map", !/actual_qty/.test(code));
+
+// =============================================================================
+//  2026-09-02 §8 — timeline warnings
+// =============================================================================
+ok("§8: a warning stack exists above the timeline", /id="tl-warnings"/.test(html)
+  && /#tl-warnings\{[^}]*bottom:74px/.test(html) && /#timeline-bar\{[^}]*bottom:18px/.test(html));
+ok("§8: rebuilt on every tick and cleared when the timeline closes",
+  /applyFilters\(\);\s*renderTimelineWarnings\(m\);/.test(code) && /TL\.on=false;\s*renderTimelineWarnings\(null\)/.test(code));
+ok("§8: three sources and no new ones — Tark Tee, stockpile over, seasonal",
+  code.includes("/routes/restrictions") && code.includes("/public/stockpile-timeline")
+  && code.includes("META.seasonal") && !/weather|openweather|forecast\.io/i.test(code.slice(code.indexOf("const WARN"), code.indexOf("(function initAnalysis"))));
+ok("§8: only routes carrying volume THIS month, inside the filter",
+  /if \(!f\.properties\.is_forecast \|\| !routePassesFilters\(f\.properties\)\) return;/.test(code));
+ok("§8: a stale month cannot paint over the current one", /if \(TL\.month !== month \|\| !TL\.on\) return;/.test(code));
+ok("§8: at most three, then +N more", /live\.slice\(0, 3\)/.test(code) && code.includes("more</div>"));
+ok("§8: dismissible, per month", /function dismissWarning\(key\)/.test(code) && /\|\$\{month\}`/.test(code));
+ok("§8: seasonal windows fold the absolute month to a calendar month", /const cal = \(\(month - 1\) % 12\) \+ 1;/.test(code));
+ok("§8: the seasonal check honours restricted_vehicles", /rv\.length === 0 \|\| \[\.\.\.vs\]\.some\(v => rv\.includes\(v\)\)/.test(code));
+ok("§8: each line reads route/pile · what · month",
+  /<b>\$\{esc\(i\.who\)\}<\/b> · \$\{esc\(i\.what\)\} · \$\{esc\(monthLabel\(month\)\)\}/.test(code));
+ok("§8: fetch failures degrade to no warnings, not a broken map",
+  /\.catch\(\(\) => \{ WARN\.restr = \{\}; return WARN\.restr; \}\)/.test(code));
+
+// §4 — Street View empty state, no extra request
+ok("§4: ZERO_RESULTS shows 'No Street View here' and returns before any image request",
+  /meta\.status === 'ZERO_RESULTS'\)\{[\s\S]{0,200}No Street View here[\s\S]{0,80}return;/.test(code)
+  && code.indexOf("No Street View here") < code.indexOf("'/streetview?lat='"));
+ok("§4: no key and a fetch failure still show nothing", /if\(!meta \|\| !meta\.available\) return;/.test(code));
+ok("§4: no second imagery provider", !/mapillary|bing.*streetside|kartaview/i.test(code));
 
 console.log();
 for (const f of fail) console.log("  FAIL:", f);

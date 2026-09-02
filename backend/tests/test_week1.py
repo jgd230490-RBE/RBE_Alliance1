@@ -6,7 +6,7 @@ Week-1 backend assertions — the 2026-09-01 build list, Tasks A–E.
   C   forecast_weeks: materialise on approve, edit, confirm
   D   typed actuals, variance, calibrate
   D2  stockpile capacity, weekly consumption, the balance read model
-  E   the Rail head location type
+  E   the Railhead location type
 
 Same harness as test_phase5a.py: a scratch SQLite database, no network, and `fastapi`
 / `flexpolyline` / `psycopg2` stubbed so main.py imports and its endpoint functions can
@@ -129,6 +129,15 @@ import network  # noqa: E402
 import weeks  # noqa: E402
 import stockpiles  # noqa: E402
 import main  # noqa: E402
+# 2026-09-02, Task F: the staff endpoints now require an access code, resolved from the
+# X-Access-Code header by a middleware the stubbed app never runs. The harness sets the
+# request context itself, as a PLANNER, so every pre-existing assertion still exercises
+# the same code paths it did. Nothing here proves the header is actually read.
+import access  # noqa: E402
+for _v in ("IPT1_CODE", "IPT2_CODE", "IPT3_CODE", "IPT4_CODE", "IPT5_CODE", "IPT6_CODE",
+           "PLANNER_CODE", "ADMIN_CODE"):
+    os.environ.pop(_v, None)
+access.set_current("planner123")
 
 PASS = 0
 FAIL = []
@@ -231,6 +240,23 @@ ok("A: V10's payload_t is derived from the concrete density in the same file",
 ok("A: ⭐ and every figure not given in the build list declares its basis",
    all("_payload_basis" in F["vehicles"][v] and "_emissions_basis" in F["vehicles"][v]
        for v in PLANNING))
+# 2026-09-02: one vehicle, three labels. The key is the id; a label only changes the text.
+_VL = conversions.vehicle_labels(F)
+ok("A2: /api/meta ships vehicle_labels", main.meta().get("vehicle_labels") == _VL)
+ok("A2: every vehicle has all three slots filled",
+   all(set(v) == {"en", "eu", "ee"} for v in _VL["labels"].values())
+   and set(_VL["labels"]) == set(ALL_V))
+ok("A2: ⭐ a missing slot falls back to the KEY, not another language",
+   all(_VL["labels"][k][l] == k for k, ls in _VL["fallbacks"].items() for l in ls))
+ok("A2: the EU label of a planning vehicle IS its key",
+   all(_VL["labels"][k]["eu"] == k for k in PLANNING))
+ok("A2: ⭐ no Estonian label was invented — every ee slot fell back",
+   all("ee" in _VL["fallbacks"].get(k, []) for k in ALL_V))
+ok("A2: the six legacy keys are their own English label",
+   all(_VL["labels"][k]["en"] == k for k in ALL_V if k not in PLANNING))
+ok("A2: V07's English label is the trade name the build list gave",
+   "8x4" in _VL["labels"][PLANNING[0]]["en"] and "tipper" in _VL["labels"][PLANNING[0]]["en"])
+
 # a planning vehicle nobody can select is a planning vehicle that does not exist
 selectable = {v for c in conversions.material_names(F)
               for v in F["material_categories"][c].get("vehicles", [])}
@@ -601,23 +627,55 @@ ok("D2: ⭐ a route with no dest_id contributes nothing — no guessing",
 
 
 # =========================================================================== #
-#  E. Rail head                                                                #
+#  E. Railhead                                                                #
 # =========================================================================== #
 reset_db()
-r = network.create_location("Lelle rail head", "origin", lat=58.8797, lon=24.8236,
-                            loc_type="Rail head", supplies=["Large aggregate / ballast"])
+r = network.create_location("Lelle railhead", "origin", lat=58.8797, lon=24.8236,
+                            loc_type="Railhead", supplies=["Large aggregate / ballast"])
 got = db.query("SELECT * FROM locations WHERE tenant_id = ? AND id = ?",
                (db.current_tenant(), r["id"]))[0]
-ok("E: a location can be created with loc_type 'Rail head'",
-   got["loc_type"] == "Rail head")
-ok("E: ⭐ a rail head defaults to an origin role, like a quarry or a port",
-   network._role_for("Rail head") == "origin")
+ok("E: a location can be created with loc_type 'Railhead'",
+   got["loc_type"] == "Railhead")
+ok("E: ⭐ a railhead defaults to an origin role, like a quarry or a port",
+   network._role_for("Railhead") == "origin")
 ok("E: a Stockpile defaults to a destination role",
    network._role_for("Stockpile") == "destination")
 fc = network.locations_geojson()
 f = [x for x in fc["features"] if x["properties"]["id"] == r["id"]][0]
-ok("E: it reaches the map's location feed as a Rail head",
-   f["properties"]["loc_type"] == "Rail head")
+ok("E: it reaches the map's location feed as a Railhead",
+   f["properties"]["loc_type"] == "Railhead")
+# 2026-09-02 rename: 'Rail head' -> 'Railhead'. Old rows must not vanish, and the old
+# string must never be written again.
+ok("E2: the spelling is one word everywhere the type is declared",
+   "Railhead" in stockpiles.STORAGE_TYPES and "Rail head" not in stockpiles.STORAGE_TYPES)
+db.execute("INSERT INTO locations (tenant_id, id, name, lat, lon, loc_type) "
+           "VALUES (?, ?, ?, ?, ?, ?)", ("default", "OLD1", "Old spelling", 58.9, 24.8, "Rail head"))
+_old = [x for x in network.locations_geojson()["features"] if x["properties"]["id"] == "OLD1"][0]
+ok("E2: ⭐ a row still spelled 'Rail head' is READ as 'Railhead'",
+   _old["properties"]["loc_type"] == "Railhead")
+ok("E2: ...and is still an origin", network._role_for("Rail head") == "origin")
+ok("E2: ...and still counts as a storage location",
+   any(l["id"] == "OLD1" for l in stockpiles.storage_locations()))
+ok("E2: ...and reaches the public map as a Railhead node",
+   [x for x in network.public_map_data()["features"]
+    if x["properties"].get("id") == "OLD1"][0]["properties"]["node_type"] == "Railhead")
+r2 = network.create_location("Posted old", "origin", lat=58.9, lon=24.8, loc_type="Rail head")
+ok("E2: ⭐ a client that still POSTs 'Rail head' gets 'Railhead' WRITTEN",
+   db.query("SELECT loc_type FROM locations WHERE tenant_id = ? AND id = ?",
+            (db.current_tenant(), r2["id"]))[0]["loc_type"] == "Railhead")
+network.update_location("OLD1", loc_type="Rail head")
+ok("E2: ...and so does an update", db.query(
+    "SELECT loc_type FROM locations WHERE tenant_id = ? AND id = ?",
+    (db.current_tenant(), "OLD1"))[0]["loc_type"] == "Railhead")
+db.execute("UPDATE locations SET loc_type = ? WHERE tenant_id = ? AND id = ?",
+           ("Rail head", db.current_tenant(), "OLD1"))
+db.init_weeks_db()
+ok("E2: ⭐ the boot migration rewrites the old string in place",
+   db.query("SELECT loc_type FROM locations WHERE tenant_id = ? AND id = ?",
+            (db.current_tenant(), "OLD1"))[0]["loc_type"] == "Railhead")
+ok("E2: no source file still declares the two-word type",
+   not any("\"Rail head\"" in open(os.path.join(BACKEND, fn), encoding="utf-8").read()
+           for fn in os.listdir(BACKEND) if fn.endswith(".py") and fn != "network.py"))
 
 
 # =========================================================================== #
@@ -722,6 +780,215 @@ for _banned in ("UploadFile", "File(", "multipart", "python-multipart"):
        _banned not in _backend_src, "found in backend/*.py")
 _reqs = open(os.path.join(BACKEND, "requirements.txt"), encoding="utf-8").read()
 ok("⭐ ...and python-multipart is not a dependency", "multipart" not in _reqs)
+
+# =========================================================================== #
+#  F. IPT access codes — 2026-09-02                                            #
+# =========================================================================== #
+# ⚠️ The middleware that reads X-Access-Code never runs here (stubbed app). What is
+# exercised is everything BELOW it: resolution, the demo fallback, the per-line filter
+# on every staff endpoint, the write guards, and the approve gate. The header itself is
+# unverified — the first thing to check on the deployment is that a wrong code gets 401.
+def _as(code):
+    access.set_current(code)
+
+reset_db()
+db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L1", "Pit", 58.5, 24.0))
+db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L2", "Site", 58.6, 24.4))
+db.execute("INSERT INTO routes (id, origin_id, dest_id, ipt) VALUES (?, ?, ?, ?)", ("R1", "L1", "L2", "IPT 3 / IPT 6"))
+db.execute("INSERT INTO routes (id, origin_id, dest_id, ipt) VALUES (?, ?, ?, ?)", ("R5", "L1", "L2", "IPT 5"))
+
+# --- demo mode: no real code configured ----------------------------------------
+ok("F: with no env codes the three demo codes resolve",
+   all(access.resolve(c) for c in ("submitter123", "planner123", "admin123")))
+ok("F: ...and an unknown code does not", access.resolve("letmein") is None)
+ok("F: demo submitter sees all and cannot approve",
+   access.resolve("submitter123")["ipt"] is None and not access.can_approve(access.resolve("submitter123")))
+ok("F: /api/auth describes what a code grants",
+   main.auth(main.AuthIn(code="planner123"))["can_approve"] is True
+   and main.auth(main.AuthIn(code="planner123"))["demo"] is True)
+try:
+    main.auth(main.AuthIn(code="nope")); ok("F: /api/auth rejects an unknown code", False)
+except Exception as e:
+    ok("F: /api/auth rejects an unknown code with 401", getattr(e, "status_code", None) == 401)
+_as("planner123")
+seed_line(route_id="R1", disc="earthworks", sect="WS1", months=(9,), qty=10.0)
+ok("F: in demo mode a planner may save with no ipt (pre-F behaviour)",
+   main.list_forecasts(route_id="R1")[0]["ipt"] is None)
+seed_line(route_id="R5", disc="earthworks", sect="WS1", months=(9,), qty=10.0)
+
+# --- the one-off backfill: single-IPT routes only --------------------------------
+_bf = network.backfill_forecast_ipt()
+ok("F: ⭐ backfill fills a line on a single-IPT route", _bf["filled"] == 1
+   and main.list_forecasts(route_id="R5")[0]["ipt"] == "IPT5")
+ok("F: ⭐ ...and leaves a line on a SHARED route NULL — no guessing between two IPTs",
+   _bf["left"] == 1 and main.list_forecasts(route_id="R1")[0]["ipt"] is None)
+ok("F: the backfill is idempotent", network.backfill_forecast_ipt() == {"filled": 0, "left": 1})
+
+# --- real codes configured ---------------------------------------------------------
+os.environ.update({"IPT3_CODE": "three-secret", "IPT6_CODE": "six-secret",
+                   "PLANNER_CODE": "plan-secret", "ADMIN_CODE": "adm-secret"})
+ok("F: ⭐ once real codes exist, the demo codes stop working",
+   all(access.resolve(c) is None for c in ("submitter123", "planner123", "admin123")))
+ok("F: an IPT code resolves to its IPT and cannot approve",
+   access.resolve("three-secret") == {"role": "ipt", "ipt": "IPT3", "label": "IPT 3"}
+   and not access.can_approve(access.resolve("three-secret")))
+ok("F: 'IPT 3', 'ipt3' and 'IPT-3' all canonicalise to IPT3",
+   all(access.canonical_ipt(v) == "IPT3" for v in ("IPT 3", "ipt3", " IPT-3 ", "IPT3")))
+ok("F: ...and rubbish canonicalises to None",
+   access.canonical_ipt("IPT 7") is None and access.canonical_ipt("Earthworks") is None)
+
+# planner writes lines for two IPTs
+_as("plan-secret")
+try:
+    main.save_matrix_row(main.MatrixRow(route_id="R1", discipline="substructure", section_id="WS2",
+        material_type="Small aggregate", vehicle_type="Rigid 8-wheeler (32t)", submitted_by="p",
+        unit="t", status="Pending", cells=[main.Cell(month_index=9, quantity=5.0)]))
+    ok("F: ⭐ a planner with real codes MUST name an IPT", False)
+except Exception as e:
+    ok("F: ⭐ a planner with real codes MUST name an IPT — no silent IPT 1",
+       getattr(e, "status_code", None) == 400 and "required" in str(e))
+for _ipt, _sect in (("IPT 3", "WS2"), ("IPT6", "WS3")):
+    main.save_matrix_row(main.MatrixRow(route_id="R1", discipline="substructure", section_id=_sect,
+        material_type="Small aggregate", vehicle_type="Rigid 8-wheeler (32t)", submitted_by="p",
+        unit="t", status="Pending", cells=[main.Cell(month_index=9, quantity=5.0)], ipt=_ipt))
+_all = main.list_forecasts(route_id="R1")
+ok("F: the planner sees every line on the route, NULL-ipt included", len(_all) == 3)
+ok("F: the planner's chosen IPT is written canonically",
+   sorted(r["ipt"] for r in _all if r["section_id"] == "WS2") == ["IPT3"])
+
+# --- an IPT3 code cannot read an IPT6 line -------------------------------------------
+_as("three-secret")
+_mine = main.list_forecasts(route_id="R1")
+ok("F: ⭐ an IPT3 code sees only its own line", [r["section_id"] for r in _mine] == ["WS2"])
+ok("F: ⭐ ...not the IPT6 line, and not the NULL-ipt line either",
+   not any(r["section_id"] in ("WS1", "WS3") for r in _mine))
+ok("F: the summary is filtered the same way",
+   {r["section_id"] for r in main.forecasts_summary()} == {"WS2"})
+# writes
+main.save_matrix_row(main.MatrixRow(route_id="R1", discipline="substructure", section_id="WS2",
+    material_type="Small aggregate", vehicle_type="Rigid 8-wheeler (32t)", submitted_by="i3",
+    unit="t", status="Pending", cells=[main.Cell(month_index=9, quantity=7.0)], ipt="IPT6"))
+ok("F: ⭐ an IPT code's save is FORCED to its own IPT whatever the body said",
+   [r["ipt"] for r in main.list_forecasts(route_id="R1")] == ["IPT3"]
+   and main.list_forecasts(route_id="R1")[0]["quantity"] == 7.0)
+try:
+    main.save_matrix_row(main.MatrixRow(route_id="R1", discipline="substructure", section_id="WS3",
+        material_type="Small aggregate", vehicle_type="Rigid 8-wheeler (32t)", submitted_by="i3",
+        unit="t", status="Pending", cells=[main.Cell(month_index=9, quantity=99.0)]))
+    ok("F: ⭐ an IPT3 code cannot overwrite an IPT6 line", False)
+except Exception as e:
+    ok("F: ⭐ an IPT3 code cannot overwrite an IPT6 line — and gets 404, not 403",
+       getattr(e, "status_code", None) == 404)
+_as("plan-secret")
+ok("F: ...and the IPT6 line is untouched",
+   [r["quantity"] for r in main.list_forecasts(route_id="R1") if r["section_id"] == "WS3"] == [5.0])
+# approve
+_as("three-secret")
+try:
+    main.set_route_status("R1", main.StatusUpdate(status="Approved"), discipline="substructure", section_id="WS2")
+    ok("F: an IPT code cannot approve", False)
+except Exception as e:
+    ok("F: ⭐ an IPT code cannot approve — 403", getattr(e, "status_code", None) == 403)
+_as("plan-secret")
+main.set_route_status("R1", main.StatusUpdate(status="Approved"), discipline="substructure", section_id="WS2")
+main.set_route_status("R1", main.StatusUpdate(status="Approved"), discipline="substructure", section_id="WS3")
+# look-ahead
+_as("six-secret")
+_w6 = main.list_forecast_weeks(from_month=9, to_month=9)["weeks"]
+ok("F: ⭐ the look-ahead is filtered per IPT", {w["section_id"] for w in _w6} == {"WS3"} and len(_w6) == 4)
+try:
+    main.set_forecast_week_actual(main.WeekActual(route_id="R1", month_index=9, discipline="substructure",
+        section_id="WS2", week_index=1, actual_qty=1.0))
+    ok("F: an IPT6 code cannot type an actual on an IPT3 week", False)
+except Exception as e:
+    ok("F: ⭐ an IPT6 code cannot type an actual on an IPT3 week — 404",
+       getattr(e, "status_code", None) == 404)
+main.set_forecast_week_actual(main.WeekActual(route_id="R1", month_index=9, discipline="substructure",
+    section_id="WS3", week_index=1, actual_qty=1.0))
+ok("F: ...but can on its own", weeks.get_week("R1", 9, "substructure", "WS3", 1)["actual_qty"] == 1.0)
+# withdraw
+_as("three-secret")
+_wd = main.withdraw_route("R1", discipline="substructure", section_id="WS3")
+ok("F: ⭐ an IPT3 withdraw of an IPT6 line deletes nothing", _wd["deleted"] == 0)
+_as("plan-secret")
+ok("F: ...and the line is still there",
+   any(r["section_id"] == "WS3" for r in main.list_forecasts(route_id="R1")))
+# no code at all
+_as(None)
+try:
+    main.list_forecasts(); ok("F: no code -> 401", False)
+except Exception as e:
+    ok("F: ⭐ no code at all gets 401 on a staff endpoint", getattr(e, "status_code", None) == 401)
+ok("F: ...while the public map feed stays open",
+   isinstance(main.public_route_forecasts(1, 60, "vehicles"), dict)
+   and isinstance(main.meta(), dict))
+# stockpiles: any code, NOT filtered
+_as("six-secret")
+ok("F: stockpiles are readable by an IPT code and are not IPT-filtered (a pile has no IPT)",
+   isinstance(main.list_stockpiles(from_month=9, to_month=9)["stockpiles"], list))
+# tidy: back to demo for the rest of the file
+for _v in ("IPT3_CODE", "IPT6_CODE", "PLANNER_CODE", "ADMIN_CODE"):
+    os.environ.pop(_v, None)
+_as("planner123")
+ok("F: the ipt column is in _TENANT_DDL as well as ALTERed", "ipt" in db._ddl_columns(db._TENANT_DDL["forecasts"]))
+
+
+# =========================================================================== #
+#  §8 / §9 (2026-09-02) — the two public endpoints behind the map's cards/warnings #
+# =========================================================================== #
+reset_db()
+db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)", ("L1", "Pit", 58.5, 24.0, "Quarry"))
+db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)", ("L2", "Pile", 58.6, 24.4, "Stockpile"))
+db.execute("INSERT INTO routes (id, origin_id, dest_id) VALUES (?, ?, ?)", ("R1", "L1", "L2"))
+_as("planner123")
+# three lines in month 9: tonnes on a known vehicle, m3 on a known vehicle, and a
+# vehicle factors.json has never heard of
+main.save_matrix_row(main.MatrixRow(route_id="R1", discipline="earthworks", section_id="WS1",
+    material_type="Small aggregate", vehicle_type="Rigid 8-wheeler (32t)", submitted_by="p",
+    unit="t", status="Approved", cells=[main.Cell(month_index=9, quantity=200.0)]))
+main.save_matrix_row(main.MatrixRow(route_id="R1", discipline="substructure", section_id="WS2",
+    material_type="Small aggregate", vehicle_type="Artic Tipper (44t)", submitted_by="p",
+    unit="m3", status="Approved", cells=[main.Cell(month_index=9, quantity=100.0)]))
+main.save_matrix_row(main.MatrixRow(route_id="R1", discipline="structures", section_id="WS3",
+    material_type="Precast / concrete", vehicle_type="Unicorn lorry", submitted_by="p",
+    unit="t", status="Approved", cells=[main.Cell(month_index=9, quantity=36.0)]))
+# and a Pending one that must NOT appear
+main.save_matrix_row(main.MatrixRow(route_id="R1", discipline="utilities", section_id="WS4",
+    material_type="Small aggregate", vehicle_type="Rigid 8-wheeler (32t)", submitted_by="p",
+    unit="t", status="Pending", cells=[main.Cell(month_index=9, quantity=999.0)]))
+_as(None)      # PUBLIC: no code
+_k = main.public_month_kpis(month=9, unit="vehicles")
+ok("§9: /api/public/month-kpis is open without a code", isinstance(_k, dict))
+ok("§9: Approved lines only", sorted(l["section_id"] for l in _k["lines"]) == ["WS1", "WS2", "WS3"])
+_by = {l["section_id"]: l for l in _k["lines"]}
+ok("§9: working days come from factors.planning", _k["working_days"] == 22)
+ok("§9: a tonnes line -> vehicle-loads = t / payload", abs(_by["WS1"]["vehicle_loads"] - 200 / 20) < 1e-9)
+ok("§9: an m3 line converts through density THEN payload",
+   abs(_by["WS2"]["qty_t"] - 160.0) < 1e-6 and abs(_by["WS2"]["vehicle_loads"] - 160 / 29) < 1e-3)
+ok("§9: ⭐ an unknown vehicle falls back to V07 (18 t), NOT _default (20 t), and says so",
+   _by["WS3"]["payload_t"] == 18.0 and abs(_by["WS3"]["vehicle_loads"] - 2.0) < 1e-9
+   and _by["WS3"]["payload_fallback"] == PLANNING[0] and _by["WS1"]["payload_fallback"] is None)
+ok("§9: qty_unit is in the requested map unit",
+   _by["WS1"]["qty_unit"] == 10 and main.public_month_kpis(month=9, unit="t")["lines"][0]["qty_t"] == 200.0)
+ok("§9: never actuals", not any("actual" in k for l in _k["lines"] for k in l))
+ok("§9: an empty month returns no lines rather than zeros", main.public_month_kpis(month=10, unit="t")["lines"] == [])
+# stockpile timeline
+_as("planner123")
+stockpiles.set_capacity("L2", capacity_qty=100.0, capacity_unit="t", opening_qty=0.0)
+# the lines above were written Approved directly, so nothing materialised their weeks
+weeks.materialise_line("R1", "earthworks", "WS1")
+weeks.set_actual("R1", 9, "earthworks", "WS1", 1, actual_qty=150.0, by="f")
+_as(None)
+_st = main.public_stockpile_timeline(9, 10)
+ok("§8: /api/public/stockpile-timeline is open without a code", isinstance(_st, dict))
+_p = [s for s in _st["stockpiles"] if s["location_id"] == "L2"][0]
+ok("§8: ⭐ the pile is over at the end of month 9", _p["months"]["9"]["over"] is True and _p["months"]["9"]["balance_end"] == 150.0)
+ok("§8: ...and still over in month 10 with no movement (the balance carries)", _p["months"]["10"]["over"] is True)
+ok("§8: only piles WITH a capacity appear — nothing can be 'over' an unknown limit",
+   (stockpiles.set_capacity("L2", capacity_qty=None, opening_qty=0.0),
+    main.public_stockpile_timeline(9, 10)["stockpiles"] == [])[1])
+_as("planner123")
+
 
 # =========================================================================== #
 #  The UPGRADE path — a database that predates this delivery                   #

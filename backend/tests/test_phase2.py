@@ -116,6 +116,15 @@ import taxonomy  # noqa: E402
 import network  # noqa: E402
 import seed  # noqa: E402
 import main  # noqa: E402
+# 2026-09-02, Task F: the staff endpoints now require an access code, resolved from the
+# X-Access-Code header by a middleware the stubbed app never runs. The harness sets the
+# request context itself, as a PLANNER, so every pre-existing assertion still exercises
+# the same code paths it did. Nothing here proves the header is actually read.
+import access  # noqa: E402
+for _v in ("IPT1_CODE", "IPT2_CODE", "IPT3_CODE", "IPT4_CODE", "IPT5_CODE", "IPT6_CODE",
+           "PLANNER_CODE", "ADMIN_CODE"):
+    os.environ.pop(_v, None)
+access.set_current("planner123")
 
 PASS = 0
 FAIL = []
