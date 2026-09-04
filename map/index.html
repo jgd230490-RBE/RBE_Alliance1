@@ -246,12 +246,12 @@
 <div id="kpi-hud">
     <div class="kpi-row">
         <div class="kpi-card">
-            <div class="kpi-value" id="kpi-vehicles">—</div>
-            <div class="kpi-label">Vehicles / day</div>
+            <div class="kpi-value" id="kpi-trips">—</div>
+            <div class="kpi-label">Movements / day</div>
         </div>
         <div class="kpi-card">
-            <div class="kpi-value" id="kpi-trips">—</div>
-            <div class="kpi-label">Trips / day</div>
+            <div class="kpi-value" id="kpi-vehicles">—</div>
+            <div class="kpi-label" id="kpi-vehicles-label">Vehicles needed</div>
         </div>
     </div>
     <div class="kpi-row" style="margin-top:7px;">
@@ -788,9 +788,16 @@
             const fbName = payloads[0].payload_fallback_vehicle;
             // per month, sum the lines that pass the filters; then average over the
             // months that had any
-            let mVeh = [], mQty = [], mRoutes = new Set(), byDisc = {}, byMat = {}, fellBack = 0;
+            // ⭐ 2026-09-03 — MOVEMENTS and VEHICLES are different numbers.
+            //   movements/day = vehicle-loads in the month ÷ working days
+            //   vehicles needed = Σ per line  ceil( movements/day ÷ trips one vehicle can
+            //                     make per day on THAT route ), from the baked cycle time
+            // Summed per line, not ceil'd once over the total: a vehicle working one
+            // route cannot also be working another. A line whose route is not baked for
+            // its vehicle has no cycle time and is counted as "unknown", never as zero.
+            let mVeh = [], mQty = [], mFleet = [], mRoutes = new Set(), byDisc = {}, byMat = {}, fellBack = 0, unbakedLines = 0;
             payloads.forEach(p => {
-                let veh = 0, qty = 0, any = false;
+                let veh = 0, qty = 0, fleet = 0, any = false;
                 p.lines.forEach(l => {
                     const rp = routes[l.route_id];
                     if (!rp) return;                       // unbaked: not drawn, not counted
@@ -798,12 +805,14 @@
                         || (iFilter !== 'ALL' && rp.ipt !== iFilter)
                         || (discFilter !== 'ALL' && l.discipline !== discFilter)) return;
                     any = true; veh += l.vehicle_loads; qty += l.qty_unit; mRoutes.add(l.route_id);
+                    if (l.trips_per_vehicle_day > 0) fleet += Math.ceil((l.vehicle_loads / wd) / l.trips_per_vehicle_day);
+                    else unbakedLines++;
                     if (l.payload_fallback) fellBack++;
                     const dk = l.discipline || 'unassigned', mk = l.material_type || 'unknown';
                     byDisc[dk] = (byDisc[dk] || 0) + l.qty_unit;
                     byMat[mk] = (byMat[mk] || 0) + l.qty_unit;
                 });
-                if (any) { mVeh.push(veh); mQty.push(qty); }
+                if (any) { mVeh.push(veh); mQty.push(qty); mFleet.push(fleet); }
             });
             const label = months.length === 1 ? monthLabel(months[0]) : `${monthLabel(months[0])}–${monthLabel(months[months.length - 1])}`;
             if (!mVeh.length) {
@@ -816,10 +825,12 @@
             const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
             const n = mVeh.length;                         // months with volume
             const vehDay = avg(mVeh) / wd, qtyDay = avg(mQty) / wd;
-            set('kpi-vehicles', fmtN(vehDay, 1));
-            // ⭐ trips == vehicle-loads on every line (one vehicle, one load per trip),
-            // so the two cards agree by construction. See /api/public/month-kpis.
             set('kpi-trips', fmtN(vehDay, 1));
+            // fleet = the busiest month's requirement, not the average: a fleet that
+            // is one truck short in the peak month is short
+            const fleet = Math.max(...mFleet);
+            set('kpi-vehicles', unbakedLines && !fleet ? 'not baked' : fmtN(fleet, 0) + (unbakedLines ? '+' : ''));
+            set('kpi-vehicles-label', unbakedLines ? `Vehicles needed (${unbakedLines} line${unbakedLines === 1 ? '' : 's'} unbaked)` : 'Vehicles needed');
             set('kpi-material', fmtN(qtyDay, unitLbl === 'vehicles' ? 1 : 0));
             set('kpi-routes', mRoutes.size); set('kpi-routes-label', 'Routes in ' + label);
             const line = (obj, suffix) => Object.entries(obj).sort((a, b) => b[1] - a[1])
@@ -828,7 +839,7 @@
             setHTML('kpi-by-discipline', line(byDisc, perDayUnit));
             // by material only when the month actually mixes materials
             setHTML('kpi-by-material', Object.keys(byMat).length > 1 ? line(byMat, perDayUnit) : '');
-            set('kpi-note', `Approved forecast, ${label}${n > 1 ? `, averaged over ${n} months with volume` : ''}. Per working day (${wd}/month). Trips = vehicle loads on every line.`
+            set('kpi-note', `Approved forecast, ${label}${n > 1 ? `, averaged over ${n} months with volume` : ''}. Movements = loads per working day (${wd}/month). Vehicles = movements ÷ what one vehicle can do per day on that route (baked cycle), rounded up per line${n > 1 ? ', busiest month' : ''}.`
                 + (fellBack ? ` ${fellBack} line(s) use the ${fbName} payload because their vehicle is not in factors.json.` : ''));
         }).catch(() => {
             if (seq !== KPI.seq) return;
@@ -1832,7 +1843,7 @@
         const routes = new Set(lines.map(f => f.properties.route_id));
         if (routes.size === 0 && status) {
             status.textContent = 'No routes have cached geometry yet. Bake the network on the '
-                + 'Data Management tab and this map will fill in.';
+                + 'Routes page and this map will fill in.';
         }
         // say plainly when a route is being drawn with a vehicle other than the default,
         // rather than letting one map quietly mix profiles
