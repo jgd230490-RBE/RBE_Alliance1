@@ -164,8 +164,7 @@ ok("a fallback slot is marked, not passed off as a translation",
 ok("vehLabel falls back to the id itself", /\|\| v \|\| ""/.test(code));
 ok("the save still posts the stored id", code.includes("vehicle_type: vehicle,"));
 ok("tables show the label with the stored id in the title",
-  code.includes('title={g.vehicle}>{vehLabel(g.vehicle)}')
-  && code.includes('title={r.vehicle_type}>{r.material_type} · {vehLabel(r.vehicle_type)}'));
+  code.includes('title={g.vehicle}>{vehLabel(g.vehicle)}'));
 ok("the header carries the control", /VEH_LANGS\.map\(\(\[k, l\]\) =>/.test(code));
 
 // ---- 4c. Task B — the multi-year matrix ---------------------------------------
@@ -225,9 +224,22 @@ ok("edit reopens the line on its full span",
 ok("...and the matrix accepts that span", code.includes("setToYear(editTarget.toYear || editTarget.year)"));
 
 // ---- 4c2. 2026-09-02 §3 — the six per-day cards ---------------------------------
-for (const card of ["Avg vehicles / day", "Peak vehicles / day", "Avg trips / day", "Peak trips / day"]) {
+// ⭐ 2026-09-03, the human's correction: MOVEMENTS and VEHICLES are different numbers.
+// A movement is one load carried one way; how many a single vehicle can make per day is
+// a property of the ROUTE (the baked HERE cycle), so vehicles needed = movements/day ÷
+// that figure, rounded UP. The earlier "trips == vehicles" cards are gone.
+for (const card of ["Avg movements / day", "Peak movements / day", "Vehicles needed (avg)", "Vehicles needed (peak)"]) {
   ok(`the range strip carries '${card}'`, code.includes(`"${card}"`));
 }
+ok("⭐ no card claims trips equal vehicles any more",
+  !code.includes("Avg vehicles / day") && !code.includes("Trips equal vehicle loads"));
+ok("⭐ trips-per-vehicle-per-day comes from the route's baked cycle, the same source the dashboard uses",
+  code.includes("/analysis?profile=") && /setTpv\(row && row\.trips_per_day > 0 \? row\.trips_per_day : null\)/.test(code));
+ok("⭐ vehicles needed = movements ÷ trips-per-vehicle, rounded UP",
+  /Math\.ceil\(movesPerDay \/ tripsPerVehicleDay\)/.test(code));
+ok("⭐ an unbaked route reads 'not baked', never a fleet size",
+  code.includes('"not baked" : String(fleetOf(') && code.includes("not baked yet for"));
+ok("the dashboard's fleet column uses the same model", code.includes("Math.ceil(peakPerDay / a.capacityPerDay)"));
 ok("...and avg / peak material in the CHOSEN unit",
   code.includes('`Avg ${unit === "m3" ? "m³"') && code.includes('`Peak ${unit === "m3" ? "m³"'));
 ok("working days come from factors.planning, defaulting to 22",
@@ -242,17 +254,20 @@ ok("the cards sit in the navy strip with tabular numerals, no new fonts",
   code.includes('style={{ background: "var(--navy)" }}') && code.includes("tabular-nums")
   && !/fontFamily/.test(code.slice(code.indexOf("Avg vehicles / day") - 2000, code.indexOf("Avg vehicles / day") + 2000)));
 
-// ---- 4d. Tasks C + D — the Look-ahead tab -------------------------------------
-ok("there is a Look-ahead tab", code.includes('"Look-ahead"'));
-ok("...placed straight after Submit Forecast",
-  /"Dashboard", "Submit Forecast", "Look-ahead", "My submissions"/.test(code));
+// ---- 4d. Tasks C + D — the Look-ahead page ------------------------------------
+// 2.5b: a rail entry now, not a tab. The nav entry and the render are checked
+// separately because a page that is listed but not rendered is a blank screen.
+ok("there is a Look-ahead nav entry",
+  /\{ id: "lookahead", label: "Look-ahead"/.test(code));
+ok("...in the Track group, on its own",
+  /group: "Track", items: \[\s*\{ id: "lookahead"/.test(code));
 ok("...and it renders the LookAhead component",
-  /tab === "Look-ahead" && <LookAhead/.test(code));
-// ⚠️ Visible to submitters too. Until Task F, /api/forecast-weeks has exactly the same
-// visibility as /api/forecasts, and hiding the tab would imply a boundary that is not
-// there. Asserted so nobody "fixes" it into a false permission.
-ok("⭐ the tab is NOT gated on canApprove",
-  !/canApprove \? \[[^\]]*Look-ahead/.test(code));
+  /page === "lookahead" && <LookAhead/.test(code));
+// ⚠️ Visible to submitters too. /api/forecast-weeks is filtered per IPT on the server
+// since Task F, so the boundary is there, not in the nav. Asserted so nobody "fixes"
+// this into a second, inconsistent permission.
+ok("⭐ the Track group is NOT admin-gated",
+  !/group: "Track", admin/.test(code));
 ok("the window is the current month plus the next one",
   /to: Math\.min\(months\.count, from \+ 1\)/.test(code));
 // ⭐ which cell is editable comes from the SERVER, not the browser clock
@@ -345,7 +360,7 @@ ok("⭐ a planner's default is EMPTY, never IPT 1",
 ok("...and the save refuses without one when required",
   code.includes("Pick which IPT this line belongs to before saving."));
 ok("the save posts ipt on the line", /ipt: \(iptLocked \? access\.ipt : ipt\) \|\| null/.test(code));
-ok("a line with no IPT is flagged in Approvals as planner-only",
+ok("a line with no IPT is flagged on the Forecasts page as planner-only",
   code.includes("no IPT") && code.includes("only planners can see it until one is set"));
 
 // ---- 4g. NOTHING may upload ----------------------------------------------------
@@ -374,7 +389,7 @@ for (const keep of [
 // Source-level again, and here that is not a compromise but the only option: the whole
 // feature is map interaction, and there is no browser in this harness. What CAN be
 // proved is that the wiring exists and that nothing sends HERE calls by accident.
-ok("a Zones sub-tab exists", code.includes('["zones", "Zones", zoneList.length]'));
+ok("a Zones page exists", /\{ id: "zones", label: "Zones"/.test(code));
 ok("the sub-tab switch is three-way, not 'not locations'",
   code.includes("const onRoutes = subTab === \"routes\"") &&
   code.includes("const onZones = subTab === \"zones\""));
@@ -550,6 +565,106 @@ ok("the 125% lesson is recorded where the total is displayed",
   src.includes("125%"));
 ok("the factors panel no longer calls its load+unload figure 'turnaround'",
   !code.includes("v.turnaround_hr") && code.includes("v.unloading_hr"));
+
+// ---- 8. 2.5b: the page architecture -------------------------------------------
+// The left rail replaced the tab row, My submissions and Approvals became one page,
+// routes became editable and factors.json became editable. Everything here is
+// source-level: there is no browser in this harness, so what can be proved is that the
+// wiring exists and that the two things that would break silently — the shared Mapbox
+// instance and the scope of a withdraw — are still right.
+
+// 8a. the rail
+ok("the nav is four groups in order: Plan, Track, Data, Map",
+  (code.match(/group: "(Plan|Track|Data|Map)"/g) || []).join(",") === 'group: "Plan",group: "Track",group: "Data",group: "Map"');
+ok("⭐ only the Data group is admin-gated", /group: "Data", admin: true/.test(code)
+  && (code.match(/admin: true/g) || []).length === 1);
+ok("an admin-only page falls back to the dashboard rather than a blank screen",
+  code.includes("if(!allowed.has(page)) setPage(\"dashboard\")"));
+ok("the rail collapses and the page survives a refresh",
+  code.includes('localStorage.getItem("rbe_page")') && code.includes('localStorage.setItem("rbe_rail"'));
+ok("the pending count badges Forecasts for approvers only",
+  code.includes('it.id === "forecasts" && canApprove && pending > 0'));
+
+// 8b. ⭐ ONE Mapbox instance across Locations / Routes / Zones
+// Three nav entries, one component. Rendering DataManagement in three separate
+// branches would unmount and remount it on every switch — the map would reload its
+// style, lose its sources and jump back to the default viewport. This is the
+// assertion that catches that.
+ok("⭐ Locations/Routes/Zones render exactly ONE <DataManagement>",
+  (code.match(/<DataManagement/g) || []).length === 1);
+ok("...selected by DATA_PAGES, not by three separate branches",
+  code.includes("DATA_PAGES.includes(page) && canApprove") &&
+  /const DATA_PAGES = \["locations", "routes", "zones"\]/.test(code));
+ok("...and the page reaches it as a prop", /<DataManagement meta=\{meta\} who=\{who\} subTab=\{page\}/.test(code));
+ok("the old in-component sub-tab bar is gone",
+  !code.includes('["zones", "Zones", zoneList.length]'));
+// A map click that opens a node, or "create a route from here", still switches page
+// from inside the component. Each of those must tell the rail too, or the rail and the
+// panel disagree about which page you are looking at.
+ok("⭐ an internal page switch tells the rail as well",
+  code.includes("const setSubTab = (t) => { setSubTabState(t); if(onSubTab) onSubTab(t); }"));
+ok("...and a page change from the rail is mirrored inward",
+  /if\(propSubTab && propSubTab !== subTab\) setSubTabState\(propSubTab\)/.test(code));
+
+// 8c. Forecasts — My submissions and Approvals, merged
+ok("there is one Forecasts page, not two lists",
+  code.includes("function Forecasts({ meta, who, access, onEdit, onChanged })")
+  && !code.includes("function MySubmissions") && !code.includes("function Approvals("));
+ok("lines group per route + discipline + section, not per month",
+  code.includes('const key = [r.route_id, disc, sect].join("|")'));
+ok("a group spanning several statuses reads Mixed rather than picking one",
+  code.includes('e.statuses.size === 1 ? [...e.statuses][0] : "Mixed"'));
+ok("⭐ withdraw is scoped to the months the row shows, never 1..count",
+  code.includes('from: String(g.minMonth), to: String(g.maxMonth)'));
+ok("⭐ a submitter withdraws only its own lines; an approver is not narrowed",
+  code.includes('if(!canApprove) p.set("submitted_by", who)'));
+ok("⭐ a rejection without a reason is refused, not stored blank",
+  code.includes('A rejection needs a reason — nothing was changed.'));
+ok("edit hands back the whole year span, not one year",
+  /onEdit\(\{ routeId: g\.routeId, year: g\.fromYear, toYear: g\.toYear/.test(code));
+ok("approve/reject are shown only to approvers",
+  (code.match(/canApprove && g\.status !== "(Approved|Rejected)"/g) || []).length === 2);
+
+// 8d. Config — the editable copy of factors.json
+ok("the Config page saves the whole document to the admin endpoint",
+  code.includes("`${API}/admin/config/factors${qs}`") && code.includes('method: "PUT"'));
+ok("...and can put the file back", code.includes("admin/config/factors/reset"));
+ok("⭐ it says the file is only the seed once the row exists",
+  src.includes("Reset to file") && src.includes("differs from the file in the repo"));
+ok("a raw JSON tab exists for what the forms do not cover",
+  code.includes('["raw", "Everything (JSON)"]'));
+ok("bad JSON in the raw tab is refused before it is sent",
+  code.includes('setRawErr("Not valid JSON: "'));
+ok("the vehicle id is not editable — baked geometry is keyed on it",
+  src.includes("it cannot be renamed here"));
+
+// 8e. route editing in place
+ok("a route row can be edited", code.includes("startEditRoute") && code.includes("saveRouteEdit"));
+ok("⭐ the impact is fetched and confirmed BEFORE the write",
+  code.indexOf("/impact") < code.indexOf('method: "PATCH"') && code.includes("Continue?"));
+ok("the write is a PATCH of the changed fields, not a delete and re-create",
+  code.includes('method: "PATCH"') && !code.includes("recreateRoute"));
+ok("the route id itself is not editable while editing",
+  code.includes("disabled={!!editingRoute}"));
+
+// 8e-bis. the names the UI calls things
+// Renaming a page and leaving its old name in a hint is exactly the dangling-text
+// failure that source-level assertions exist to catch; it has bitten twice already.
+ok("⭐ no visible text still points at the retired 'Data Management tab'",
+  !src.includes("Data Management tab") && !/in Data\s+Management/.test(src));
+ok("...and nothing calls the data pages 'sub-tabs' to the user",
+  !/sub-tab/i.test(src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));
+
+// 8f. the shared page furniture
+ok("one PageHeader component, and every portal page uses it",
+  (code.match(/function PageHeader\(/g) || []).length === 1
+  && (code.match(/<PageHeader/g) || []).length >= 6);
+// The layout pass is only worth anything if it is the ONLY way a page titles itself.
+// A page that hand-rolls its own heading drifts on font size, spacing and colour, which
+// is exactly what 2.5b was asked to stop.
+ok("⭐ no portal page hand-rolls its own heading any more",
+  !/<h1 className="text-lg font-bold/.test(code) && !/<h2 className="text-lg font-bold/.test(code));
+ok("there is a shared empty state", code.includes("function EmptyState("));
 
 // ---- report ------------------------------------------------------------------
 console.log();

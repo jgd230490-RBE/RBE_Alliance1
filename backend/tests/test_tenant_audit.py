@@ -79,6 +79,8 @@ TENANTED = {
     # failures, naming both tables. That is four registrations per table, and the
     # fourth is this one.
     "forecast_weeks", "stockpile_weeks",
+    # 2.5b, 2026-09-03. The audit caught this one too, before it was registered here.
+    "config",
 }
 
 # Tables that are deliberately NOT tenanted, with the reason. Anything here is

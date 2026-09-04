@@ -219,8 +219,17 @@ ok("§9: figures come from /api/public/month-kpis, cached per month",
 ok("§9: working days come from the server payload", /const wd = payloads\[0\]\.working_days \|\| 22/.test(code));
 ok("§9: vehicles/day = vehicle-loads over months with volume, per working day",
   /const vehDay = avg\(mVeh\) \/ wd/.test(code));
-ok("§9: trips/day is stated equal to vehicle-loads, not a second formula",
-  /set\('kpi-trips', fmtN\(vehDay, 1\)\)/.test(code));
+// ⭐ 2026-09-03: movements and vehicles are different. Movements/day = loads per working
+// day; vehicles needed = Σ per line ceil(movements/day ÷ trips one vehicle can make on
+// that route), busiest month, with unbaked lines counted as unknown rather than zero.
+ok("§9: movements/day is the loads-per-working-day figure", /set\('kpi-trips', fmtN\(vehDay, 1\)\)/.test(code)
+  && />Movements \/ day</.test(html));
+ok("§9: ⭐ vehicles needed is ceil(movements ÷ trips-per-vehicle-day) per line, from the route's cycle",
+  /fleet \+= Math\.ceil\(\(l\.vehicle_loads \/ wd\) \/ l\.trips_per_vehicle_day\)/.test(code));
+ok("§9: ⭐ an unbaked line is counted as unknown, never as zero vehicles",
+  /else unbakedLines\+\+;/.test(code) && code.includes("'not baked'") && code.includes("unbaked)"));
+ok("§9: the fleet figure is the busiest month's, not the average", /const fleet = Math\.max\(\.\.\.mFleet\)/.test(code));
+ok("§9: no card says trips equal vehicles", !code.includes("Trips = vehicle loads on every line"));
 ok("§9: material/day is in the map unit", /qtyDay = avg\(mQty\) \/ wd/.test(code) && code.includes("kpi-material-label"));
 ok("§9: filters apply - origin/dest/IPT on the route, discipline on the LINE",
   /discFilter !== 'ALL' && l\.discipline !== discFilter/.test(code));
@@ -1053,6 +1062,12 @@ ok("§4: ZERO_RESULTS shows 'No Street View here' and returns before any image r
   && code.indexOf("No Street View here") < code.indexOf("'/streetview?lat='"));
 ok("§4: no key and a fetch failure still show nothing", /if\(!meta \|\| !meta\.available\) return;/.test(code));
 ok("§4: no second imagery provider", !/mapillary|bing.*streetside|kartaview/i.test(code));
+
+// ---- 2.5b: the admin pages were renamed -----------------------------------------
+// The map's empty-network hint tells the user where to go and bake. It named the
+// "Data Management tab", which 2.5b split into Locations / Routes / Zones in the rail.
+ok("the empty-network hint names a page that still exists",
+  !src.includes("Data Management tab") && src.includes("Routes page"));
 
 console.log();
 for (const f of fail) console.log("  FAIL:", f);

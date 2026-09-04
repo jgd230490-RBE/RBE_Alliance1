@@ -160,7 +160,10 @@ def reset_db():
     db.init_zones_db()
     db.init_gates_db()
     db.init_weeks_db()
+    db.init_config_db()
     db.init_tenant()
+    import config as _cfg
+    _cfg.invalidate()
 
 
 def cols(table):
@@ -971,6 +974,26 @@ ok("§9: ⭐ an unknown vehicle falls back to V07 (18 t), NOT _default (20 t), a
 ok("§9: qty_unit is in the requested map unit",
    _by["WS1"]["qty_unit"] == 10 and main.public_month_kpis(month=9, unit="t")["lines"][0]["qty_t"] == 200.0)
 ok("§9: never actuals", not any("actual" in k for l in _k["lines"] for k in l))
+# ⭐ 2026-09-03: every line carries trips_per_vehicle_day from the route's baked cycle —
+# None here because nothing is baked in this harness, and the map must then say so
+ok("§9: ⭐ every line carries trips_per_vehicle_day, None when the route is not baked",
+   all("trips_per_vehicle_day" in l and l["trips_per_vehicle_day"] is None for l in _k["lines"]))
+# bake R1 for the tipper (geometry only, no HERE) and the figure appears
+db.execute("INSERT INTO route_geometry (tenant_id, route_id, vehicle_profile, leg, alt_index, geometry, "
+           "distance_km, duration_hr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+           ("default", "R1", "Rigid 8-wheeler (32t)", "loaded", 0, "[[24.0,58.5],[24.4,58.6]]", 30.0, 0.75))
+db.execute("INSERT INTO route_geometry (tenant_id, route_id, vehicle_profile, leg, alt_index, geometry, "
+           "distance_km, duration_hr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+           ("default", "R1", "Rigid 8-wheeler (32t)", "return", 0, "[[24.4,58.6],[24.0,58.5]]", 30.0, 0.65))
+_k2 = {l["section_id"]: l for l in main.public_month_kpis(month=9, unit="vehicles")["lines"]}
+# cycle = 0.75 + 0.65 + (12 + 8)/60 = 1.7333 h; 10 h shift // 1.7333 = 5 trips
+ok("§9: ⭐ a baked route reports how many movements one vehicle can make per day (10 h ÷ cycle)",
+   _k2["WS1"]["trips_per_vehicle_day"] == 5, str(_k2["WS1"]["trips_per_vehicle_day"]))
+ok("§9: ...and the same route on an UNBAKED vehicle still reads None",
+   _k2["WS2"]["trips_per_vehicle_day"] is None)
+ok("§9: ...matching route_analysis exactly, so the dashboard, the form and the map agree",
+   [r for r in network.route_analysis("R1", profiles=["Rigid 8-wheeler (32t)"])["rows"]
+    if r["alt_index"] == 0][0]["trips_per_day"] == 5)
 ok("§9: an empty month returns no lines rather than zeros", main.public_month_kpis(month=10, unit="t")["lines"] == [])
 # stockpile timeline
 _as("planner123")
@@ -987,6 +1010,123 @@ ok("§8: ...and still over in month 10 with no movement (the balance carries)", 
 ok("§8: only piles WITH a capacity appear — nothing can be 'over' an unknown limit",
    (stockpiles.set_capacity("L2", capacity_qty=None, opening_qty=0.0),
     main.public_stockpile_timeline(9, 10)["stockpiles"] == [])[1])
+_as("planner123")
+
+
+# =========================================================================== #
+#  2.5b — route editing in place                                               #
+# =========================================================================== #
+reset_db()
+_as("planner123")
+for lid, nm, sup, rec in (("L1", "Pit A", '["Small aggregate"]', "[]"),
+                          ("L2", "Pit B", '["Small aggregate","Earthworks / soil"]', "[]"),
+                          ("L3", "Site X", "[]", '["Small aggregate"]'),
+                          ("L4", "Site Y", "[]", '["Earthworks / soil"]')):
+    db.execute("INSERT INTO locations (id, name, lat, lon, supplies, receives) VALUES (?, ?, ?, ?, ?, ?)",
+               (lid, nm, 58.5, 24.0, sup, rec))
+db.execute("INSERT INTO routes (id, origin_id, dest_id, ipt, origin_gate_id, dest_gate_id) "
+           "VALUES (?, ?, ?, ?, ?, ?)", ("R1", "L1", "L3", "IPT 5", "G-old-origin", "G-dest"))
+db.execute("INSERT INTO route_geometry (tenant_id, route_id, vehicle_profile, leg, alt_index, geometry, "
+           "distance_km, duration_hr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+           ("default", "R1", "Rigid 8-wheeler (32t)", "loaded", 0, "[[24,58.5],[24.4,58.6]]", 30.0, 0.7))
+seed_line(route_id="R1", disc="earthworks", sect="WS1", months=(9, 10), qty=10.0)
+main.set_route_status("R1", main.StatusUpdate(status="Approved"), discipline="earthworks", section_id="WS1")
+
+imp = network.route_edit_impact("R1")
+ok("2.5b: the impact report names what an edit would touch",
+   imp["forecast_lines"] == 1 and imp["forecast_rows"] == 2 and imp["week_rows"] == 8
+   and imp["baked_profiles"] == ["Rigid 8-wheeler (32t)"])
+
+# material / IPT only: nothing routed changes
+r = network.update_route("R1", ipt="IPT 3", given={"ipt"})
+ok("2.5b: changing IPT alone clears nothing", r["affected_routes"] == [] and r["gates_cleared"] == []
+   and network.profiles_for_route("R1") == ["Rigid 8-wheeler (32t)"])
+ok("2.5b: ...and is written", db.query("SELECT ipt FROM routes WHERE tenant_id = ? AND id = ?",
+   (db.current_tenant(), "R1"))[0]["ipt"] == "IPT 3")
+# supply/receive guard, same as create
+r = network.update_route("R1", material_category="Earthworks / soil", given={"material_category"})
+ok("2.5b: the supply/receive guard applies to an edit", "does not supply" in (r.get("error") or ""))
+
+# move the origin
+r = network.update_route("R1", origin_id="L2", given={"origin_id"})
+row = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?", (db.current_tenant(), "R1"))[0]
+ok("2.5b: ⭐ moving the origin keeps the route id", row["id"] == "R1" and row["origin_id"] == "L2")
+ok("2.5b: ⭐ ...clears the baked geometry and returns the profiles to re-bake",
+   network.profiles_for_route("R1") == [] and r["affected_routes"] == [{"id": "R1", "profiles": ["Rigid 8-wheeler (32t)"]}])
+ok("2.5b: ⭐ ...clears the ORIGIN gate (it belonged to the old location) and keeps the destination's",
+   row["origin_gate_id"] is None and row["dest_gate_id"] == "G-dest" and r["gates_cleared"] == ["origin"])
+ok("2.5b: ⭐ ...and leaves the forecast lines and their weeks alone",
+   len(main.list_forecasts(route_id="R1")) == 2 and len(weeks.list_weeks(9, 10, route_id="R1")) == 8)
+ok("2.5b: origin == destination is refused",
+   "different" in (network.update_route("R1", dest_id="L2", given={"dest_id"}).get("error") or ""))
+ok("2.5b: an unknown location is refused",
+   "not found" in (network.update_route("R1", dest_id="L9", given={"dest_id"}).get("error") or ""))
+ok("2.5b: an unknown route is refused", network.update_route("R9", ipt="IPT1", given={"ipt"}).get("error") == "route not found")
+# the endpoint only writes what was sent
+main.update_route("R1", main.RoutePatch(ipt="IPT 6"), token=None)
+row = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?", (db.current_tenant(), "R1"))[0]
+ok("2.5b: PATCH writes only the fields sent", row["ipt"] == "IPT 6" and row["origin_id"] == "L2" and row["dest_id"] == "L3")
+
+
+# =========================================================================== #
+#  2.5b — the config table: factors.json becomes the seed                       #
+# =========================================================================== #
+import config as cfg  # noqa: E402
+reset_db()
+_as("planner123")
+FILE = conversions.load_factors_file()
+ok("cfg: with no row, load_factors() is the file", conversions.load_factors() == FILE
+   and cfg.status(conversions)["source"] == "file")
+ok("cfg: ⭐ first boot seeds the row from the file", cfg.seed_from_file(conversions)["seeded"] is True
+   and cfg.status(conversions)["source"] == "database")
+ok("cfg: ...idempotently", cfg.seed_from_file(conversions)["seeded"] is False)
+ok("cfg: ...and the live document is unchanged by the seed", conversions.load_factors() == FILE
+   and cfg.status(conversions)["differs_from_file"] is False)
+# an edit through the table is what everything reads from now on
+doc = json.loads(json.dumps(FILE))
+doc["vehicles"]["Rigid 8-wheeler (32t)"]["payload_t"] = 21.5
+doc["planning"]["working_days_per_month"] = 20
+res = cfg.save(doc, by="tester", network=network)
+ok("cfg: a valid edit saves", res["ok"] is True, str(res))
+ok("cfg: ⭐ load_factors() now reads the row, not the file",
+   conversions._payload(conversions.load_factors(), "Rigid 8-wheeler (32t)") == 21.5
+   and conversions.load_factors()["planning"]["working_days_per_month"] == 20)
+ok("cfg: ...and every consumer follows — the meta payload carries the new working days",
+   main.meta()["factors"]["planning"]["working_days_per_month"] == 20)
+ok("cfg: the status says who and that the file has drifted",
+   cfg.status(conversions)["updated_by"] == "tester" and cfg.status(conversions)["differs_from_file"] is True)
+# validation refuses what would silently break the numbers
+bad = json.loads(json.dumps(FILE)); bad["vehicles"]["Artic Tipper (44t)"]["payload_t"] = -1
+ok("cfg: ⭐ a non-positive payload is refused", not cfg.save(bad, network=network)["ok"])
+bad = json.loads(json.dumps(FILE)); del bad["vehicles"]["Artic Tipper (44t)"]
+ok("cfg: ⭐ deleting the default routing profile is refused",
+   any("default routing profile" in p for p in cfg.save(bad, network=network)["problems"]))
+db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L1", "a", 58.5, 24.0))
+db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L2", "b", 58.6, 24.4))
+db.execute("INSERT INTO routes (id, origin_id, dest_id) VALUES (?, ?, ?)", ("R1", "L1", "L2"))
+db.execute("INSERT INTO route_geometry (tenant_id, route_id, vehicle_profile, leg, alt_index, geometry, "
+           "distance_km, duration_hr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+           ("default", "R1", "Rigid 6-wheeler (26t)", "loaded", 0, "[[24,58.5],[24.4,58.6]]", 30.0, 0.7))
+bad = json.loads(json.dumps(FILE)); del bad["vehicles"]["Rigid 6-wheeler (26t)"]
+ok("cfg: ⭐ deleting a vehicle the network is BAKED for is refused, by name",
+   any("Rigid 6-wheeler (26t)' has baked route geometry" in p for p in cfg.save(bad, network=network)["problems"]))
+bad = json.loads(json.dumps(FILE)); bad["material_categories"]["Small aggregate"]["vehicles"].append("Ghost lorry")
+ok("cfg: a material naming an unknown vehicle is refused", not cfg.save(bad, network=network)["ok"])
+bad = json.loads(json.dumps(FILE)); bad["planning"]["working_days_per_month"] = 0
+ok("cfg: zero working days is refused", not cfg.save(bad, network=network)["ok"])
+ok("cfg: ...and the live document is still the last GOOD one",
+   conversions.load_factors()["planning"]["working_days_per_month"] == 20)
+# reset to file
+ok("cfg: ⭐ reset to file puts the file back", cfg.reset_to_file(conversions, by="tester")["ok"]
+   and conversions.load_factors() == FILE and cfg.status(conversions)["differs_from_file"] is False)
+# the endpoint refuses a bad doc with the problems
+_as("admin123")
+try:
+    main.put_factors_config(main.FactorsIn(doc={"vehicles": {}}, updated_by="x"), token=None)
+    ok("cfg: PUT refuses a bad document", False)
+except Exception as e:
+    ok("cfg: PUT refuses a bad document with 400", getattr(e, "status_code", None) == 400)
+ok("cfg: GET returns doc, status and the file", set(main.get_factors_config()) == {"doc", "status", "file"})
 _as("planner123")
 
 

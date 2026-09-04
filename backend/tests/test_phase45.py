@@ -163,6 +163,7 @@ def reset_db():
     db.init_zones_db()
     db.init_gates_db()     # Phase 5a
     db.init_weeks_db()     # Week 1 — forecast_weeks, stockpile_weeks, capacity columns
+    db.init_config_db()    # 2.5b — config
     db.init_tenant()
 
 
@@ -217,7 +218,8 @@ reset_db()
 # without being registered here and in test_tenant_audit.py ships with the column
 # present and the isolation absent. Both Week 1 tables tripped this line and the audit
 # before they were registered.
-ok("db.py names the tenanted tables in one place", len(db.TENANTED_TABLES) == 14,
+# ...and 15 from 2.5b's config table, which tripped this line too before it was registered.
+ok("db.py names the tenanted tables in one place", len(db.TENANTED_TABLES) == 15,
    f"got {len(db.TENANTED_TABLES)}")
 
 for t in sorted(db.TENANTED_TABLES):
