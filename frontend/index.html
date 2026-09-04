@@ -246,12 +246,9 @@ function Dashboard({ meta }){
 
   return (
     <div className="max-w-7xl mx-auto p-5 space-y-5">
-      <div className="flex items-end justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-lg font-bold text-[color:var(--navy-deep)]">Forecast Dashboard</h1>
-          <p className="text-sm text-slate-500">Strategic planning view · {D.lo===D.hi ? D.labels[0] : (monthLabelAbs(D.lo,months.start_year)+" – "+monthLabelAbs(D.hi,months.start_year))} · {status==="All" ? "all forecasts" : status.toLowerCase()+" only"}</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+      <PageHeader title="Dashboard"
+        subtitle={`Strategic planning view · ${D.lo===D.hi ? D.labels[0] : (monthLabelAbs(D.lo,months.start_year)+" – "+monthLabelAbs(D.hi,months.start_year))} · ${status==="All" ? "all forecasts" : status.toLowerCase()+" only"}`}
+        actions={<div className="flex flex-wrap gap-2">
           <select className={sel} value={status} onChange={e=>setStatus(e.target.value)}>{["Approved","Pending","All"].map(s=><option key={s}>{s}</option>)}</select>
           <select className={sel} value={unit} onChange={e=>setUnit(e.target.value)}>{units.map(u=><option key={u} value={u}>{u==="t"?"tonnes":u==="m3"?"m³":"vehicles"}</option>)}</select>
           <select className={sel} value={material} onChange={e=>setMaterial(e.target.value)}><option>All</option>{materials.map(m=><option key={m}>{m}</option>)}</select>
@@ -259,8 +256,7 @@ function Dashboard({ meta }){
           <select className={sel} value={fromM} onChange={e=>setFromM(+e.target.value)}>{Array.from({length:months.count},(_,i)=>i+1).map(i=><option key={i} value={i}>{monthLabelAbs(i,months.start_year)}</option>)}</select>
           <span className="self-center text-slate-400 text-sm">→</span>
           <select className={sel} value={toM} onChange={e=>setToM(+e.target.value)}>{Array.from({length:months.count},(_,i)=>i+1).map(i=><option key={i} value={i}>{monthLabelAbs(i,months.start_year)}</option>)}</select>
-        </div>
-      </div>
+        </div>} />
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <Kpi label="Total material" value={Math.round(D.kpis.totT).toLocaleString()} sub="tonnes" />
@@ -359,7 +355,7 @@ function Dashboard({ meta }){
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
           {D.unbaked} forecast line(s) reference a route with no cached geometry for their
           vehicle, so cycle time, fleet size and truck-km are blank rather than estimated.
-          Bake those routes on the Data Management tab.
+          Bake those routes on the Routes page.
         </div>
       )}
 
@@ -423,7 +419,7 @@ function App(){
 function Header({ view, role, setView, signOut, vehLang, setVehLang }){
   return (
     <header className="brand-bar text-white shrink-0">
-      <div className="max-w-7xl mx-auto px-5 h-16 flex items-center justify-between">
+      <div className="px-5 h-16 flex items-center justify-between">
         <button onClick={() => setView(role ? "portal" : "public")} className="flex items-center gap-3 text-left">
           <span className="inline-block w-2.5 h-7 rounded-sm" style={{background:"var(--gold)"}}></span>
           <span>
@@ -538,19 +534,93 @@ function Login({ onSignIn, onBack, savedName }){
   );
 }
 
-// ================================================================= Portal (tabbed)
+// ================================================================= Portal (2.5b shell)
+//
+// 2.5b, 2026-09-03: the page architecture. A LEFT RAIL with grouped sections replaces
+// the single row of tabs, which had run out of room at seven and would have needed nine.
+//
+//   Plan   Dashboard · Submit forecast · Forecasts
+//   Track  Look-ahead
+//   Data   Locations · Routes · Zones · Config           (planner / admin only)
+//   Map    Public route map
+//
+// Two things are deliberate and easy to break:
+//  1. Locations / Routes / Zones are three NAV ENTRIES but ONE component. Data
+//     Management owns the single Mapbox instance and must never be unmounted while
+//     moving between those three, so all three render the same <DataManagement> at the
+//     same position and only its `subTab` prop changes.
+//  2. Look-ahead is visible to submitters too. /api/forecast-weeks is filtered per IPT
+//     on the server since Task F; the tab is not where the boundary is.
+const NAV = [
+  { group: "Plan", items: [
+    { id: "dashboard", label: "Dashboard", glyph: "▦" },
+    { id: "submit", label: "Submit forecast", glyph: "✎" },
+    { id: "forecasts", label: "Forecasts", glyph: "☰" },
+  ]},
+  { group: "Track", items: [
+    { id: "lookahead", label: "Look-ahead", glyph: "◔" },
+  ]},
+  { group: "Data", admin: true, items: [
+    { id: "locations", label: "Locations", glyph: "◉" },
+    { id: "routes", label: "Routes", glyph: "⇄" },
+    { id: "zones", label: "Zones", glyph: "◇" },
+    { id: "config", label: "Config", glyph: "⚙" },
+  ]},
+  { group: "Map", items: [
+    { id: "map", label: "Public route map", glyph: "🗺" },
+  ]},
+];
+const DATA_PAGES = ["locations", "routes", "zones"];
+
+// One header for every page: title, one line of purpose, actions on the right.
+function PageHeader({ title, subtitle, actions, children }){
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
+      <div className="min-w-0">
+        <h2 className="text-xl font-bold text-[color:var(--navy-deep)] tracking-tight">{title}</h2>
+        {subtitle && <p className="text-sm text-slate-500 mt-0.5 max-w-3xl">{subtitle}</p>}
+        {children}
+      </div>
+      {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+    </div>
+  );
+}
+
+// One empty state for every page: what is missing, and the one thing to do about it.
+function EmptyState({ title, body, action }){
+  return (
+    <div className="bg-white rounded-xl border border-dashed border-slate-300 p-10 text-center">
+      <div className="text-sm font-semibold text-slate-700">{title}</div>
+      {body && <div className="text-sm text-slate-500 mt-1 max-w-md mx-auto">{body}</div>}
+      {action && <div className="mt-4">{action}</div>}
+    </div>
+  );
+}
+
 function Portal({ role, who, meta, metaErr, vehLang }){
   const canApprove = !!(role && role.can_approve);
-  // ⚠️ Look-ahead is visible to EVERYONE on staff, submitters included, because until
-  // Task F lands /api/forecast-weeks has exactly the same visibility as
-  // /api/forecasts — everyone sees every line. Hiding the tab from submitters would
-  // suggest a permission boundary that does not exist behind it.
-  const tabs = ["Dashboard", "Submit Forecast", "Look-ahead", "My submissions", ...(canApprove ? ["Approvals", "Data Management"] : []), "Public Route Map"];
-  const [tab, setTab] = useState("Dashboard");
+  const [page, setPageState] = useState(() => { try { return localStorage.getItem("rbe_page") || "dashboard"; } catch(e){ return "dashboard"; } });
+  const setPage = (p) => { setPageState(p); try { localStorage.setItem("rbe_page", p); } catch(e){} };
+  const [railOpen, setRailOpen] = useState(() => { try { return localStorage.getItem("rbe_rail") !== "closed"; } catch(e){ return true; } });
+  const toggleRail = () => { const v = !railOpen; setRailOpen(v); try { localStorage.setItem("rbe_rail", v ? "open" : "closed"); } catch(e){} };
   // {routeId, year, toYear, discipline, sectionId} handed to the Matrix. `year` is the
   // FIRST year of the line and `toYear` the last — a line can span several since the
   // multi-year save, and reopening it on one year would hide the rest.
   const [editTarget, setEditTarget] = useState(null);
+  // pending-approval count for the planner's nav badge
+  const [pending, setPending] = useState(0);
+  const refreshPending = () => {
+    if(!canApprove) return;
+    fetch(`${API}/forecasts/summary`).then(r => r.ok ? r.json() : [])
+      .then(rows => setPending((rows || []).filter(r => r.status === "Pending" || r.status === "Mixed").length))
+      .catch(() => {});
+  };
+  useEffect(() => { refreshPending(); }, [canApprove, page]);
+
+  // a page the role cannot see falls back to the dashboard rather than a blank
+  const visible = NAV.filter(g => !g.admin || canApprove);
+  const allowed = new Set(visible.flatMap(g => g.items.map(i => i.id)));
+  useEffect(() => { if(!allowed.has(page)) setPage("dashboard"); }, [canApprove]);
 
   if(metaErr){
     return <div className="p-8 text-center text-slate-600">
@@ -559,34 +629,64 @@ function Portal({ role, who, meta, metaErr, vehLang }){
   }
   if(!meta) return <div className="p-8 text-center text-slate-400">Loading…</div>;
 
-  const editInMatrix = (target) => { setEditTarget(target); setTab("Submit Forecast"); };
+  const editInMatrix = (target) => { setEditTarget(target); setPage("submit"); };
+  const current = visible.flatMap(g => g.items).find(i => i.id === page) || { label: "" };
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
-      <nav className="bg-white border-b border-slate-200 px-5">
-        <div className="max-w-7xl mx-auto flex gap-1">
-          {tabs.map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              className={"px-4 py-3 text-sm font-medium border-b-2 -mb-px transition " +
-                (tab === t
-                  ? "border-[color:var(--navy)] text-[color:var(--navy)]"
-                  : "border-transparent text-slate-500 hover:text-slate-800")}>
-              {t}
-            </button>
+    <div className="flex-1 min-h-0 flex">
+      <aside className={"shrink-0 bg-white border-r border-slate-200 flex flex-col transition-[width] duration-150 " + (railOpen ? "w-56" : "w-14")}>
+        <div className="flex-1 overflow-y-auto py-3">
+          {visible.map(g => (
+            // collapsed, the group HEADINGS go but the grouping must not: a plain
+            // column of nine icons reads as one undifferentiated list.
+            <div key={g.group} className={"mb-3 " + (railOpen ? "" : "pt-3 mt-3 border-t border-slate-100 first:border-0 first:mt-0 first:pt-0")}>
+              {railOpen && <div className="px-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">{g.group}</div>}
+              {g.items.map(it => {
+                const active = page === it.id;
+                const badge = it.id === "forecasts" && canApprove && pending > 0 ? pending : null;
+                return (
+                  <button key={it.id} onClick={() => setPage(it.id)} title={railOpen ? undefined : it.label}
+                    className={"w-full flex items-center gap-3 px-4 py-2 text-sm text-left transition border-l-[3px] " +
+                      (active ? "border-[color:var(--navy)] bg-slate-50 text-[color:var(--navy)] font-semibold"
+                              : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900")}>
+                    <span className="w-4 text-center text-base leading-none opacity-80">{it.glyph}</span>
+                    {railOpen && <span className="truncate flex-1">{it.label}</span>}
+                    {badge != null && railOpen && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-white" style={{ background: "var(--gold)", color: "var(--navy-deep)" }}
+                        title={`${badge} line(s) waiting for approval`}>{badge}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           ))}
         </div>
-      </nav>
-      <div className="flex-1 min-h-0 overflow-auto">
-        {tab === "Dashboard" && <Dashboard meta={meta} />}
-        {tab === "Submit Forecast" && <Matrix meta={meta} who={who} editTarget={editTarget} vehLang={vehLang} access={role} />}
-        {tab === "Look-ahead" && <LookAhead meta={meta} who={who} />}
-        {tab === "My submissions" && <MySubmissions meta={meta} who={who} onEdit={editInMatrix} />}
-        {tab === "Approvals" && canApprove && <Approvals />}
-        {tab === "Data Management" && canApprove && <DataManagement meta={meta} who={who} />}
-        {tab === "Public Route Map" && (
+        <div className="border-t border-slate-200 p-2">
+          <button onClick={toggleRail} className="w-full text-xs text-slate-400 hover:text-slate-700 py-1" title={railOpen ? "Collapse" : "Expand"}>
+            {railOpen ? "‹ Collapse" : "›"}
+          </button>
+          {railOpen && role && (
+            <div className="px-2 pb-1 text-[11px] text-slate-500 truncate" title={who}>
+              <span className="font-medium text-slate-700">{who || "—"}</span> · {role.label}{role.ipt ? ` · ${role.ipt}` : ""}
+            </div>
+          )}
+        </div>
+      </aside>
+
+      <main className="flex-1 min-h-0 overflow-auto">
+        {page === "dashboard" && <Dashboard meta={meta} />}
+        {page === "submit" && <Matrix meta={meta} who={who} editTarget={editTarget} vehLang={vehLang} access={role} />}
+        {page === "forecasts" && <Forecasts meta={meta} who={who} access={role} onEdit={editInMatrix} onChanged={refreshPending} />}
+        {page === "lookahead" && <LookAhead meta={meta} who={who} />}
+        {/* one mounted instance across the three data pages — see the note at the top */}
+        {DATA_PAGES.includes(page) && canApprove && (
+          <DataManagement meta={meta} who={who} subTab={page} onSubTab={(t) => setPage(t)} />
+        )}
+        {page === "config" && canApprove && <ConfigPage meta={meta} who={who} access={role} />}
+        {page === "map" && (
           <iframe src={MAP_URL} title="Public Route Map" className="w-full h-full border-0" />
         )}
-      </div>
+      </main>
     </div>
   );
 }
@@ -642,7 +742,7 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
   useEffect(() => { if(!matchingRoutes.some(r => r.route_id === routeId)) setRouteId(matchingRoutes[0]?.route_id || ""); }, [origin, dest]);
   const route = routes.find(r => r.route_id === routeId);
 
-  // apply an "edit this submission" request from the My submissions page
+  // apply an "edit this submission" request from the Forecasts page
   useEffect(() => {
     if(!editTarget || !editTarget.routeId) return;
     const r = routes.find(x => x.route_id === editTarget.routeId);
@@ -650,7 +750,7 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
     setOrigin(r.origin || "");
     setDest(r.dest || "");
     setRouteId(editTarget.routeId);
-    // My submissions groups a line across every year it covers, so it hands back a
+    // Forecasts groups a line across every year it covers, so it hands back a
     // span. `year` is the first year and `toYear` the last; an older caller that sends
     // only `year` still opens that one year, which is what it used to do.
     if(editTarget.year){ setFromYear(editTarget.year); setToYear(editTarget.toYear || editTarget.year); }
@@ -876,6 +976,28 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
 
   const rangeLabel = fromYear === toYear ? String(fromYear) : `${fromYear}–${toYear}`;
 
+  // ⭐ 2026-09-03 — how many MOVEMENTS one VEHICLE can make per day on THIS route, for
+  // THIS vehicle: the baked HERE cycle (laden out, unload, empty back, load), from
+  // /api/routes/{id}/analysis — the same figure the dashboard and the map use, so the
+  // three surfaces cannot disagree. null = not baked for this vehicle, and the strip
+  // then says "not baked" rather than a fleet size.
+  const [tripsPerVehicleDay, setTpv] = useState(null);
+  useEffect(() => {
+    let live = true;
+    setTpv(null);
+    if(!routeId || !vehicle) return;
+    fetch(`${API}/routes/${encodeURIComponent(routeId)}/analysis?profile=${encodeURIComponent(vehicle)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if(!live || !j) return;
+        const row = (j.rows || []).find(x => x.alt_index === 0 && x.profile === vehicle);
+        setTpv(row && row.trips_per_day > 0 ? row.trips_per_day : null);
+      }).catch(() => {});
+    return () => { live = false; };
+  }, [routeId, vehicle]);
+  // vehicles needed = movements/day ÷ movements one vehicle can make, rounded UP
+  const fleetOf = (movesPerDay) => (tripsPerVehicleDay > 0 ? Math.ceil(movesPerDay / tripsPerVehicleDay) : null);
+
   const save = () => {
     if(!routeId){ setMsg({ ok: false, text: "Pick an origin and destination that map to a route first." }); return; }
     if(iptRequired && !ipt){ setMsg({ ok: false, text: "Pick which IPT this line belongs to before saving." }); return; }
@@ -919,10 +1041,8 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
 
   return (
     <div className="max-w-7xl mx-auto p-5">
-      <div className="mb-4">
-        <h2 className="text-lg font-bold text-[color:var(--navy-deep)]">Submit forecast</h2>
-        <p className="text-sm text-slate-500">Choose where the material moves from and to — the route reference fills in automatically.</p>
-      </div>
+      <PageHeader title="Submit forecast"
+        subtitle="Choose where the material moves from and to — the route reference fills in automatically. One vehicle per line; a split across two vehicles is two lines." />
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1139,11 +1259,15 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
             </span>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-6 divide-x divide-slate-200 text-white kpi-num" style={{ background: "var(--navy)" }}>
+            {/* Movements = loads per working day. Vehicles needed = movements ÷ what one
+                vehicle can do per day on this route (the baked cycle), rounded up. The
+                second is a property of the ROUTE, which is why it reads "not baked"
+                until HERE geometry exists for this vehicle. */}
             {[
-              ["Avg vehicles / day",  fmt(perDay.avgVeh, "vehicles"),   ""],
-              ["Peak vehicles / day", fmt(perDay.peakVeh, "vehicles"),  "peak"],
-              ["Avg trips / day",     fmt(perDay.avgTrips, "vehicles"), ""],
-              ["Peak trips / day",    fmt(perDay.peakTrips, "vehicles"),"peak"],
+              ["Avg movements / day",  fmt(perDay.avgTrips, "vehicles"),  ""],
+              ["Peak movements / day", fmt(perDay.peakTrips, "vehicles"), "peak"],
+              ["Vehicles needed (avg)",  fleetOf(perDay.avgTrips) == null ? "not baked" : String(fleetOf(perDay.avgTrips)),   ""],
+              ["Vehicles needed (peak)", fleetOf(perDay.peakTrips) == null ? "not baked" : String(fleetOf(perDay.peakTrips)), "peak"],
               [`Avg ${unit === "m3" ? "m³" : unit === "t" ? "t" : "loads"} / day`,  fmt(perDay.avgQty, unit),  ""],
               [`Peak ${unit === "m3" ? "m³" : unit === "t" ? "t" : "loads"} / day`, fmt(perDay.peakQty, unit), "peak"],
             ].map(([label, value, tone]) => (
@@ -1154,8 +1278,10 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
             ))}
           </div>
           <div className="px-3 py-1.5 text-[10.5px] text-slate-400 bg-white">
-            Trips equal vehicle loads on a single line — one vehicle, one load per trip — whether the line is typed
-            in tonnes, m³ or loads. They diverge only where lines with different vehicles are combined.
+            Movements = loads per working day ({perDay.wd}/month). Vehicles needed = movements ÷{" "}
+            {tripsPerVehicleDay > 0
+              ? <>the <strong>{tripsPerVehicleDay}</strong> movements one {vehLabel(vehicle)} can make per day on this route (baked cycle), rounded up.</>
+              : <>what one vehicle can do per day on this route — <strong>not baked yet for {vehLabel(vehicle)}</strong>, so no fleet size can be given.</>}
           </div>
         </div>
 
@@ -1191,198 +1317,477 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
   );
 }
 
-// ================================================================= My submissions
-function MySubmissions({ meta, who, onEdit }){
+// ================================================================= Forecasts (2.5b)
+//
+// My submissions and Approvals, merged into one page. One list of forecast LINES — a route, a
+// discipline, a section, one vehicle, across every year it covers — already filtered on
+// the server by the caller's access code (Task F), so an IPT user sees its IPT's lines
+// and a planner sees everyone's. What each person can DO to a line is what differs:
+//   anyone     edit (reopens it in Submit forecast), withdraw their own
+//   planner    approve / reject inline, withdraw anyone's
+// Grouped per line, NOT per line-and-year (a multi-year save is one submission), and
+// withdraw is scoped to the months the row actually shows.
+function Forecasts({ meta, who, access, onEdit, onChanged }){
   const { routes, months } = meta;
   const routeById = useMemo(() => Object.fromEntries(routes.map(r => [r.route_id, r])), [routes]);
+  const canApprove = !!(access && access.can_approve);
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(false);
   const [tick, setTick] = useState(0);
+  const [busy, setBusy] = useState("");
+  const [f, setF] = useState({ status: "ALL", ipt: "ALL", discipline: "ALL", mine: false, q: "" });
 
   useEffect(() => {
-    if(!who){ setRows([]); return; }
     let live = true;
-    fetch(`${API}/forecasts?submitted_by=${encodeURIComponent(who)}`)
-      .then(r => r.json()).then(rs => { if(live) setRows(rs); })
+    fetch(`${API}/forecasts`).then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(rs => { if(live){ setRows(rs); setErr(false); } })
       .catch(() => setErr(true));
     return () => { live = false; };
-  }, [who, tick]);
+  }, [tick]);
 
   const groups = useMemo(() => {
     if(!rows) return [];
     const g = {};
     rows.forEach(r => {
-      // ⚠️ Grouped per LINE, NOT per line-and-year — changed 2026-09-01 with the
-      // multi-year save. A line can now span several years in one submission, and the
-      // old key split it into a 2026 row and a 2027 row that look like two forecasts.
-      //
-      // Grouping on route alone would still be wrong: a submitter's substructure and
-      // superstructure lines on one route would merge into a single row showing only
-      // whichever material happened to be seen first. Discipline and section stay in
-      // the key for exactly that reason.
       const disc = r.discipline || "", sect = r.section_id || "";
       const key = [r.route_id, disc, sect].join("|");
       const e = g[key] || (g[key] = {
-        routeId: r.route_id, discipline: disc, sectionId: sect, ipt: r.ipt || "",
-        statuses: new Set(), material: r.material_type,
-        material_description: r.material_description, vehicle: r.vehicle_type,
-        unit: r.unit, months: 0, quantity: 0, rejectReason: null,
-        minMonth: r.month_index, maxMonth: r.month_index,
+        key, routeId: r.route_id, discipline: disc, sectionId: sect, ipt: r.ipt || "",
+        statuses: new Set(), material: r.material_type, material_description: r.material_description,
+        vehicle: r.vehicle_type, unit: r.unit, submittedBy: r.submitted_by || "",
+        months: 0, quantity: 0, rejectReason: null, minMonth: r.month_index, maxMonth: r.month_index,
       });
-      e.statuses.add(r.status); e.months += 1;
-      e.quantity += (+r.quantity || 0);
-      e.minMonth = Math.min(e.minMonth, r.month_index);
-      e.maxMonth = Math.max(e.maxMonth, r.month_index);
+      e.statuses.add(r.status); e.months += 1; e.quantity += (+r.quantity || 0);
+      e.minMonth = Math.min(e.minMonth, r.month_index); e.maxMonth = Math.max(e.maxMonth, r.month_index);
       if(r.reject_reason && !e.rejectReason) e.rejectReason = r.reject_reason;
     });
     const yearOf = (mi) => months.start_year + Math.floor((mi - 1) / 12);
-    return Object.values(g)
-      .map(e => {
-        const fromYear = yearOf(e.minMonth), toYear = yearOf(e.maxMonth);
-        return { ...e, fromYear, toYear,
-          yearLabel: fromYear === toYear ? String(fromYear) : `${fromYear}–${toYear}`,
-          status: e.statuses.size === 1 ? [...e.statuses][0] : "Mixed" };
-      })
-      .sort((a, b) => (a.fromYear - b.fromYear) || a.routeId.localeCompare(b.routeId)
-        || a.discipline.localeCompare(b.discipline));
+    return Object.values(g).map(e => {
+      const fromYear = yearOf(e.minMonth), toYear = yearOf(e.maxMonth);
+      return { ...e, fromYear, toYear, yearLabel: fromYear === toYear ? String(fromYear) : `${fromYear}–${toYear}`,
+        status: e.statuses.size === 1 ? [...e.statuses][0] : "Mixed" };
+    }).sort((a, b) => (a.status === "Pending" ? -1 : 1) - (b.status === "Pending" ? -1 : 1)
+      || (a.fromYear - b.fromYear) || a.routeId.localeCompare(b.routeId) || a.discipline.localeCompare(b.discipline));
   }, [rows, months]);
 
-  // Scoped to the LINE, and to exactly the months the row shows. Without discipline and
-  // section_id this would delete every line the submitter has on that route — including
-  // a different discipline's.
-  //
-  // ⚠️ CONSEQUENCE OF THE REGROUPING. A row is now a whole line, so Withdraw removes
-  // every year of it, not one. The range is minMonth..maxMonth — what the row displays
-  // — rather than 1..60, so it still cannot reach past what is on screen, and the
-  // confirmation names the span.
+  const ipts = useMemo(() => [...new Set(groups.map(g => g.ipt).filter(Boolean))].sort(), [groups]);
+  const discs = useMemo(() => [...new Set(groups.map(g => g.discipline).filter(Boolean))].sort(), [groups]);
+  const shown = groups.filter(g =>
+    (f.status === "ALL" || g.status === f.status)
+    && (f.ipt === "ALL" || (f.ipt === "none" ? !g.ipt : g.ipt === f.ipt))
+    && (f.discipline === "ALL" || g.discipline === f.discipline)
+    && (!f.mine || g.submittedBy === who)
+    && (!f.q || `${g.routeId} ${(routeById[g.routeId] || {}).origin || ""} ${(routeById[g.routeId] || {}).dest || ""} ${g.material || ""} ${g.submittedBy}`.toLowerCase().includes(f.q.toLowerCase())));
+  const counts = useMemo(() => groups.reduce((a, g) => { a[g.status] = (a[g.status] || 0) + 1; return a; }, {}), [groups]);
+
+  const done = () => { setTick(t => t + 1); if(onChanged) onChanged(); };
+  // Scoped to the LINE and to exactly the months the row shows — never 1..60.
   const withdraw = (g) => {
     const what = g.discipline ? `${g.discipline} forecast` : "forecast";
-    if(!confirm(`Withdraw your ${g.yearLabel} ${what} for ${g.routeId}?\n` +
-                `${g.months} month${g.months === 1 ? "" : "s"} will be removed.`)) return;
-    const p = new URLSearchParams({
-      submitted_by: who, from: String(g.minMonth), to: String(g.maxMonth),
-      discipline: g.discipline || "", section_id: g.sectionId || "",
-    });
+    if(!confirm(`Withdraw the ${g.yearLabel} ${what} on ${g.routeId}${g.submittedBy && g.submittedBy !== who ? ` (submitted by ${g.submittedBy})` : ""}?\n${g.months} month${g.months === 1 ? "" : "s"} will be removed.`)) return;
+    const p = new URLSearchParams({ from: String(g.minMonth), to: String(g.maxMonth),
+      discipline: g.discipline || "", section_id: g.sectionId || "" });
+    if(!canApprove) p.set("submitted_by", who);   // a submitter withdraws only its own
+    setBusy(g.key);
     fetch(`${API}/forecasts/${encodeURIComponent(g.routeId)}?${p}`, { method: "DELETE" })
-      .then(() => setTick(t => t + 1)).catch(() => {});
+      .then(done).catch(() => {}).finally(() => setBusy(""));
+  };
+  // A rejection REQUIRES a reason: it is stored, shown to the submitter, and a
+  // rejection without one is a dead end.
+  const setStatus = (g, status) => {
+    let reason = null;
+    if(status === "Rejected"){
+      reason = (window.prompt(`Why is ${g.routeId}${g.discipline ? " · " + g.discipline : ""} being rejected?\nThe submitter sees this, so say what needs to change.`) || "").trim();
+      if(!reason){ alert("A rejection needs a reason — nothing was changed."); return; }
+    }
+    setBusy(g.key);
+    const p = new URLSearchParams({ discipline: g.discipline || "", section_id: g.sectionId || "" });
+    fetch(`${API}/routes/${encodeURIComponent(g.routeId)}/status?${p}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, reject_reason: reason }),
+    }).then(done).catch(() => {}).finally(() => setBusy(""));
   };
 
-  const badge = (s) => {
-    const map = {
-      Approved: ["var(--green)", "rgba(3,158,134,.12)"], Rejected: ["var(--red)", "rgba(191,46,85,.12)"],
-      Pending: ["#B45309", "rgba(217,119,6,.12)"], Mixed: ["#475569", "rgba(71,85,105,.12)"],
-    };
-    const [c, bg] = map[s] || map.Mixed;
-    return <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: c, background: bg }}>{s}</span>;
-  };
-
-  // CSV export. Built and downloaded in the browser — no server round trip, and no
-  // dependency on a spreadsheet library.
   const exportCsv = () => {
-    const cols = ["Route", "From", "To", "Years", "Discipline", "Section", "Material",
-                  "Description", "Vehicle", "Unit", "Quantity", "Months", "Status",
-                  "Rejection reason"];
-    const esc = (v) => {
-      const s = (v == null ? "" : String(v));
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
+    const cols = ["Route", "From", "To", "Years", "IPT", "Discipline", "Section", "Material", "Description",
+                  "Vehicle", "Unit", "Quantity", "Months", "Status", "Submitted by", "Rejection reason"];
+    const esc = (v) => { const s = (v == null ? "" : String(v)); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const lines = [cols.join(",")];
-    groups.forEach(g => {
+    shown.forEach(g => {
       const r = routeById[g.routeId] || {};
-      lines.push([g.routeId, r.origin || "", r.dest || "", g.yearLabel, g.discipline || "",
-                  g.sectionId || "", g.material || "", g.material_description || "",
-                  g.vehicle || "", g.unit || "", Math.round(g.quantity * 10) / 10,
-                  g.months, g.status, g.rejectReason || ""].map(esc).join(","));
+      lines.push([g.routeId, r.origin || "", r.dest || "", g.yearLabel, g.ipt, g.discipline, g.sectionId,
+        g.material || "", g.material_description || "", g.vehicle || "", g.unit || "",
+        Math.round(g.quantity * 10) / 10, g.months, g.status, g.submittedBy, g.rejectReason || ""].map(esc).join(","));
     });
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `my-submissions-${who || "export"}.csv`;
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `forecasts-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 
-  if(!who) return <div className="max-w-3xl mx-auto p-8 text-center text-slate-500">Sign in with your name to see and edit your submissions.</div>;
-  if(err) return <div className="p-8 text-center text-slate-500">Couldn't load your submissions.</div>;
-  if(!rows) return <div className="p-8 text-center text-slate-400">Loading your submissions…</div>;
+  const badge = (s) => {
+    const map = { Approved: ["var(--green)", "rgba(3,158,134,.12)"], Rejected: ["var(--red)", "rgba(191,46,85,.12)"],
+                  Pending: ["#B45309", "rgba(217,119,6,.12)"], Mixed: ["#475569", "rgba(71,85,105,.12)"] };
+    const [c, bg] = map[s] || map.Mixed;
+    return <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: c, background: bg }}>{s}</span>;
+  };
+  const chip = (t, title) => <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600" title={title}>{t}</span>;
 
   return (
-    <div className="max-w-7xl mx-auto p-5">
-      <div className="mb-4">
-        <h2 className="text-lg font-bold text-[color:var(--navy-deep)]">My submissions</h2>
-        <p className="text-sm text-slate-500">Forecasts submitted as <span className="font-medium text-slate-700">{who}</span>. Edit re-opens a route in the matrix; a revised forecast is re-sent for approval.</p>
-      </div>
-      {groups.length > 0 && (
-        <div className="flex justify-end mb-2">
-          <button onClick={exportCsv}
-            className="text-xs font-semibold px-2.5 py-1 rounded-md border border-slate-200 hover:bg-slate-50">
-            Export CSV
-          </button>
-        </div>
-      )}
+    <div className="max-w-7xl mx-auto p-6">
+      <PageHeader title="Forecasts"
+        subtitle={canApprove
+          ? "Every forecast line you can see, across every year it covers. Approve or reject each line here; approved lines feed the public map, the look-ahead and the KPI cards."
+          : "Your IPT's forecast lines, across every year each one covers. Edit reopens a line in Submit forecast; a revised line goes back for approval."}
+        actions={<>
+          <button onClick={() => setTick(t => t + 1)} className="text-xs font-semibold px-2.5 py-1.5 rounded-md border border-slate-200 hover:bg-slate-50">Refresh</button>
+          {shown.length > 0 && <button onClick={exportCsv} className="text-xs font-semibold px-2.5 py-1.5 rounded-md border border-slate-200 hover:bg-slate-50">Export CSV</button>}
+        </>}>
+        {groups.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2 text-xs">
+            {["Pending", "Approved", "Rejected", "Mixed"].filter(s => counts[s]).map(s => (
+              <button key={s} onClick={() => setF(x => ({ ...x, status: x.status === s ? "ALL" : s }))}
+                className={"px-2 py-1 rounded-md border " + (f.status === s ? "border-[color:var(--navy)] bg-slate-50" : "border-slate-200 hover:bg-slate-50")}>
+                {badge(s)} <span className="ml-1 tabular-nums text-slate-600">{counts[s]}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </PageHeader>
 
-      {groups.length === 0 ? (
-        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-500">
-          You haven't submitted any forecasts yet. Head to <span className="font-medium">Submit Forecast</span> to add one.
-        </div>
+      {err ? <EmptyState title="Couldn't load forecasts" body="Refresh the page; if it persists the server may still be starting." />
+       : !rows ? <div className="p-8 text-center text-slate-400">Loading…</div>
+       : groups.length === 0 ? (
+        <EmptyState title="No forecast lines yet"
+          body={canApprove ? "Nothing has been submitted that you can see. Lines appear here the moment a submitter saves one." : "Head to Submit forecast to add your first line."}
+          action={!canApprove && <button onClick={() => onEdit({})} className="px-4 py-2 rounded-lg text-white text-sm font-semibold" style={{ background: "var(--navy)" }}>Submit a forecast</button>} />
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-slate-100 bg-slate-50/60 text-xs">
+            <input value={f.q} onChange={e => setF(x => ({ ...x, q: e.target.value }))} placeholder="Search route, site, material, submitter…"
+              className="border border-slate-200 rounded-md px-2 py-1 w-56 bg-white" />
+            {ipts.length > 0 && (
+              <select value={f.ipt} onChange={e => setF(x => ({ ...x, ipt: e.target.value }))} className="border border-slate-200 rounded-md px-2 py-1 bg-white">
+                <option value="ALL">All IPTs</option>
+                {ipts.map(i => <option key={i} value={i}>{i}</option>)}
+                {groups.some(g => !g.ipt) && <option value="none">No IPT set</option>}
+              </select>
+            )}
+            {discs.length > 0 && (
+              <select value={f.discipline} onChange={e => setF(x => ({ ...x, discipline: e.target.value }))} className="border border-slate-200 rounded-md px-2 py-1 bg-white">
+                <option value="ALL">All disciplines</option>
+                {discs.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            )}
+            <label className="flex items-center gap-1.5 text-slate-600"><input type="checkbox" checked={f.mine} onChange={e => setF(x => ({ ...x, mine: e.target.checked }))} /> Mine only</label>
+            <span className="ml-auto text-slate-400 tabular-nums">{shown.length} of {groups.length} line{groups.length === 1 ? "" : "s"}</span>
+          </div>
           <div className="overflow-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500 text-xs">
                 <tr>
                   <th className="px-3 py-2 text-left font-semibold">Route</th>
-                  <th className="px-3 py-2 text-left font-semibold">Discipline</th>
-                  <th className="px-3 py-2 text-left font-semibold">From → to</th>
+                  <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">Line · submitted by</th>
                   <th className="px-3 py-2 text-left font-semibold">Years</th>
-                  <th className="px-3 py-2 text-left font-semibold">Material</th>
-                  <th className="px-3 py-2 text-left font-semibold">Vehicle</th>
-                  <th className="px-3 py-2 text-center font-semibold">Months</th>
+                  <th className="px-3 py-2 text-left font-semibold">Material · vehicle</th>
+                  <th className="px-3 py-2 text-right font-semibold">Total</th>
                   <th className="px-3 py-2 text-left font-semibold">Status</th>
                   <th className="px-3 py-2 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {groups.map(g => {
+                {shown.map(g => {
                   const r = routeById[g.routeId] || {};
+                  const own = g.submittedBy === who;
                   return (
-                    <tr key={`${g.routeId}|${g.discipline}|${g.sectionId}`} className="border-t border-slate-100 hover:bg-slate-50">
-                      <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{g.routeId}
-                        {g.ipt && <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{g.ipt}</span>}
-                      </td>
+                    <tr key={g.key} className="border-t border-slate-100 hover:bg-slate-50 align-top">
+                      {/* route id, the pair it runs between and the IPT in ONE column: nine
+                          columns pushed Actions off the right edge at 1440px, and a row
+                          whose buttons you have to scroll sideways to reach is the whole
+                          page failing at the one thing it is for. */}
                       <td className="px-3 py-2 whitespace-nowrap">
-                        {g.discipline
-                          ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-                              style={{ background:"rgba(0,55,135,.08)", color:"var(--navy)" }}
-                              title={g.sectionId ? `Section ${g.sectionId}` : "No section set"}>{g.discipline}</span>
-                          : <span className="text-slate-300">—</span>}
+                        <div className="font-medium text-slate-800">{g.routeId}
+                          <span className="ml-1.5">{g.ipt ? chip(g.ipt) : chip("no IPT", "No IPT on this line — only planners can see it until one is set. Edit and re-save it from Submit forecast.")}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">{r.origin || "—"} → {r.dest || "—"}</div>
                       </td>
-                      <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{r.origin || "—"} → {r.dest || "—"}</td>
-                      <td className="px-3 py-2 tabular-nums whitespace-nowrap">{g.yearLabel}</td>
-                      <td className="px-3 py-2 text-slate-600">{g.material}{g.material_description ? <span className="text-slate-400"> · {g.material_description}</span> : null}</td>
-                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap" title={g.vehicle}>{vehLabel(g.vehicle)}</td>
-                      <td className="px-3 py-2 text-center tabular-nums">{g.months}</td>
+                      {/* discipline, section and submitter in one column. Eight columns
+                          still pushed the Withdraw link off the right edge at 1440px; who
+                          submitted a line is secondary to what the line IS, so it rides
+                          under it rather than taking a column of its own. */}
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div>
+                          {g.discipline
+                            ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background:"rgba(0,55,135,.08)", color:"var(--navy)" }}>{g.discipline}</span>
+                            : <span className="text-slate-300">unassigned</span>}
+                          {g.sectionId && <span className="ml-1 text-[11px] text-slate-500">{g.sectionId}</span>}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">{g.submittedBy || "—"}{own ? " · you" : ""}</div>
+                      </td>
+                      <td className="px-3 py-2 tabular-nums whitespace-nowrap">{g.yearLabel} <span className="text-slate-400 text-xs">· {g.months} mo</span></td>
+                      <td className="px-3 py-2 text-slate-600 max-w-[220px]">
+                        <div className="truncate" title={`${g.material || ""}${g.material_description ? " · " + g.material_description : ""}`}>
+                          {g.material}{g.material_description ? <span className="text-slate-400"> · {g.material_description}</span> : null}
+                        </div>
+                        <div className="text-[11px] text-slate-500 truncate" title={g.vehicle}>{vehLabel(g.vehicle)}</div>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{fmt(g.quantity, g.unit)} <span className="text-slate-400 text-xs">{g.unit === "m3" ? "m³" : g.unit}</span></td>
                       <td className="px-3 py-2">
                         {badge(g.status)}
-                        {/* a rejection without its reason is just a dead end */}
-                        {g.rejectReason && (
-                          <div className="text-[11px] mt-1 max-w-[240px]" style={{ color: "var(--red)" }}>
-                            {g.rejectReason}
-                          </div>
-                        )}
+                        {g.rejectReason && <div className="text-[11px] mt-1 max-w-[180px]" style={{ color: "var(--red)" }}>{g.rejectReason}</div>}
                       </td>
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <td className="px-3 py-2 pl-1 text-right whitespace-nowrap">
+                        {canApprove && g.status !== "Approved" && (
+                          <button disabled={busy === g.key} onClick={() => setStatus(g, "Approved")}
+                            className="px-2 py-1 rounded-md text-white text-xs font-semibold mr-1 disabled:opacity-50" style={{ background: "var(--green)" }}>Approve</button>
+                        )}
+                        {canApprove && g.status !== "Rejected" && (
+                          <button disabled={busy === g.key} onClick={() => setStatus(g, "Rejected")}
+                            className="px-2 py-1 rounded-md text-white text-xs font-semibold mr-1.5 disabled:opacity-50" style={{ background: "var(--red)" }}>Reject</button>
+                        )}
                         <button onClick={() => onEdit({ routeId: g.routeId, year: g.fromYear, toYear: g.toYear, discipline: g.discipline, sectionId: g.sectionId })}
-                          className="text-[color:var(--navy)] font-semibold hover:underline mr-3">Edit</button>
-                        <button onClick={() => withdraw(g)}
-                          className="text-[color:var(--red)] hover:underline">Withdraw</button>
+                          className="text-[color:var(--navy)] font-semibold hover:underline text-xs mr-1.5">Edit</button>
+                        {(own || canApprove) && (
+                          <button disabled={busy === g.key} onClick={() => withdraw(g)} className="text-[color:var(--red)] hover:underline text-xs disabled:opacity-50">Withdraw</button>
+                        )}
                       </td>
                     </tr>
                   );
                 })}
+                {shown.length === 0 && <tr><td colSpan="7" className="px-3 py-8 text-center text-slate-400">Nothing matches these filters.</td></tr>}
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ================================================================= Config (2.5b)
+//
+// The editable copy of factors.json. Once the config row exists, THIS is what every
+// payload, density and cycle time reads; the file is only the seed. Four tabs of
+// form-backed editing plus a raw JSON tab for everything the forms do not cover
+// (routing dimensions, aliases, notes). Save sends the WHOLE document; the server
+// validates it and refuses with the list of problems rather than storing a bad one.
+function ConfigPage({ meta, who, access }){
+  const [doc, setDoc] = useState(null);
+  const [orig, setOrig] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [tab, setTab] = useState("vehicles");
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [token, setToken] = useState(() => { try { return localStorage.getItem("rbe_admin_token") || ""; } catch(e){ return ""; } });
+  const [raw, setRaw] = useState("");
+  const [rawErr, setRawErr] = useState("");
+
+  const load = () => fetch(`${API}/config/factors`).then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(j => { setDoc(j.doc); setOrig(JSON.stringify(j.doc)); setStatus(j.status); setRaw(JSON.stringify(j.doc, null, 2)); setRawErr(""); })
+    .catch(e => setMsg({ ok: false, text: `Couldn't load the configuration (${e}).` }));
+  useEffect(() => { load(); }, []);
+
+  const dirty = doc && JSON.stringify(doc) !== orig;
+  const upd = (fn) => setDoc(d => { const n = JSON.parse(JSON.stringify(d)); fn(n); return n; });
+  const num = (v) => (v === "" || v == null ? null : (isNaN(+v) ? v : +v));
+  const vehicles = doc ? Object.keys(doc.vehicles || {}).filter(k => !k.startsWith("_")) : [];
+  const materials = doc ? Object.keys(doc.material_categories || {}).filter(k => !k.startsWith("_")) : [];
+
+  const save = async () => {
+    let body = doc;
+    if(tab === "raw"){
+      try { body = JSON.parse(raw); } catch(e){ setRawErr("Not valid JSON: " + e.message); return; }
+    }
+    try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
+    setBusy(true); setMsg(null);
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    try {
+      const r = await fetch(`${API}/admin/config/factors${qs}`, { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc: body, updated_by: who || null }) });
+      const t = await r.text();
+      if(!r.ok) throw new Error(t.slice(0, 600));
+      setMsg({ ok: true, text: "Saved. Every payload, density and cycle time now reads this." });
+      await load();
+    } catch(e){ setMsg({ ok: false, text: "Not saved — " + e.message.replace(/^\{"detail":"|"\}$/g, "") }); }
+    setBusy(false);
+  };
+  const reset = async () => {
+    if(!confirm("Replace the live configuration with backend/factors.json? Every edit made here since the last reset is lost.")) return;
+    try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
+    setBusy(true); setMsg(null);
+    const qs = new URLSearchParams({ updated_by: who || "" }); if(token) qs.set("token", token);
+    try {
+      const r = await fetch(`${API}/admin/config/factors/reset?${qs}`, { method: "POST" });
+      if(!r.ok) throw new Error((await r.text()).slice(0, 300));
+      setMsg({ ok: true, text: "Reset to the file." }); await load();
+    } catch(e){ setMsg({ ok: false, text: "Reset failed — " + e.message }); }
+    setBusy(false);
+  };
+
+  const inp = "border border-slate-300 rounded-md px-2 py-1 text-sm w-full tabular-nums";
+  const TABS = [["vehicles", "Vehicles"], ["materials", "Materials"], ["planning", "Planning"], ["seasonal", "Seasonal restrictions"], ["raw", "Everything (JSON)"]];
+
+  return (
+    <div className="max-w-7xl mx-auto p-6">
+      <PageHeader title="Configuration"
+        subtitle="Vehicles, materials, planning constants and seasonal windows — the numbers every forecast, cycle time and map figure is computed from. Changes apply on save, everywhere, for everyone."
+        actions={<>
+          <input value={token} onChange={e => setToken(e.target.value)} placeholder="Admin token"
+            title="Needed to save. Remembered in this browser." className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm w-36" />
+          <button onClick={reset} disabled={busy} className="text-xs font-semibold px-2.5 py-1.5 rounded-md border border-slate-200 hover:bg-slate-50 disabled:opacity-50" title="Overwrite the live configuration with backend/factors.json">Reset to file</button>
+          <button onClick={save} disabled={busy || (!dirty && tab !== "raw")} className="px-4 py-1.5 rounded-lg text-white text-sm font-semibold disabled:opacity-50" style={{ background: "var(--navy)" }}>{busy ? "Saving…" : "Save"}</button>
+        </>}>
+        {status && (
+          <div className="text-xs text-slate-500 mt-2">
+            Live source: <strong>{status.source === "database" ? "the configuration table" : "backend/factors.json (not yet seeded)"}</strong>
+            {status.updated_at && <> · last saved {status.updated_at.replace("T", " ").replace("Z", " UTC")} by {status.updated_by || "—"}</>}
+            {status.differs_from_file && <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">differs from the file in the repo</span>}
+            {dirty && <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200">unsaved changes</span>}
+          </div>
+        )}
+      </PageHeader>
+
+      {msg && <div className="rounded-lg border p-3 text-sm mb-4 whitespace-pre-wrap" style={{ borderColor: msg.ok ? "var(--green)" : "var(--red)", color: msg.ok ? "var(--green)" : "var(--red)", background: msg.ok ? "rgba(3,158,134,.06)" : "rgba(191,46,85,.06)" }}>{msg.text}</div>}
+
+      {!doc ? <div className="p-8 text-center text-slate-400">Loading…</div> : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="flex gap-1 border-b border-slate-200 px-2">
+            {TABS.map(([k, l]) => (
+              <button key={k} onClick={() => setTab(k)} className={"px-3 py-2.5 text-sm font-medium border-b-2 -mb-px " + (tab === k ? "border-[color:var(--navy)] text-[color:var(--navy)]" : "border-transparent text-slate-500 hover:text-slate-800")}>{l}</button>
+            ))}
+          </div>
+
+          {tab === "vehicles" && (
+            <div className="overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-xs">
+                  <tr>
+                    {["Vehicle (id)", "English", "Estonian", "Payload t", "GVW t", "kg CO₂e / km", "Load min", "Unload min", "Planning"].map(h => <th key={h} className="px-2 py-2 text-left font-semibold whitespace-nowrap">{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {vehicles.map(k => { const v = doc.vehicles[k]; const lab = v.labels || {}; return (
+                    <tr key={k} className="border-t border-slate-100 align-top">
+                      <td className="px-2 py-1.5 whitespace-nowrap"><div className="font-medium text-slate-800">{k}</div>{v.code && <div className="text-[10px] text-slate-400">{v.code}</div>}</td>
+                      <td className="px-2 py-1.5 min-w-[190px]"><input className={inp} value={lab.en || ""} placeholder={k} onChange={e => upd(d => { d.vehicles[k].labels = { ...(d.vehicles[k].labels || {}), en: e.target.value }; })} /></td>
+                      <td className="px-2 py-1.5 min-w-[190px]"><input className={inp} value={lab.ee || ""} placeholder="falls back to EU" onChange={e => upd(d => { d.vehicles[k].labels = { ...(d.vehicles[k].labels || {}), ee: e.target.value }; })} /></td>
+                      <td className="px-2 py-1.5 w-24"><input className={inp} value={v.payload_t ?? ""} onChange={e => upd(d => { d.vehicles[k].payload_t = num(e.target.value); })} /></td>
+                      <td className="px-2 py-1.5 w-24"><input className={inp} value={v.gvw_t ?? ""} onChange={e => upd(d => { d.vehicles[k].gvw_t = num(e.target.value); })} /></td>
+                      <td className="px-2 py-1.5 w-28"><input className={inp} value={v.emissions_kg_co2e_per_km ?? ""} onChange={e => upd(d => { d.vehicles[k].emissions_kg_co2e_per_km = num(e.target.value); })} /></td>
+                      <td className="px-2 py-1.5 w-20"><input className={inp} value={v.load_minutes ?? ""} placeholder={String((doc.planning || {}).load_minutes ?? "")} onChange={e => upd(d => { const n = num(e.target.value); if(n == null) delete d.vehicles[k].load_minutes; else d.vehicles[k].load_minutes = n; })} /></td>
+                      <td className="px-2 py-1.5 w-20"><input className={inp} value={v.unload_minutes ?? ""} placeholder={String((doc.planning || {}).unload_minutes ?? "")} onChange={e => upd(d => { const n = num(e.target.value); if(n == null) delete d.vehicles[k].unload_minutes; else d.vehicles[k].unload_minutes = n; })} /></td>
+                      <td className="px-2 py-1.5 text-center"><input type="checkbox" checked={!!v.planning_vehicle} onChange={e => upd(d => { d.vehicles[k].planning_vehicle = e.target.checked; d.planning_vehicles = Object.keys(d.vehicles).filter(x => !x.startsWith("_") && d.vehicles[x].planning_vehicle); })} /></td>
+                    </tr>
+                  ); })}
+                </tbody>
+              </table>
+              <p className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100">
+                The id is what a forecast line stores and what baked routes are keyed on — it cannot be renamed here. A vehicle the network is baked for cannot be removed. Blank load/unload minutes use the planning defaults. Routing dimensions and aliases are on the JSON tab.
+              </p>
+            </div>
+          )}
+
+          {tab === "materials" && (
+            <div className="overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-xs">
+                  <tr>{["Material", "Density t/m³", "Default unit", "Volume ↔ weight", "Vehicles used"].map(h => <th key={h} className="px-2 py-2 text-left font-semibold whitespace-nowrap">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {materials.map(k => { const c = doc.material_categories[k]; return (
+                    <tr key={k} className="border-t border-slate-100 align-top">
+                      <td className="px-2 py-1.5 font-medium text-slate-800 whitespace-nowrap">{k}</td>
+                      <td className="px-2 py-1.5 w-28"><input className={inp} value={c.density_t_per_m3 ?? ""} onChange={e => upd(d => { d.material_categories[k].density_t_per_m3 = num(e.target.value); })} /></td>
+                      <td className="px-2 py-1.5 w-28">
+                        <select className={inp} value={c.default_unit || "t"} onChange={e => upd(d => { d.material_categories[k].default_unit = e.target.value; })}>
+                          <option value="m3">m³</option><option value="t">tonnes</option><option value="vehicles">vehicles</option>
+                        </select>
+                      </td>
+                      <td className="px-2 py-1.5 text-center"><input type="checkbox" checked={c.volume_convertible !== false} onChange={e => upd(d => { d.material_categories[k].volume_convertible = e.target.checked; })} /></td>
+                      <td className="px-2 py-1.5">
+                        <div className="flex flex-wrap gap-x-3 gap-y-1">
+                          {vehicles.map(v => (
+                            <label key={v} className="flex items-center gap-1 text-[11px] text-slate-600 whitespace-nowrap">
+                              <input type="checkbox" checked={(c.vehicles || []).includes(v)} onChange={e => upd(d => {
+                                const cur = d.material_categories[k].vehicles || [];
+                                d.material_categories[k].vehicles = e.target.checked ? [...cur, v] : cur.filter(x => x !== v);
+                              })} /> {vehLabel(v)}
+                            </label>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ); })}
+                </tbody>
+              </table>
+              <p className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100">Which vehicles a material lists is advisory in Submit forecast — an unlisted vehicle is shown but disabled, never hidden.</p>
+            </div>
+          )}
+
+          {tab === "planning" && (
+            <div className="p-4 grid grid-cols-2 md:grid-cols-5 gap-4 max-w-4xl">
+              {[["working_days_per_month", "Working days / month", "Every per-day figure in the app divides by this."],
+                ["shift_hours_per_day", "Shift hours / day", "Trips one vehicle can make = shift ÷ cycle time."],
+                ["avg_haul_speed_kmh", "Avg haul speed km/h", "Used only where HERE has no timing."],
+                ["load_minutes", "Load minutes (default)", "Per-vehicle values override this."],
+                ["unload_minutes", "Unload minutes (default)", "Per-vehicle values override this."]].map(([k, l, help]) => (
+                <label key={k} className="block">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">{l}</span>
+                  <input className={inp + " mt-1"} value={(doc.planning || {})[k] ?? ""} onChange={e => upd(d => { d.planning = d.planning || {}; d.planning[k] = num(e.target.value); })} />
+                  <span className="block text-[11px] text-slate-400 mt-1">{help}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {tab === "seasonal" && (
+            <div className="p-4 space-y-3">
+              {(doc.seasonal_restrictions || []).map((w, i) => (
+                <div key={i} className="rounded-lg border border-slate-200 p-3 grid md:grid-cols-[1fr_2fr] gap-3">
+                  <div className="space-y-2">
+                    <input className={inp} value={w.name || ""} placeholder="Name" onChange={e => upd(d => { d.seasonal_restrictions[i].name = e.target.value; })} />
+                    <div className="flex flex-wrap gap-1">
+                      {MONTHS.map((m, mi) => (
+                        <label key={m} className={"text-[11px] px-1.5 py-0.5 rounded border cursor-pointer " + ((w.months || []).includes(mi + 1) ? "bg-slate-800 text-white border-slate-800" : "border-slate-200 text-slate-600")}>
+                          <input type="checkbox" className="hidden" checked={(w.months || []).includes(mi + 1)} onChange={e => upd(d => {
+                            const cur = d.seasonal_restrictions[i].months || [];
+                            d.seasonal_restrictions[i].months = e.target.checked ? [...cur, mi + 1].sort((a, b) => a - b) : cur.filter(x => x !== mi + 1);
+                          })} />{m}
+                        </label>
+                      ))}
+                    </div>
+                    <button onClick={() => upd(d => { d.seasonal_restrictions.splice(i, 1); })} className="text-[11px] text-[color:var(--red)] hover:underline">Remove</button>
+                  </div>
+                  <div className="space-y-2">
+                    <textarea className={inp + " h-16"} value={w.message || ""} placeholder="Message shown at submission and on the map timeline" onChange={e => upd(d => { d.seasonal_restrictions[i].message = e.target.value; })} />
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      <span className="text-[11px] text-slate-400 w-full">Restricted vehicles (none = applies to every vehicle)</span>
+                      {vehicles.map(v => (
+                        <label key={v} className="flex items-center gap-1 text-[11px] text-slate-600 whitespace-nowrap">
+                          <input type="checkbox" checked={(w.restricted_vehicles || []).includes(v)} onChange={e => upd(d => {
+                            const cur = d.seasonal_restrictions[i].restricted_vehicles || [];
+                            d.seasonal_restrictions[i].restricted_vehicles = e.target.checked ? [...cur, v] : cur.filter(x => x !== v);
+                          })} /> {vehLabel(v)}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <button onClick={() => upd(d => { d.seasonal_restrictions = [...(d.seasonal_restrictions || []), { name: "", months: [], restricted_vehicles: [], message: "" }]; })}
+                className="text-xs font-semibold px-2.5 py-1.5 rounded-md border border-slate-200 hover:bg-slate-50">+ Add a window</button>
+            </div>
+          )}
+
+          {tab === "raw" && (
+            <div className="p-4">
+              <p className="text-xs text-slate-500 mb-2">The whole document. Anything the other tabs do not cover — routing dimensions, aliases, the notes — is here. Saving from this tab sends exactly this text.</p>
+              <textarea className="w-full h-[60vh] font-mono text-xs border border-slate-300 rounded-lg p-3" value={raw}
+                onChange={e => { setRaw(e.target.value); setRawErr(""); try { setDoc(JSON.parse(e.target.value)); } catch(err){} }} />
+              {rawErr && <div className="text-xs mt-1" style={{ color: "var(--red)" }}>{rawErr}</div>}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1525,14 +1930,8 @@ function LookAhead({ meta, who }){
 
   return (
     <div className="max-w-[1400px] mx-auto p-5">
-      <div className="mb-4">
-        <h2 className="text-lg font-bold text-[color:var(--navy-deep)]">Look-ahead</h2>
-        <p className="text-sm text-slate-500">
-          Four weeks on each approved month line: {monthLabelAbs(win.from, months.start_year)} and{" "}
-          {monthLabelAbs(win.to, months.start_year)}. Weeks appear when a month is approved and start at a
-          quarter of it. Typed only — there is no import.
-        </p>
-      </div>
+      <PageHeader title="Look-ahead"
+        subtitle={`Four weeks on each approved month line: ${monthLabelAbs(win.from, months.start_year)} and ${monthLabelAbs(win.to, months.start_year)}. Weeks appear when a month is approved and start at a quarter of it. Typed only — there is no import.`} />
 
       {win.outside && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 mb-3">
@@ -1786,8 +2185,8 @@ function Stockpiles({ meta, who, from, to, tick }){
       {!data ? <div className="p-6 text-center text-slate-400 text-sm">Loading…</div>
         : piles.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-500 text-sm">
-          No locations that hold stock yet. Set a type of Stockpile, Site, Compound or Railhead in Data
-          Management, and give it a capacity there.
+          No locations that hold stock yet. Set a type of Stockpile, Site, Compound or Railhead on the
+          Locations page, and give it a capacity there.
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -2739,7 +3138,7 @@ function Diagnostics({ token, routeId }){
   );
 }
 
-function DataManagement({ meta, who }){
+function DataManagement({ meta, who, subTab: propSubTab, onSubTab }){
   const { vehicles, materials = [], mapbox_token } = meta;
   const mapDiv = useRef(null);
   const mapObj = useRef(null);
@@ -2771,10 +3170,22 @@ function DataManagement({ meta, who }){
   const [bakeBusy, setBakeBusy] = useState("");   // route id currently being (re-)baked
   const [selected, setSelected] = useState(null);
 
-  // ---- sub-tabs (Locations | Routes). One map, shared: only the right-hand panel
-  // and the bottom table swap, so the Mapbox instance is never torn down. ----
-  const [subTab, setSubTab] = useState("locations");
-  const subTabRef = useRef("locations");
+  // ---- the page: Locations | Routes | Zones ----
+  //
+  // 2.5b: these are three entries in the LEFT RAIL now, not a tab bar in here, so the
+  // page arrives as a prop. The internal state stays because the many setSubTab() calls
+  // below still need to switch page from inside — a map click that opens a node, "create
+  // a route from here", the zone editor bailing out — and every one of them must tell the
+  // rail as well, or the rail and the panel disagree about where you are.
+  //
+  // ⚠️ ONE map, shared by all three pages. Portal renders the same <DataManagement> for
+  // locations/routes/zones so this component is never unmounted while moving between
+  // them; remounting would tear down the Mapbox instance and lose the style, the sources
+  // and the viewport. Only the right-hand panel and the bottom table swap.
+  const [subTab, setSubTabState] = useState(propSubTab || "locations");
+  const setSubTab = (t) => { setSubTabState(t); if(onSubTab) onSubTab(t); };
+  useEffect(() => { if(propSubTab && propSubTab !== subTab) setSubTabState(propSubTab); }, [propSubTab]);
+  const subTabRef = useRef(propSubTab || "locations");
   useEffect(() => { subTabRef.current = subTab; }, [subTab]);
 
   // The right column only matches the map's height where they sit side by side;
@@ -2804,6 +3215,9 @@ function DataManagement({ meta, who }){
   const [rId, setRId] = useState("");
   const [rIdTouched, setRIdTouched] = useState(false);
   const [rIpt, setRIpt] = useState("");
+  // 2.5b: the same panel edits an existing route. null = creating.
+  const [editingRoute, setEditingRoute] = useState(null);
+  const [rMaterial, setRMaterial] = useState("");
   const [routeBusy, setRouteBusy] = useState(false);
   const [routeMsg, setRouteMsg] = useState("");
   const [bakeLegs, setBakeLegs] = useState("both");   // bulk bake: both legs or laden only
@@ -3560,6 +3974,60 @@ function DataManagement({ meta, who }){
     setRouteBusy(false);
   };
 
+  // 2.5b — edit a route in place. Delete-and-recreate threw away its forecasts, its
+  // weeks and its gate selections and minted a new id; this keeps all of them. Moving an
+  // endpoint clears the baked geometry (re-baked here for the profiles it had) and that
+  // end's gate. The impact is shown BEFORE the write, because the route id survives and
+  // every forecast line on it silently starts meaning a different haul.
+  const startEditRoute = (r) => {
+    setEditingRoute(r.id);
+    setROrigin(r.origin_id || ""); setRDest(r.dest_id || "");
+    setRId(r.id); setRIdTouched(true); setRIpt(r.ipt || ""); setRMaterial(r.material_category || "");
+    setSubTab("routes"); setRouteMsg("");
+  };
+  const cancelEditRoute = () => {
+    setEditingRoute(null); setRDest(""); setRIpt(""); setRMaterial(""); setRIdTouched(false); setRouteMsg("");
+  };
+  const saveRouteEdit = async () => {
+    if(!editingRoute) return;
+    if(!rOrigin || !rDest){ setRouteMsg("Pick an origin and a destination."); return; }
+    if(!destValid(rDest)){ setRouteMsg("That origin and destination share no material."); return; }
+    const cur = (status || []).find(r => r.id === editingRoute) || {};
+    const moved = cur.origin_id !== rOrigin || cur.dest_id !== rDest;
+    try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    setRouteBusy(true);
+    try {
+      if(moved){
+        // say what the edit touches before touching it
+        const ir = await fetch(`${API}/admin/routes/${encodeURIComponent(editingRoute)}/impact${qs}`);
+        const imp = ir.ok ? await ir.json() : {};
+        const bits = [];
+        if(imp.forecast_lines) bits.push(`${imp.forecast_lines} forecast line(s) (${imp.forecast_rows} month rows) stay on this id and will now describe the NEW haul`);
+        if(imp.week_rows) bits.push(`${imp.week_rows} look-ahead week row(s) likewise`);
+        if((imp.baked_profiles || []).length) bits.push(`baked geometry for ${imp.baked_profiles.map(vehShort).join(", ")} is cleared and re-baked (HERE calls)`);
+        if((imp.haul_roads || []).length) bits.push(`${imp.haul_roads.length} haul road link(s) stay attached — check they still lie on the new route`);
+        bits.push("the gate selection at the moved end is cleared");
+        if(!confirm(`Move ${editingRoute}'s endpoints?\n\n• ${bits.join("\n• ")}\n\nContinue?`)){ setRouteBusy(false); return; }
+      }
+      const res = await fetch(`${API}/admin/routes/${encodeURIComponent(editingRoute)}${qs}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ origin_id: rOrigin, dest_id: rDest,
+          material_category: rMaterial || null, ipt: (rIpt || "").trim() || null }) });
+      if(!res.ok){ const t = await res.text(); throw new Error(`${res.status} ${t.slice(0,140)}`); }
+      const j = await res.json();
+      const affected = j.affected_routes || [];
+      await reloadNetwork();
+      if(affected.length){
+        const { rebaked, skipped } = await rebakeAffected(affected);
+        await reloadNetwork();
+        setRouteMsg(`Saved ${editingRoute}. ${rebaked ? `Re-baked ${rebaked} profile(s).` : "No geometry to restore."}${skipped ? ` ${skipped} skipped.` : ""}`);
+      } else setRouteMsg(`Saved ${editingRoute}.`);
+      setEditingRoute(null); setRDest(""); setRIpt(""); setRMaterial(""); setRIdTouched(false);
+    } catch(e){ setRouteMsg("Couldn't save: " + e.message); }
+    setRouteBusy(false);
+  };
+
   const deleteRoute = async (id) => {
     if(!confirm(`Delete route ${id}? (Its cached geometry goes too.)`)) return;
     try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
@@ -3941,12 +4409,17 @@ function DataManagement({ meta, who }){
 
   return (
     <div className="max-w-7xl mx-auto p-5 space-y-4">
-      <div className="flex items-end justify-between flex-wrap gap-3">
-        <div>
-          <h2 className="text-lg font-bold text-[color:var(--navy-deep)]">Data Management</h2>
-          <p className="text-sm text-slate-500">Truck-routed network from HERE. {totalRoutes} routes · {summary ? summary.locations : 0} locations · {bakedCount}/{totalRoutes} baked for {showProfile}.</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
+      {/* 2.5b: the tab bar that used to sit here is the rail's Data group now. One
+          header per page, with the map controls as its actions — they belong to the
+          shared map, so they stay put across all three pages. */}
+      <PageHeader
+        title={onLoc ? "Locations" : onRoutes ? "Routes" : "Zones"}
+        subtitle={onLoc
+          ? "Every site the network hauls from and to. Click the map to place one, drag a marker to move it; a site that a route uses cannot be deleted."
+          : onRoutes
+          ? "Origin → destination pairs, baked against HERE for real truck geometry in both directions. Editing a route keeps its forecasts; moving an end clears the geometry until it is re-baked."
+          : "Haul roads, restricted areas and the other polygons routing is aware of. A haul road is a zone a route can be told to use."}
+        actions={<>
           <span className="text-xs text-slate-400">Basemap</span>
           <select value={basemap} onChange={e => changeStyle(e.target.value)} className={sel}>
             {BASEMAPS.map(([label, val]) => <option key={val} value={val}>{label}</option>)}
@@ -3970,20 +4443,14 @@ function DataManagement({ meta, who }){
           <input value={token} onChange={e => setToken(e.target.value)} placeholder="Admin token"
             title="Only needed if ADMIN_TOKEN is set on the server. Remembered in this browser."
             className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm w-36" />
+        </>}>
+        <div className="text-xs text-slate-500 mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+          <span>{locs.length} locations</span><span className="text-slate-300">·</span>
+          <span>{(status || []).length} routes</span><span className="text-slate-300">·</span>
+          <span>{zoneList.length} zones</span><span className="text-slate-300">·</span>
+          <span>{bakedCount}/{totalRoutes || 0} baked for {showProfile}</span>
         </div>
-      </div>
-
-      <div className="flex gap-1 border-b border-slate-200">
-        {[["locations", "Locations", locs.length], ["routes", "Routes", (status || []).length],
-          ["zones", "Zones", zoneList.length]].map(([k, label, n]) => (
-          <button key={k} onClick={() => setSubTab(k)}
-            className={"px-4 py-2 text-sm font-medium border-b-2 -mb-px transition " +
-              (subTab === k ? "border-[color:var(--navy)] text-[color:var(--navy)]"
-                            : "border-transparent text-slate-500 hover:text-slate-800")}>
-            {label} <span className="font-normal text-slate-400">{n}</span>
-          </button>
-        ))}
-      </div>
+      </PageHeader>
 
       {summary && !summary.here_configured && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
@@ -4542,7 +5009,10 @@ function DataManagement({ meta, who }){
 
           {onRoutes && (
           <div className="card p-4">
-            <div className="text-sm font-semibold text-slate-700 mb-2">Create route</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-semibold text-slate-700">{editingRoute ? `Edit route ${editingRoute}` : "Create route"}</div>
+              {editingRoute && <button onClick={cancelEditRoute} className="text-xs text-slate-500 hover:underline">Cancel</button>}
+            </div>
             <div className="space-y-2.5">
               <label className="block">
                 <span className="text-[11px] uppercase tracking-wide text-slate-400">Origin (supplier)</span>
@@ -4576,6 +5046,16 @@ function DataManagement({ meta, who }){
                 </div>
               )}
 
+              {editingRoute && (
+                <label className="block">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Material category (optional)</span>
+                  <select value={rMaterial} onChange={e => setRMaterial(e.target.value)} className={"mt-1 w-full " + sel}>
+                    <option value="">— any shared material —</option>
+                    {validMats.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </label>
+              )}
+              {!editingRoute && (
               <div>
                 <span className="text-[11px] uppercase tracking-wide text-slate-400">Vehicle(s) · baked on create</span>
                 <div className="mt-1 space-y-1">
@@ -4587,12 +5067,13 @@ function DataManagement({ meta, who }){
                   ))}
                 </div>
               </div>
+              )}
 
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
                   <span className="text-[11px] uppercase tracking-wide text-slate-400">Route id</span>
-                  <input value={rId} onChange={e => { setRId(e.target.value); setRIdTouched(true); }}
-                    className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                  <input value={rId} onChange={e => { setRId(e.target.value); setRIdTouched(true); }} disabled={!!editingRoute}
+                    className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)] disabled:bg-slate-50 disabled:text-slate-500" />
                 </label>
                 <label className="block">
                   <span className="text-[11px] uppercase tracking-wide text-slate-400">IPT (optional)</span>
@@ -4600,10 +5081,17 @@ function DataManagement({ meta, who }){
                     className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
                 </label>
               </div>
+              {editingRoute ? (
+                <button onClick={saveRouteEdit} disabled={routeBusy || !rOrigin || !rDest || !destValid(rDest)}
+                  className="w-full py-2 rounded-lg text-white font-semibold text-sm disabled:opacity-50" style={{ background: "var(--navy)" }}>
+                  {routeBusy ? "Working…" : "Save changes"}
+                </button>
+              ) : (
               <button onClick={createRoute} disabled={routeBusy || !rOrigin || !rDest || !destValid(rDest)}
                 className="w-full py-2 rounded-lg text-white font-semibold text-sm disabled:opacity-50" style={{ background: "var(--navy)" }}>
                 {routeBusy ? "Working…" : (rVehicles.length ? `Create & route · ${rVehicles.length} vehicle(s)` : "Create route (no geometry)")}
               </button>
+              )}
               {routeMsg && <p className="text-xs text-slate-500">{routeMsg}</p>}
               <p className="text-[11px] text-slate-400">Destinations sharing no material with the origin are greyed out. Ticked vehicles are routed through HERE as soon as the route is created.</p>
             </div>
@@ -4794,6 +5282,8 @@ function DataManagement({ meta, who }){
                         className="text-[color:var(--navy)] hover:underline text-xs font-semibold disabled:opacity-40 mr-3">
                         {bakeBusy === r.id ? "Baking…" : "Bake"}
                       </button>
+                      <button onClick={(e) => { e.stopPropagation(); startEditRoute(r); }}
+                        className="text-[color:var(--navy)] hover:underline text-xs font-semibold mr-3">Edit</button>
                       <button onClick={(e) => { e.stopPropagation(); deleteRoute(r.id); }}
                         className="text-[color:var(--red)] hover:underline text-xs font-semibold">Delete</button>
                     </td>
@@ -4895,116 +5385,6 @@ function DataManagement({ meta, who }){
         </div>
       </div>
       )}
-    </div>
-  );
-}
-
-// ================================================================= Approvals
-function Approvals(){
-  const [rows, setRows] = useState(null);
-  const [busy, setBusy] = useState("");
-
-  const load = () => fetch(`${API}/forecasts/summary`).then(r => r.json()).then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
-
-  // A rejection now REQUIRES a reason. It was optional, and — worse — the reason was
-  // stored and then never shown anywhere, so a submitter saw "Rejected" and nothing else.
-  // Approvals and withdrawals are scoped to the line, not the whole route, since a route
-  // can carry several disciplines.
-  const setStatus = (row, status) => {
-    let reason = null;
-    if(status === "Rejected"){
-      reason = (window.prompt(
-        `Why is ${row.route_id}${row.discipline ? " · " + row.discipline : ""} being rejected?\n` +
-        `The submitter sees this, so say what needs to change.`) || "").trim();
-      if(!reason){ alert("A rejection needs a reason — nothing was changed."); return; }
-    }
-    const key = `${row.route_id}|${row.discipline || ""}|${row.section_id || ""}`;
-    setBusy(key);
-    const p = new URLSearchParams({ discipline: row.discipline || "", section_id: row.section_id || "" });
-    fetch(`${API}/routes/${encodeURIComponent(row.route_id)}/status?${p}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status, reject_reason: reason }),
-    }).then(() => load()).finally(() => setBusy(""));
-  };
-
-  if(!rows) return <div className="p-8 text-center text-slate-400">Loading…</div>;
-  if(rows.length === 0) return (
-    <div className="max-w-7xl mx-auto p-8 text-center text-slate-500">
-      No forecasts submitted yet. Once someone saves a matrix, routes appear here for approval.
-    </div>
-  );
-
-  const badge = (s) => {
-    const map = { Approved:"var(--green)", Rejected:"var(--red)", Pending:"var(--gold)", Mixed:"#64748b" };
-    return <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold text-white" style={{background: map[s] || "#64748b"}}>{s}</span>;
-  };
-
-  return (
-    <div className="max-w-7xl mx-auto p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h2 className="text-lg font-bold text-[color:var(--navy-deep)]">Approvals</h2>
-          <p className="text-sm text-slate-500">Approved routes appear on the public map. Rejections send the route back to the submitter.</p>
-        </div>
-        <button onClick={load} className="text-sm text-[color:var(--blue)] hover:underline">Refresh</button>
-      </div>
-
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-slate-500 border-b border-slate-200 bg-slate-50">
-              <th className="px-4 py-3 font-semibold">Route</th>
-              <th className="px-4 py-3 font-semibold">Discipline</th>
-              <th className="px-4 py-3 font-semibold">Material · Vehicle</th>
-              <th className="px-4 py-3 font-semibold">Window</th>
-              <th className="px-4 py-3 font-semibold text-right">Total (veh)</th>
-              <th className="px-4 py-3 font-semibold">Status</th>
-              <th className="px-4 py-3 font-semibold text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(r => {
-              const key = `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}`;
-              return (
-              <tr key={key} className="border-b border-slate-100 last:border-0">
-                <td className="px-4 py-3 font-medium text-[color:var(--navy-deep)]">{r.route_id}
-                  {r.ipt
-                    ? <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{r.ipt}</span>
-                    : <span className="ml-1.5 text-[10px] text-slate-400" title="No IPT on this line — only planners can see it until one is set. Edit and re-save it from Submit Forecast.">no IPT</span>}
-                </td>
-                <td className="px-4 py-3">
-                  {r.discipline
-                    ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-                        style={{ background:"rgba(0,55,135,.08)", color:"var(--navy)" }}
-                        title={r.section_id ? `Section ${r.section_id}` : "No section set"}>{r.discipline}</span>
-                    : <span className="text-slate-300">—</span>}
-                </td>
-                <td className="px-4 py-3 text-slate-600" title={r.vehicle_type}>{r.material_type} · {vehLabel(r.vehicle_type)}</td>
-                <td className="px-4 py-3 text-slate-600">{r.span} <span className="text-slate-400">({r.month_count} mo)</span></td>
-                <td className="px-4 py-3 text-right tabular-nums">{r.total_vehicles.toLocaleString()}</td>
-                <td className="px-4 py-3">
-                  {badge(r.status)}
-                  {/* the reason was being stored and never shown to anyone */}
-                  {r.reject_reason && (
-                    <div className="text-[11px] mt-1 max-w-[220px]" style={{ color: "var(--red)" }}
-                      title={r.reject_reason}>{r.reject_reason}</div>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-right whitespace-nowrap">
-                  <button disabled={busy === key} onClick={() => setStatus(r, "Approved")}
-                    className="px-3 py-1.5 rounded-md text-white text-xs font-semibold mr-1 disabled:opacity-50"
-                    style={{background:"var(--green)"}}>Approve</button>
-                  <button disabled={busy === key} onClick={() => setStatus(r, "Rejected")}
-                    className="px-3 py-1.5 rounded-md text-white text-xs font-semibold disabled:opacity-50"
-                    style={{background:"var(--red)"}}>Reject</button>
-                </td>
-              </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }
