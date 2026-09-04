@@ -1,243 +1,187 @@
-RBE Alliance 1 — FEEDBACK BUILD, 2026-09-02 (§0–§9 of CLAUDE_FEEDBACK_20260902)
-================================================================================
-Delivered 2026-09-02.  Zip: rbe-feedback-0902.zip
+rbe-2.5b.zip — 2026-09-04
+Roadmap item 2.5b (pulled forward), plus the movements/vehicles correction.
 
-Extract over the REPO ROOT. Paths mirror the repo. Nothing needs deleting.
+Extract over the repo root. Paths mirror the repo (backend/…, frontend/…, map/…).
+Nothing has to be renamed. A zip only ADDS and REPLACES — see "Nothing to delete"
+below.
 
-🔴 BACKEND CHANGE + ONE NEW COLUMN + ONE UPDATE. Render redeploys the service.
-   Boot adds `forecasts.ipt`, runs `UPDATE locations SET loc_type='Railhead'
-   WHERE loc_type='Rail head'`, and fills `ipt` on existing lines where the route
-   names exactly one IPT. Watch the boot log — §5 below.
-
-🔴 SET THE CODES ON RENDER BEFORE ANYONE ELSE SIGNS IN — §2.1. Until you do, the
-   three demo codes still work. The moment any real code is set, they stop.
-
-Ten commits in the session, one per section. Push refused as before.
-
-
---------------------------------------------------------------------------------
-1. WHAT SHIPPED (all nine must-ships)
---------------------------------------------------------------------------------
-
- §0  Gate field copy is your wording; the maths is untouched, both fields
-     still NULL on every migrated gate.
- §1  Vehicle picker: EN / EU / EE toggle in the header. LABEL ONLY — the stored
-     vehicle_type, the payload and the emissions factor are the canonical id.
-     Default European.
- §2  "Rail head" → "Railhead" everywhere. Old rows are read as the new string,
-     the new string is the only one written, and boot runs your one-line UPDATE.
- §3  Submit Forecast: six per-working-day cards — avg + peak of vehicles, trips,
-     material — across the selected year range, in the navy strip.
- §4  Street View: "No Street View here" on ZERO_RESULTS. No extra request.
- §5  Railhead is its own map-layer mark: a rail-over-two-sleepers glyph on a
-     white pin edged #0F766E, generated on a canvas, plus a legend entry.
- §6a EVR line: casing 5 px #334155 at 35% under a 2 px #64748B dash [2, 18];
-     highlighted casing 7 px / dash [2, 12] in #0F766E. No IPT or reserved
-     route colour in either style (asserted).
- §6b Bold when the origin filter is a Railhead OR (Show forecast on / timeline
-     open) and a route carrying volume in the month on screen, inside the
-     current filter, starts or ends at a Railhead. Dim otherwise.
- §6c Geometry unchanged — still Natural Earth, still ~6.4 km off at Lelle, still
-     labelled provisional in the popup. Drop in a replacement file as before.
- §7  IPT access codes, checked SERVER-SIDE. `ipt` on the forecast line is the
-     source of truth. IPT field on Submit Forecast: locked for an IPT code,
-     empty-until-chosen for a planner. The LOGINS dict is gone.
- §8  Timeline warnings: Tark Tee hits, piles over capacity, seasonal windows —
-     for the month on the playhead only, max three + "N more", dismissible,
-     rebuilt every tick, gone when the timeline closes.
- §9  KPI cards: vehicles/day · trips/day · material/day · active routes for the
-     month on the playhead, plus by-discipline and (when mixed) by-material
-     lines. Recomputed on every tick, on the forecast toggle, on every filter.
-     Approved only, never actuals.
-
-NOT built, as instructed: SSO, vehicle photos, a new EVR survey, truck
-animation, week scrubber, N-class hard-block, the C8 hex, hiding legacy
-vehicles, the V10 mass rewrite. C8 / C9 / D5 / A2 are still with you.
-
-
---------------------------------------------------------------------------------
-2. THINGS YOU MUST ACTION OR DECIDE
---------------------------------------------------------------------------------
-
-🔴 2.1  SET THE CODES. Render → Environment:
-            IPT1_CODE … IPT6_CODE    PLANNER_CODE    ADMIN_CODE
-        Rules, all enforced on the server:
-          - an IPT code sees ONLY lines whose `ipt` is that IPT — not other
-            IPTs' lines, and not lines with no IPT at all. Cannot approve.
-          - PLANNER_CODE sees everything and approves. Must pick an IPT on the
-            form; there is no silent default.
-          - ADMIN_CODE = planner + the admin surface, which STILL needs
-            ADMIN_TOKEN for /api/admin/*. That boundary is unchanged.
-          - while NONE of the eight is set, submitter123 / planner123 / admin123
-            work (demo mode). Set one and all three stop.
-        ⚠️ Everyone signed in when you set the codes will get 401 on their next
-        click and need to sign in again with a real code.
-
-🔴 2.2  FIRST CHECK AFTER DEPLOY: that a WRONG code actually gets 401.
-        The middleware that reads X-Access-Code cannot run in the sandbox (the
-        app class is stubbed). Everything BELOW it — resolution, the per-line
-        filter on every staff endpoint, the write guards, the approve gate — is
-        exercised by 40 assertions. The header itself is not. Sign in with a
-        made-up code: it must be refused. Then sign in with an IPT code and
-        confirm Approvals is not offered and another IPT's line is not shown.
-
-🔴 2.3  LINES WITH NO IPT. Every forecast written before today has `ipt` NULL.
-        Boot fills it from the route ONLY where the route names exactly one IPT
-        ("IPT 5"). Most routes read "IPT 3 / IPT 6" — shared — and nothing on
-        the line says which, so those stay NULL. NULL lines are visible to
-        planners and admins only and show "no IPT" in Approvals. To hand one to
-        an IPT: open it from My submissions as a planner, pick the IPT, save.
-        The boot log tells you how many were filled and how many were left.
-
-🔴 2.4  factors.json — MERGE, DO NOT OVERWRITE, if you have edited it. This pass
-        adds `labels.{en,eu,ee}` to every vehicle and a `_labels_note`. Nothing
-        else in the file changed.
-
-⚠️ 2.5  NO ESTONIAN LABEL WAS INVENTED. Your note names "veoauto, sadulveduk,
-        kallur" as EE official aliases but not which vehicle each belongs to,
-        and the EU matrix that carries them is not in this repo. Every EE slot
-        falls back to the EU string and shows a " *" in the picker. Fill
-        `labels.ee` in factors.json per vehicle and the toggle picks it up — no
-        code change. The English labels for the four planning vehicles are the
-        aliases from last week (only "8x4 tipper" came from you; the rest are
-        mine, marked as such). The six legacy keys are their own English label
-        and fall back for EU.
-
-⚠️ 2.6  STOCKPILES ARE NOT IPT-FILTERED. Your table says an IPT code can do
-        "stockpile consume for that IPT". A pile has no IPT and inferring one
-        from the routes that feed it would be a guess, so any valid code can
-        see and consume every pile. Say the word if piles should carry an IPT.
-
-⚠️ 2.7  TRIPS/DAY == VEHICLES/DAY, on both the form strip and the map cards.
-        On one line with one vehicle a trip IS a vehicle-load, and a line typed
-        in t or m³ converts through the payload either way — exactly your
-        formula. Both cards are shown as asked, and each place says they are
-        equal rather than hiding it. They would only diverge under a line
-        model that does not exist.
-
-⚠️ 2.8  THE KPI CARDS WITH THE TIMELINE CLOSED BUT SHOW FORECAST ON use the
-        Show-forecast window, averaged over its months that carry volume, and
-        the label says so. With neither on, the three rate cards read "—" and
-        Active routes is the baked-route count in the filter — there is no
-        forecast month to rate.
-
-⚠️ 2.9  STILL NOT SECURE. A code per role is a shared secret typed into a
-        browser: no rate limit, no per-person identity beyond the name typed,
-        code in sessionStorage for the tab. Better than plaintext codes in
-        view-source; not Phase 6.
-
-
---------------------------------------------------------------------------------
-3. DECISIONS I MADE THAT YOU MIGHT REVERSE
---------------------------------------------------------------------------------
-
- 3.1  Demo mode keeps a planner's IPT OPTIONAL (pre-F behaviour) so nothing
-      locks out locally or in the sandbox. With real codes set it is required.
-
- 3.2  An IPT code that tries to touch another IPT's line gets 404, not 403 — it
-      must not learn the line exists.
-
- 3.3  Withdraw for an IPT code carries `ipt = ?` as a DELETE predicate, so the
-      statement itself cannot reach another IPT's rows.
-
- 3.4  The Rail-head rename UPDATE is deliberately unscoped by tenant: a spelling
-      fix to a type value, applied to every tenant alike.
-
- 3.5  Unknown vehicle on a line → V07's 18 t payload for the cards (your
-      fallback), flagged in the card note. The line's own qty is unaffected.
-
- 3.6  Warnings use the FIRST (most severe) Tark Tee hit per route with "(+N)".
-
- 3.7  §6b with no forecast on: an explicit Railhead origin still bolds and still
-      filters to that head's features; a movement highlight shows the whole
-      corridor.
-
-
---------------------------------------------------------------------------------
-4. TESTS
---------------------------------------------------------------------------------
-
-ELEVEN files, 2,027 assertions, all green (was 1,887):
-
-    test_week1.py         270   (was 209)   §2, §1, §7 (40), §8/§9 endpoints
-    parse_map.js          401   (was 358)   §5, §6, §8, §9, §4
-    parse_frontend.js     220   (was 185)   §0, §1, §2, §3, §7
-    test_tenant_audit.py   25   (was  24)
-    test_phase2.py 160 · test_phase45.py 136 · test_phase5a.py 215 · test_phase4.py 202
-    test_phase3.py 154 · test_phase25a.py 104 · test_ipt_overlay.js 140
-
-Run:  for f in backend/tests/test_*.py; do python3 "$f"; done
-      for f in backend/tests/*.js;      do node    "$f"; done
-
-Every Python harness now signs in as planner123 (demo mode) before running.
-
-Fifteen deliberate regressions; each failed only what it should. One of them —
-"an IPT code trusts the body's ipt" — was caught not by the assertion written
-for it but by the ownership guard one layer down, which raised and stopped the
-run. The protection held; the harness could be more graceful about it.
-
-⚠️ WHAT NONE OF THIS PROVES
-   * The HTTP layer, and specifically the X-Access-Code middleware — §2.2.
-   * No Postgres branch. `forecasts.ipt` is ADD COLUMN IF NOT EXISTS; the
-     rename is a plain UPDATE. Low risk, not executed.
-   * Nothing in a browser. The header toggle, the IPT field, the glyph, the
-     dashed rail style, the warning stack and the cards are asserted at source
-     level; the glyph has never been drawn.
-   * HERE, Tark Tee and Google are never called. The warning stack's Tark Tee
-     source calls /api/routes/restrictions, which does — on Render, first open
-     of the timeline may take a few seconds while that fetches, once.
-
-
---------------------------------------------------------------------------------
-5. FIRST-DEPLOY CHECKLIST
---------------------------------------------------------------------------------
-
- [ ] Boot log: no FAILED line. Expect "Task F: ipt filled on N line(s) from
-     single-IPT routes; M left NULL".
- [ ] Before setting codes: sign in with planner123, open My submissions — your
-     test forecast is there. Note whether it shows an IPT chip.
- [ ] Set the eight codes on Render. Redeploy.
- [ ] Sign in with a MADE-UP code → refused. With planner → Approvals visible,
-     IPT dropdown on Submit Forecast, empty by default.
- [ ] Sign in with an IPT code → no Approvals tab, IPT field locked, only that
-     IPT's lines in My submissions / Dashboard / Look-ahead. A line with no
-     IPT is invisible to it.
- [ ] Header: EN / EU / EE toggle changes vehicle names everywhere; save a line
-     and confirm the stored vehicle_type is the EU string.
- [ ] Data Management: a location typed "Rail head" before today reads
-     "Railhead" now.
- [ ] /map/: the Railhead pin is a glyph, not a dot. The EVR line is grey ticks
-     with big gaps. Pick the railhead as origin → teal and bold. Set ALL, turn
-     on Show forecast with a railhead route approved in the window → bold
-     again. Off → grey.
- [ ] /map/: open the timeline, scrub. The four cards change per month; an
-     empty month says "No approved forecast in this month". A warning stack
-     appears above the bar only when that month has a hit; scrub past it and
-     it goes.
- [ ] Location popup with no imagery says "No Street View here".
-
-
---------------------------------------------------------------------------------
-6. FILES IN THIS ZIP
---------------------------------------------------------------------------------
-
- NEW      backend/access.py            codes, per-request context, the filters
- CHANGED  backend/main.py              middleware, /api/auth, filters on every
-                                       staff endpoint, ipt on save, the two new
-                                       public endpoints (month-kpis,
-                                       stockpile-timeline)
-          backend/db.py                forecasts.ipt; the Railhead UPDATE
-          backend/network.py           canonical_loc_type(), backfill_forecast_ipt()
-          backend/stockpiles.py        Railhead in STORAGE_TYPES, canonical read
-          backend/weeks.py             parent ipt rides on week rows
-          backend/conversions.py       vehicle_labels()
-          backend/factors.json         ⚠️ MERGE — labels per vehicle
-          frontend/index.html          §0 §1 §2 §3 §7
-          map/index.html               §4 §5 §6 §8 §9
-          map/data/evr_rail.js         comments only (Railhead)
-          env.example                  the eight new vars, commented out
-          backend/tests/*              as above
- UNCHANGED, not in the zip: map/ipt_segments.js — pair still v9.
- No .pyc, no __pycache__.
 
 ================================================================================
+1. WHAT YOU HAVE TO DO ON YOUR SIDE
+================================================================================
+
+a) NOTHING TO DELETE. No file is retired by this delivery.
+
+b) THE ACCESS CODES, on Render (this answers the question you asked).
+   Render → your service → Environment → Add Environment Variable, one row per
+   code, then Save. The service redeploys itself.
+
+       IPT1_CODE … IPT6_CODE   one per IPT. Sees only that IPT's forecast lines.
+       PLANNER_CODE            all IPTs, can approve.
+       ADMIN_CODE              planner + the admin surface.
+
+   Pick the strings yourself; they are shared secrets typed into a browser.
+   ⚠️ The moment ANY of those eight is set, the three demo codes
+   (submitter123 / planner123 / admin123) stop working — everywhere, for
+   everyone. Set them all in one go, or you will lock a role out.
+   Leave them all unset and the demo codes keep working, which is the right
+   state for a local checkout and the wrong one for the live deployment.
+
+   My recommendation stands: set the codes now, and treat proper per-person
+   login as Phase 6, the next slice. The codes are an access filter, not
+   authentication; skipping them until Phase 6 leaves every line visible to
+   anyone with the URL in the meantime.
+
+c) factors.json IS NOW ONLY A SEED. Read this even if you read nothing else.
+   On the first boot after this deploys, backend/factors.json is copied into a
+   new `config` table row, and from then on THAT ROW is what every payload,
+   density and cycle time reads. Editing backend/factors.json in the repo will
+   change nothing on Render until somebody presses "Reset to file" on the new
+   Config page.
+   The file in this zip is UNCHANGED from what is in the repo, so there is
+   nothing to merge — but if you have edited it since, edit it before you
+   deploy, because after the first boot the file stops being the live copy.
+   The Config page says all of this at the top and shows "differs from the file
+   in the repo" when the two have drifted.
+
+d) ADMIN_TOKEN is still optional and still unset on Render, so the Config page's
+   Save and Reset are open to anyone who reaches them, exactly like every other
+   admin endpoint. That is unchanged by this delivery and it is not fixed until
+   Phase 5's security work. Do not describe the deployment as secure.
+
+
+================================================================================
+2. WHAT CHANGED
+================================================================================
+
+MOVEMENTS AND VEHICLES ARE DIFFERENT NUMBERS (your correction — I had them wrong)
+  A trip is one loaded run. A vehicle makes several trips a day. So:
+
+      movements / day  = the month's loads ÷ working days
+      vehicles needed  = ceil(movements ÷ trips one vehicle can make per day)
+
+  Trips per vehicle per day comes from that route's BAKED cycle time (laden out
+  + empty back + that vehicle's own load and unload), not from an assumption. A
+  route with no baked geometry for the vehicle reads "not baked" rather than
+  showing a made-up number. Both figures now appear on the submission strip, in
+  /api/public/month-kpis, on the map's KPI cards and on the dashboard.
+
+2.5b, ALL FOUR PARTS
+
+  1. ONE FORECASTS PAGE. "My submissions" and "Approvals" were the same list
+     twice; they are now one page. What you see is filtered on the server by
+     your access code; what you can DO differs — approve and reject only appear
+     for a planner or admin. Lines are grouped per route + discipline + section
+     across every year they cover, so a five-year submission is one row.
+     Filters for status, IPT, discipline, "mine only" and a search box, plus a
+     CSV export of whatever is on screen. Withdraw is still scoped to exactly
+     the months the row shows, never the whole horizon, and a rejection still
+     refuses to save without a reason.
+
+  2. A LEFT RAIL INSTEAD OF THE TAB ROW. Seven tabs was already tight and this
+     slice needed nine. Four groups:
+
+         Plan    Dashboard · Submit forecast · Forecasts
+         Track   Look-ahead
+         Data    Locations · Routes · Zones · Config     (planner/admin only)
+         Map     Public route map
+
+     The page you were on is remembered between visits, the rail collapses to
+     icons, and Forecasts carries a badge with the number of lines waiting for
+     approval. Locations / Routes / Zones were sub-tabs inside Data Management;
+     they are top-level pages now, but still ONE component underneath, so the
+     map is not rebuilt when you move between them.
+     Every page now uses the same header block — title, one line of purpose,
+     actions on the right. No page draws its own heading any more.
+
+  3. EDIT A ROUTE IN PLACE. A route row has an Edit button. You can change the
+     origin, destination, material category and IPT without deleting and
+     recreating it, so the forecasts, week rows and haul-road links on that
+     route are kept. Before it writes, it fetches and shows the impact —
+     how many forecast lines and weeks hang off the route, and that moving an
+     end clears the cached geometry and that end's gate until it is re-baked.
+     The route ID itself is not editable: baked geometry is keyed on it.
+
+  4. A CONFIG PAGE (Data → Config). Vehicles (labels, payload, GVW, emissions,
+     load/unload minutes, which are planning vehicles), materials (density,
+     default unit, which vehicles carry them), the planning constants, the
+     seasonal windows, and a raw JSON tab for everything the forms do not cover.
+     Save sends the whole document; the server validates it and refuses with a
+     list of problems rather than storing a bad one. It will not let you delete
+     a vehicle that has baked route geometry, or the default routing profile,
+     or set a payload that is not a positive number.
+
+
+================================================================================
+3. TESTS — WHAT RAN, AND WHAT THE NUMBERS MEAN
+================================================================================
+
+All green:
+
+    backend/tests/test_week1.py        303
+    backend/tests/test_phase5a.py      215
+    backend/tests/test_phase4.py       202
+    backend/tests/test_phase3.py       154
+    backend/tests/test_phase2.py       160
+    backend/tests/test_phase25a.py     104
+    backend/tests/test_phase45.py      140
+    backend/tests/test_tenant_audit.py  26
+    backend/tests/parse_map.js         406
+    backend/tests/test_ipt_overlay.js  140
+    backend/tests/parse_frontend.js    259   (was 225)
+    backend/tests/render_frontend.js    28   NEW
+    backend/tests/browser_check.js      —    NEW, not in the default suite
+
+TWO NEW HARNESSES, and the reason for each:
+
+  render_frontend.js — evaluates the whole script block with the real React and
+  renders every page of the rail with react-dom/server. Source-level greps
+  cannot catch a page that names a component which no longer exists; this can,
+  and it did (I typo'd ConfigPage while regression-testing and it failed).
+  Runs anywhere: it uses only the globally installed typescript and react.
+
+  browser_check.js — the real page in a real browser with the API stubbed. It is
+  NOT in the default suite and cannot be: index.html loads React, Babel,
+  Tailwind, Chart.js and Mapbox from CDNs the sandbox blocks, so the harness
+  substitutes local copies and needs `npm i` first. The header of the file has
+  the exact commands. This is the only harness that runs useEffect, lays
+  anything out and clicks anything, and it is where I actually verified:
+    - every rail page loads with data and throws nothing;
+    - ⭐ ONE Mapbox instance is constructed across Locations → Routes → Zones →
+      Locations (the single reason the three pages share a component);
+    - the Forecasts table fits at 1440px with its actions reachable — which is
+      why "submitted by" ended up folded under the discipline rather than
+      keeping a column of its own;
+    - the collapsed rail still separates its groups.
+
+DELIBERATE REGRESSIONS RUN (each broke the build, then was reverted):
+  rendering DataManagement in three branches instead of one; dropping the call
+  that tells the rail about an internal page change; widening withdraw back to
+  1..60; removing the "a rejection needs a reason" guard; renaming ConfigPage at
+  one call site. Every one was caught.
+
+⚠️ WHAT IS STILL NOT TESTED
+  - Nothing has run against Postgres. SQLite locally, as always.
+  - FastAPI still cannot boot in the sandbox; the endpoints are exercised
+    through the stub harnesses, not through a real request.
+  - No HERE call was made. Route editing clears geometry and re-bakes through
+    the existing path, which is stubbed here.
+  - Mapbox and Chart.js are stubs in browser_check.js, so no map, no chart and
+    no geometry was actually drawn anywhere in this session.
+  - The Config page's Save and Reset were never sent to a live server. The
+    validation is unit-tested; the round trip is not.
+  - Nothing was checked on a phone or a narrow window. The rail collapses and
+    the tables scroll, but I have only looked at 1440px.
+
+
+================================================================================
+4. WHAT I DID NOT DO, AND WHAT IS NEXT
+================================================================================
+
+Not built, deliberately: no user table, no email, no SSO — Phase 6 owns that.
+The open questions C8 / C9 / D5 / A2 are still with you and I have not guessed
+at any of them.
+
+Next slice, as agreed: Phase 6 proper login. A user table with hashed passwords
+you set as admin, per-user IPT and role, and a users page — replacing the shared
+codes. No email and no SSO.
