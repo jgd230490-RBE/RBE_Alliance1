@@ -53,21 +53,48 @@
         .control-item label { display:flex; align-items:center; gap:9px; cursor:pointer; width:100%; font-weight:500; color:var(--ink); }
         .control-item input[type=checkbox]{ accent-color:var(--navy); width:14px; height:14px; }
         .color-dot { width:11px; height:11px; border-radius:50%; display:inline-block; margin-left:auto; }
-        /* Phase 2.5a — KPI readout on the map itself, under the navigation control.
-           top:112px clears Mapbox's zoom + compass stack at its default sizing. */
-        #kpi-hud{ position:absolute; top:112px; right:10px; z-index:15; width:232px;
+        /* 2026-09-07 — the KPI panel moved to the TOP-LEFT of the map pane.
+           It sat at top:112px right:10px, tucked under Mapbox's zoom + compass stack. That
+           put the one block on screen that changes every tick in the corner the eye reaches
+           last, wedged against the controls, and left it 232px wide. Top-left it sits
+           beside the sidebar, reads first, has room for a title and chips, and leaves the
+           whole right-hand column to zoom and compass.
+           `left` tracks the 300px sidebar; body.sidebar-closed pulls it in. */
+        #kpi-hud{ position:absolute; top:14px; left:312px; right:auto; z-index:15; width:272px;
                   background:rgba(255,255,255,.94); backdrop-filter:blur(6px);
                   border:1px solid var(--line); border-radius:11px; padding:11px 12px;
                   box-shadow:0 6px 22px rgba(16,24,40,.14); pointer-events:auto; }
+        /* clear of #menu-toggle, which is 14px from the left and about 150px wide */
+        body.sidebar-closed #kpi-hud{ left:14px; top:58px; }
+        .kpi-title{ font-size:11.5px; font-weight:700; color:var(--navy-deep); line-height:1.3;
+                    margin:0 0 8px; letter-spacing:-.005em; }
+        .kpi-title:empty{ display:none; }
         .kpi-row{ display:flex; gap:9px; }
-        .kpi-card{ flex:1; }
+        .kpi-row-2{ margin-top:7px; }
+        .kpi-card{ flex:1; min-width:0; }
         .kpi-value{ font-size:22px; font-weight:700; letter-spacing:-.025em; color:var(--navy-deep); line-height:1.05; font-variant-numeric:tabular-nums; }
         .kpi-label{ font-size:9.5px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin-top:3px; line-height:1.25; }
         .kpi-note{ font-size:10px; color:var(--muted); margin-top:8px; line-height:1.45;
                    border-top:1px solid var(--line); padding-top:7px; }
-        .kpi-quiet{ font-size:10.5px; color:var(--navy-deep); margin-top:6px; line-height:1.4;
-                    font-variant-numeric:tabular-nums; }
-        .kpi-quiet:empty{ display:none; }
+        /* the discipline / material breakdown was a faint run-on line of "Earthworks 12.4
+           loads/d · Track 3.1 loads/d" that read as a footnote. Chips make each discipline
+           a thing you can pick out at a glance, which is what "what is moving this month"
+           actually asks. */
+        .kpi-chips{ display:flex; flex-wrap:wrap; gap:4px; margin-top:7px; }
+        .kpi-chips:empty{ display:none; }
+        .kpi-chip{ font-size:10px; font-weight:600; line-height:1.25; padding:3px 7px;
+                   border-radius:999px; background:#eef2f7; border:1px solid #e2e8f0;
+                   color:var(--navy-deep); font-variant-numeric:tabular-nums; white-space:nowrap; }
+        .kpi-chip.mat{ background:#fff7ed; border-color:#fed7aa; color:#9a3412; }
+        /* the origin / destination callouts on the month on screen. No tip and no close
+           button: they are a layer that follows the playhead, not a dialog. */
+        .od-callout .mapboxgl-popup-content{ padding:6px 9px !important; border-radius:9px !important;
+                     box-shadow:0 4px 14px rgba(16,24,40,.18) !important; }
+        .od-callout .mapboxgl-popup-tip{ display:none; }
+        .od-callout{ pointer-events:none; }
+        .od-role{ font-size:8.5px; font-weight:700; letter-spacing:.10em; text-transform:uppercase; color:var(--muted); }
+        .od-name{ font-size:12px; font-weight:700; color:var(--navy-deep); line-height:1.25; }
+        .od-disc{ font-size:10px; color:var(--muted); margin-top:2px; line-height:1.3; }
         #tl-warnings{ display:none; position:absolute; left:calc(50% + 150px); transform:translateX(-50%);
                       bottom:74px; z-index:24; width:min(560px, 92vw); flex-direction:column; gap:5px;
                       pointer-events:none; }
@@ -83,9 +110,21 @@
         /* on a phone the note is the first thing to go, then the panel shrinks to the
            two numbers — see claude/mobile-analysis.md */
         @media (max-width:700px){
-            #kpi-hud{ width:auto; top:auto; bottom:74px; right:8px; left:8px; padding:9px 11px; }
+            /* a compact bar sitting on top of the timeline: four cards in ONE row (the two
+               .kpi-row blocks laid side by side), the note gone, the chips scrolling
+               sideways rather than stacking the panel up the screen. */
+            #kpi-hud, body.sidebar-closed #kpi-hud{ width:auto; top:auto; bottom:74px; right:8px; left:8px; padding:8px 10px; }
             #kpi-hud .kpi-note{ display:none; }
-            .kpi-value{ font-size:18px; }
+            #kpi-hud .kpi-title{ font-size:10.5px; margin-bottom:6px; }
+            #kpi-cards{ display:flex; gap:9px; }
+            #kpi-cards .kpi-row{ flex:1; }
+            #kpi-cards .kpi-row-2{ margin-top:0; }
+            .kpi-value{ font-size:17px; }
+            .kpi-label{ font-size:8.5px; }
+            .kpi-chips{ flex-wrap:nowrap; overflow-x:auto; margin-top:6px; }
+            /* the warning stack has to clear the KPI bar. Both used to sit at bottom:74px
+               and drew on top of each other whenever a month had a warning. */
+            #tl-warnings{ bottom:190px; }
         }
         .restr-warn{ font-size:11px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:7px; padding:7px 9px; margin-top:8px; line-height:1.45; }
 
@@ -244,28 +283,31 @@
      forecast toggle and on every filter. Source: /api/public/month-kpis, Approved only,
      never actuals. Empty month -> one sentence, no zeros. -->
 <div id="kpi-hud">
-    <div class="kpi-row">
-        <div class="kpi-card">
-            <div class="kpi-value" id="kpi-trips">—</div>
-            <div class="kpi-label">Movements / day</div>
+    <div class="kpi-title" id="kpi-title"></div>
+    <div id="kpi-cards">
+        <div class="kpi-row">
+            <div class="kpi-card">
+                <div class="kpi-value" id="kpi-trips">—</div>
+                <div class="kpi-label">Movements / day</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-value" id="kpi-vehicles">—</div>
+                <div class="kpi-label" id="kpi-vehicles-label">Vehicles needed</div>
+            </div>
         </div>
-        <div class="kpi-card">
-            <div class="kpi-value" id="kpi-vehicles">—</div>
-            <div class="kpi-label" id="kpi-vehicles-label">Vehicles needed</div>
+        <div class="kpi-row kpi-row-2">
+            <div class="kpi-card">
+                <div class="kpi-value" id="kpi-material">—</div>
+                <div class="kpi-label" id="kpi-material-label">Material / day</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-value" id="kpi-routes">—</div>
+                <div class="kpi-label" id="kpi-routes-label">Active routes</div>
+            </div>
         </div>
     </div>
-    <div class="kpi-row" style="margin-top:7px;">
-        <div class="kpi-card">
-            <div class="kpi-value" id="kpi-material">—</div>
-            <div class="kpi-label" id="kpi-material-label">Material / day</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-value" id="kpi-routes">—</div>
-            <div class="kpi-label" id="kpi-routes-label">Active routes</div>
-        </div>
-    </div>
-    <div class="kpi-quiet" id="kpi-by-discipline"></div>
-    <div class="kpi-quiet" id="kpi-by-material"></div>
+    <div class="kpi-chips" id="kpi-by-discipline"></div>
+    <div class="kpi-chips" id="kpi-by-material"></div>
     <div class="kpi-note" id="kpi-note"></div>
 </div>
 
@@ -570,6 +612,31 @@
 
     function toggleRail(visible) {
         ['evr-rail-casing', 'evr-rail-line', 'railheads'].forEach(l => toggleLayer(l, visible));
+        // the marching overlay is toggled SEPARATELY and never joins that list: it is only
+        // ever on while Play is, so following the checkbox straight into 'visible' would
+        // leave it marching on a paused map.
+        applyRailFlow();
+    }
+
+    // ===== 2026-09-07 — the EVR corridor marches while the timeline PLAYS ============
+    //
+    // The rule is deliberately narrow: visible only when Play is on AND the EVR checkbox
+    // is on. Pausing, scrubbing or closing hides it again, and the corridor goes back to
+    // whatever applyRailHighlight() had it at — the overlay never touches the dim/bold
+    // state, it sits on top of it.
+    //
+    // ⚠️ EVR is NOT in routes-source, carries no forecast volume and is counted nowhere.
+    // Nothing here puts it into the KPI route count; that walks routes-source and matches
+    // 'Inbound Highway', which no rail feature is.
+    function railFlowOn() {
+        return !!(typeof TL !== 'undefined' && TL.playing) && railVisible();
+    }
+    function setRailFlowDash(seq) {
+        try { if (map.getLayer('evr-rail-flow')) map.setPaintProperty('evr-rail-flow', 'line-dasharray', seq); } catch (e) {}
+    }
+    function applyRailFlow() {
+        if (!map.getLayer('evr-rail-flow')) return;
+        map.setLayoutProperty('evr-rail-flow', 'visibility', railFlowOn() ? 'visible' : 'none');
     }
 
     // name -> loc_type, built from the Node features the API sends. The origin
@@ -628,6 +695,109 @@
             && f.properties.route_id && f.properties.is_forecast && routePassesFilters(f.properties)
             && (locTypeById(f.properties.origin_id) === 'Railhead' || locTypeById(f.properties.dest_id) === 'Railhead'));
     }
+    // ===== 2026-09-07 — origin / destination callouts on the month on screen =========
+    //
+    // A small label pinned to each end of every route carrying volume in the month the
+    // playhead is on: the role, the site name, and its disciplines. They follow the
+    // playhead — step a month and they move — which is the point: the map already showed
+    // WHICH lines were live, never WHERE the material was leaving from and going to.
+    //
+    // ⚠️ These are SEPARATE popups added straight to the map. They are NOT the node
+    // markers' own popups, and nothing here calls setPopup(). Reusing a marker's popup
+    // would mean a timeline tick silently replaced whatever the reader had opened, and
+    // closing a callout would leave the marker with no click surface.
+    //
+    // Capped at six, busiest end first. A month with twenty active ends is a map covered
+    // in white boxes, and the ends that matter are the ones most routes touch.
+    const OD = { popups: [] };
+    const OD_MAX = 6;
+    // The box a callout will occupy, in screen pixels. Deliberately a fixed estimate
+    // rather than a measurement: the popup does not exist until it is added, so there is
+    // nothing to measure, and a slight over-estimate is the safe direction — it drops a
+    // marginal label rather than drawing two on top of each other.
+    const OD_BOX_W = 200, OD_BOX_H = 62, OD_GAP_PX = 14;
+    function clearOdCallouts() {
+        OD.popups.forEach(p => { try { p.remove(); } catch (e) {} });
+        OD.popups.length = 0;
+    }
+    // ⚠️ type !== 'Gate' — gates are Points too, and a gate carries the name of a gate,
+    // not the site. Same test the node markers use, for the same reason.
+    function nodeFeatureByName(name) {
+        if (!name || !a1_data || !a1_data.features) return null;
+        return a1_data.features.find(f => f.geometry && f.geometry.type === 'Point'
+            && f.properties && f.properties.type !== 'Gate' && f.properties.name === name) || null;
+    }
+    function renderOdCallouts() {
+        clearOdCallouts();
+        // only while the TIMELINE is open. These describe one month; with the timeline
+        // closed there is no month on screen for them to describe, and the Show-forecast
+        // window is a range, not a month.
+        if (typeof TL === 'undefined' || !TL.on || !a1_data || !a1_data.features) return;
+        const ends = {};
+        a1_data.features.forEach(f => {
+            const p = f.properties;
+            if (!f.geometry || f.geometry.type !== 'LineString' || !p || !p.route_id) return;
+            // one carriageway per route, or every end is counted twice and the cap fills
+            // with duplicates
+            if (p.type !== 'Inbound Highway') return;
+            if (!p.is_forecast || !routePassesFilters(p)) return;
+            [['origin', p.origin], ['dest', p.dest]].forEach(pair => {
+                const role = pair[0], nm = pair[1];
+                if (!nm) return;
+                const e = ends[nm] || (ends[nm] = { name: nm, origin: false, dest: false, routes: 0, disc: new Set() });
+                e[role] = true; e.routes++;
+                (p.disciplines || []).forEach(d => e.disc.add(d));
+            });
+        });
+        const shown = Object.values(ends)
+            .sort((x, y) => y.routes - x.routes || String(x.name).localeCompare(String(y.name)));
+        const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        // 🔴 COLLISION SKIP, and it earned its place the first time this was looked at in
+        // a browser: Kuusiku and Rapla are ~60 px apart at the default zoom and their two
+        // boxes covered each other, so NEITHER name could be read. A cap does not fix
+        // that - six boxes in one place is still six boxes.
+        //
+        // The test is on the BOX, not the marker. Comparing marker distance was the first
+        // attempt and it was not enough: two markers 108 px apart still overlap when the
+        // box is 200 px wide and one of them hangs downwards. So each candidate's
+        // rectangle is predicted from its anchor and rejected if it intersects one already
+        // placed. Busiest-first, so what survives a cluster is the end most routes touch;
+        // zooming in separates them and they come back - see the moveend hook.
+        const placed = [];
+        const boxAt = (pt, up) => ({
+            x1: pt.x - OD_BOX_W / 2, x2: pt.x + OD_BOX_W / 2,
+            y1: up ? pt.y - OD_GAP_PX - OD_BOX_H : pt.y + OD_GAP_PX,
+            y2: up ? pt.y - OD_GAP_PX : pt.y + OD_GAP_PX + OD_BOX_H,
+        });
+        const hits = (a, b) => !(a.x2 <= b.x1 || b.x2 <= a.x1 || a.y2 <= b.y1 || b.y2 <= a.y1);
+        shown.forEach(e => {
+            if (OD.popups.length >= OD_MAX) return;
+            const f = nodeFeatureByName(e.name);
+            if (!f) return;              // a route end with no Node point: nothing to pin to
+            let pt = null;
+            try { pt = map.project(f.geometry.coordinates); } catch (err) { pt = null; }
+            if (pt) {
+                const box = boxAt(pt, !!e.origin);
+                if (placed.some(q => hits(q, box))) return;
+                placed.push(box);
+            }
+            // a site can be both in one month - a stockpile taking material in and sending
+            // it on is the normal case, not an edge one
+            const role = (e.origin && e.dest) ? 'Origin \u00b7 Destination' : (e.origin ? 'Origin' : 'Destination');
+            const disc = Array.from(e.disc).sort();
+            const html = `<div class="od-role">${esc(role)}</div><div class="od-name">${esc(e.name)}</div>`
+                + (disc.length ? `<div class="od-disc">${esc(disc.join(' \u00b7 '))}</div>` : '');
+            // origins lift ABOVE the marker, destinations sit BELOW it, so the two ends of
+            // one short haul do not stack on each other
+            const up = e.origin;
+            OD.popups.push(new mapboxgl.Popup({
+                closeButton: false, closeOnClick: false, focusAfterOpen: false,
+                className: 'od-callout', anchor: up ? 'bottom' : 'top', maxWidth: '190px',
+                offset: up ? [0, -14] : [0, 14],
+            }).setLngLat(f.geometry.coordinates).setHTML(html).addTo(map));
+        });
+    }
+
     function applyRailHighlight() {
         if (!map.getLayer('evr-rail-line')) return;
         const el = document.getElementById('filter-origin');
@@ -665,12 +835,24 @@
         const idFilter = (originIsHead && ids.length) ? ['in', ['get', 'id'], ['literal', ids]] : null;
         map.setFilter('evr-rail-line', idFilter);
         if (map.getLayer('evr-rail-casing')) map.setFilter('evr-rail-casing', idFilter);
+        // the marching overlay follows the same narrowing, or it would march along a
+        // branch the corridor beneath it has stopped drawing
+        if (map.getLayer('evr-rail-flow')) map.setFilter('evr-rail-flow', idFilter);
         const note = document.getElementById('rail-note');
-        if (note) note.innerText = !bold
-            ? 'provisional geometry · bolds for a railhead origin or a railhead movement on screen'
+        // ⚠️ The caveat is PERMANENT and comes first. This corridor is Natural Earth 10m
+        // — 0.3 km out at Rapla, ~6.4 km out at Lelle — and it says WHICH corridor a haul
+        // relates to, never where the track is. It used to appear only in the un-bolded
+        // state, so the moment somebody highlighted a railhead the caveat vanished, which
+        // is exactly when they were reading the line most closely. The highlight state is
+        // secondary and follows it.
+        const railState = !bold
+            ? 'bolds for a railhead origin or a railhead movement on screen'
             : originIsHead
                 ? (ids.length ? `highlighted for ${sel}` : `${sel} is not named in the rail data - showing the whole corridor`)
                 : 'a route on screen starts or ends at a railhead';
+        if (note) note.innerHTML =
+            'Provisional corridor — reference only, not survey. Click the line for detail.'
+            + '<br><span style="opacity:.85">' + railState + '</span>';
     }
 
     function toggleSidebar() { document.getElementById('main-sidebar').classList.toggle('closed'); document.body.classList.toggle('sidebar-closed'); setTimeout(() => map.resize(), 300); }
@@ -774,7 +956,13 @@
                 if (f.geometry.type === 'LineString' && f.properties.type === 'Inbound Highway'
                     && routePassesFilters(f.properties)) n++;
             });
+            set('kpi-title', 'No month on screen');
             set('kpi-vehicles', '—'); set('kpi-trips', '—'); set('kpi-material', '—');
+            // 🔴 the vehicles LABEL has to be reset too. It carries "(1 line unbaked)" from
+            // whichever month was last on screen, and nothing here used to clear it — so
+            // closing the timeline left a dash under a caveat about a month that was no
+            // longer being shown. Found by looking at the page, not by reading it.
+            set('kpi-vehicles-label', 'Vehicles needed');
             set('kpi-routes', n); set('kpi-routes-label', 'Active routes');
             setHTML('kpi-by-discipline', ''); setHTML('kpi-by-material', '');
             set('kpi-note', 'Turn on Show forecast or the timeline for daily rates. Active routes = every baked route matching the filters.');
@@ -816,9 +1004,11 @@
             });
             const label = months.length === 1 ? monthLabel(months[0]) : `${monthLabel(months[0])}–${monthLabel(months[months.length - 1])}`;
             if (!mVeh.length) {
-                set('kpi-vehicles', '—'); set('kpi-trips', '—'); set('kpi-material', '—'); set('kpi-routes', 0);
-                set('kpi-routes-label', 'Routes in ' + label);
+                set('kpi-title', label + ' \u00b7 nothing approved');
+                set('kpi-vehicles', '—'); set('kpi-trips', '—'); set('kpi-material', '—'); set('kpi-routes', '—');
                 setHTML('kpi-by-discipline', ''); setHTML('kpi-by-material', '');
+                set('kpi-vehicles-label', 'Vehicles needed');
+                set('kpi-routes-label', 'Routes in ' + label);
                 set('kpi-note', 'No approved forecast in this month.');
                 return;
             }
@@ -833,12 +1023,19 @@
             set('kpi-vehicles-label', unbakedLines ? `Vehicles needed (${unbakedLines} line${unbakedLines === 1 ? '' : 's'} unbaked)` : 'Vehicles needed');
             set('kpi-material', fmtN(qtyDay, unitLbl === 'vehicles' ? 1 : 0));
             set('kpi-routes', mRoutes.size); set('kpi-routes-label', 'Routes in ' + label);
-            const line = (obj, suffix) => Object.entries(obj).sort((a, b) => b[1] - a[1])
-                .map(([k, v]) => `${k} ${fmtN(v / n / wd, unitLbl === 'vehicles' ? 1 : 0)} ${suffix}`).join(' · ');
+            // 2026-09-07 — the title says which month these numbers are, so the panel is
+            // readable without also reading the timeline label at the bottom of the screen.
+            set('kpi-title', label + ' \u00b7 what is moving');
             const perDayUnit = (unitLbl === 'vehicles' ? 'loads' : unitLbl) + '/d';
-            setHTML('kpi-by-discipline', line(byDisc, perDayUnit));
+            // names come from the API and are written with innerHTML, so escape them. The
+            // run-on line this replaces did not, which was a latent hole rather than a
+            // present one — no discipline is user-typed today, but material_description is.
+            const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+            const chips = (obj, cls) => Object.entries(obj).sort((a, b) => b[1] - a[1])
+                .map(([k, v]) => `<span class="kpi-chip${cls ? ' ' + cls : ''}">${esc(k)} ${fmtN(v / n / wd, unitLbl === 'vehicles' ? 1 : 0)} ${perDayUnit}</span>`).join('');
+            setHTML('kpi-by-discipline', chips(byDisc, ''));
             // by material only when the month actually mixes materials
-            setHTML('kpi-by-material', Object.keys(byMat).length > 1 ? line(byMat, perDayUnit) : '');
+            setHTML('kpi-by-material', Object.keys(byMat).length > 1 ? chips(byMat, 'mat') : '');
             set('kpi-note', `Approved forecast, ${label}${n > 1 ? `, averaged over ${n} months with volume` : ''}. Movements = loads per working day (${wd}/month). Vehicles = movements ÷ what one vehicle can do per day on that route (baked cycle), rounded up per line${n > 1 ? ', busiest month' : ''}.`
                 + (fellBack ? ` ${fellBack} line(s) use the ${fbName} payload because their vehicle is not in factors.json.` : ''));
         }).catch(() => {
@@ -886,6 +1083,10 @@
         // the origin still isolates the road hauls that start there. This only changes
         // how the rail corridor is DRAWN.
         applyRailHighlight();
+        // 2026-09-07: and the end callouts. Here rather than only in setTimelineMonth so
+        // that changing a filter drops the callouts for a route the filter just removed —
+        // every filter change comes through this function.
+        renderOdCallouts();
     }
 
     function resetFilters() {
@@ -907,6 +1108,11 @@
         else { document.getElementById('filter-dest').value = nodeName; }
         applyFilters(); if(window.innerWidth <= 768) toggleSidebar();
     }
+
+    // the collision skip is in SCREEN space, so panning and zooming change which ends fit.
+    // Debounced on moveend rather than run on every frame: this rebuilds up to six popups
+    // and there is nothing to see mid-gesture.
+    map.on('moveend', () => { if (typeof TL !== 'undefined' && TL.on) renderOdCallouts(); });
 
     map.on('style.load', () => {
         if (!map.getSource('routes-source')) map.addSource('routes-source', { type: 'geojson', data: a1_data });
@@ -956,6 +1162,24 @@
                       'line-cap': 'butt', 'line-join': 'round' },
             paint: { 'line-color': RAIL_DIM.dashC, 'line-width': RAIL_DIM.dashW,
                      'line-opacity': RAIL_DIM.dashO, 'line-dasharray': RAIL_DIM.dash },
+        });
+        // 2026-09-07 — the marching overlay. White ticks on the SAME dash cycle as the
+        // hauls' forecast-flow, on the same source as the corridor, so while the timeline
+        // plays the rail reads as part of one movement rather than a static backdrop.
+        //
+        // Its OWN layer, not an animation of evr-rail-line, because that line carries the
+        // dim/bold state applyRailHighlight() owns — colour, width and dash. Marching the
+        // same layer would put two things on one line-dasharray and the last write wins.
+        //
+        // ⚠️ Deliberately NO explicit 'line-cap'. Mapbox's default is already butt,
+        // forecast-flow relies on that same default, and parse_map.js counts the explicit
+        // butt strings — five, the four haul layers plus the EVR core. A sixth here would
+        // move that count without anything having changed about the dotted routes.
+        if (!map.getLayer('evr-rail-flow')) map.addLayer({
+            id: 'evr-rail-flow', type: 'line', source: 'evr-rail',
+            layout: { visibility: 'none', 'line-join': 'round' },
+            paint: { 'line-color': '#ffffff', 'line-width': 2, 'line-opacity': 0.9,
+                     'line-dasharray': [0, 4, 3] },
         });
 
         // --- PROFESSIONAL MAPBOX STYLING (Corporate Palette + Highway Offsets) ---
@@ -2783,18 +3007,26 @@
         try{ if(map.getLayer('forecast-flow')) map.setPaintProperty('forecast-flow','line-dasharray',seq); }catch(e){}
     }
     function animateFlow(ts){
-        if(!TL.playing){ _flowRAF=null; setFlowDash(DASH_SOLID); return; }
-        if(map.getLayer && map.getLayer('forecast-flow') && (ts-_dashT>65)){
+        if(!TL.playing){ _flowRAF=null; setFlowDash(DASH_SOLID); setRailFlowDash(DASH_SOLID); applyRailFlow(); return; }
+        if(map.getLayer && (ts-_dashT>65)){
             _dashIx=(_dashIx+1)%DASH_SEQ.length;
-            setFlowDash(DASH_SEQ[_dashIx]);
+            if(map.getLayer('forecast-flow')) setFlowDash(DASH_SEQ[_dashIx]);
+            // ⭐ the rail steps on the SAME index as the hauls. Two cycles at the same
+            // period but a different phase read as two unrelated animations, which is the
+            // opposite of what putting them on one cycle is for.
+            if(map.getLayer('evr-rail-flow')) setRailFlowDash(DASH_SEQ[_dashIx]);
             _dashT=ts;
         }
         _flowRAF=requestAnimationFrame(animateFlow);
     }
-    function startFlowAnimation(){ if(_flowRAF==null) _flowRAF=requestAnimationFrame(animateFlow); }
+    function startFlowAnimation(){ applyRailFlow(); if(_flowRAF==null) _flowRAF=requestAnimationFrame(animateFlow); }
     function stopFlowAnimation(){
         if(_flowRAF!=null){ cancelAnimationFrame(_flowRAF); _flowRAF=null; }
         setFlowDash(DASH_SOLID);
+        // pause, scrub or close: the ticks stop AND the overlay goes away, so the corridor
+        // is left exactly as applyRailHighlight() drew it
+        setRailFlowDash(DASH_SOLID);
+        applyRailFlow();
     }
 
     const TL = { on:false, playing:false, month:1, timer:null, matrix:null };
@@ -2836,6 +3068,7 @@
         const src=map.getSource('routes-source');
         if(src){ const d=src._data; d.features.forEach(f=>{ if(f.geometry.type==='LineString'||f.geometry.type==='MultiLineString') f.properties.is_forecast=false; }); src.setData(d); }
         ['forecast-labels','forecast-layer','forecast-casing','forecast-flow'].forEach(l=>{ if(map.getLayer(l)) map.removeLayer(l); });
+        clearOdCallouts();      // the end callouts describe a month; there is no month now
         applyZoneMonth(null);   // no month on screen: show every active zone again
         applyFilters();         // KPI cards and the rail rule follow the timeline closing
     }
