@@ -202,8 +202,15 @@ ok("the KPI cards actually exist in the page now",
   && /id="kpi-trips"/.test(html) && /id="kpi-material"/.test(html));
 ok("⭐ the KPIs are ON THE MAP, not in the sidebar", /id="kpi-hud"/.test(html));
 ok("and are positioned over the map canvas", /#kpi-hud\{[^}]*position:absolute/.test(html));
-ok("clear of the Mapbox navigation control at top-right",
-  /#kpi-hud\{[^}]*top:112px[^}]*right:10px/.test(html));
+// 2026-09-07: moved to the TOP-LEFT of the map pane. The old assertion pinned
+// top:112px right:10px, which was exactly the "tucked under the zoom stack" position the
+// move exists to leave, so it is REVERSED rather than deleted — it now pins the new
+// corner and refuses the old one.
+ok("the KPI panel sits top-left of the map pane, beside the sidebar",
+  /#kpi-hud\{[^}]*top:14px[^}]*left:312px/.test(html)
+  && !/#kpi-hud\{[^}]*right:10px/.test(html));
+ok("...and moves in when the sidebar is closed",
+  /body\.sidebar-closed #kpi-hud\{[^}]*left:14px/.test(html));
 ok("the KPI block is outside the sidebar element",
   html.indexOf('id="kpi-hud"') > html.indexOf('id="timeline-bar"') ||
   html.indexOf('id="kpi-hud"') > html.lastIndexOf('class="control-group"'));
@@ -236,9 +243,9 @@ ok("§9: filters apply - origin/dest/IPT on the route, discipline on the LINE",
 ok("§9: an empty month says so and hides the breakdown, no zeros",
   code.includes("No approved forecast in this month.")
   && /if \(!mVeh\.length\) \{[\s\S]{0,400}setHTML\('kpi-by-discipline', ''\)/.test(code));
-ok("§9: by-discipline and by-material lines under the cards",
+ok("§9: by-discipline and by-material breakdowns under the cards",
   /id="kpi-by-discipline"/.test(html) && /id="kpi-by-material"/.test(html)
-  && /Object\.keys\(byMat\)\.length > 1 \? line\(byMat/.test(code));
+  && /Object\.keys\(byMat\)\.length > 1 \? chips\(byMat/.test(code));
 ok("§9: a stale fetch cannot overwrite a newer month", /if \(seq !== KPI\.seq\) return;/.test(code));
 ok("§9: the forecast toggle recomputes the cards",
   /src\.setData\(currentData\);\s*applyRailHighlight\(\);\s*applyFilters\(\);/.test(code)
@@ -1068,6 +1075,124 @@ ok("§4: no second imagery provider", !/mapillary|bing.*streetside|kartaview/i.t
 // "Data Management tab", which 2.5b split into Locations / Routes / Zones in the rail.
 ok("the empty-network hint names a page that still exists",
   !src.includes("Data Management tab") && src.includes("Routes page"));
+
+
+// =============================================================================
+//  2026-09-07 — the forecast-timeline pass: EVR marches with the hauls, the KPI
+//  panel moved and says what the month is doing, and the two ends of every live
+//  route are named on the map
+// =============================================================================
+
+// ---- 1. the EVR corridor marches while the timeline plays --------------------
+ok("there is a marching overlay on the EVR source, not an animation of the corridor",
+  /id: 'evr-rail-flow', type: 'line', source: 'evr-rail'/.test(code)
+  && /id: 'evr-rail-flow'[\s\S]{0,300}'line-color': '#ffffff'/.test(code));
+ok("...starting hidden, so a paused map is not marching before Play is pressed",
+  /id: 'evr-rail-flow'[\s\S]{0,200}visibility: 'none'/.test(code));
+// ⭐ THE RULE. Play AND the checkbox — not one or the other. A corridor that marched
+// with its own layer switched off would be drawing something the user turned off.
+ok("⭐ the overlay is on only while Play is on AND the EVR checkbox is on",
+  /function railFlowOn\(\) \{\s*return !!\(typeof TL !== 'undefined' && TL\.playing\) && railVisible\(\);/.test(code));
+ok("...pause / scrub / close hides it again",
+  /function stopFlowAnimation\(\)\{[\s\S]{0,320}applyRailFlow\(\);/.test(code)
+  && /if\(!TL\.playing\)\{[\s\S]{0,160}applyRailFlow\(\); return; \}/.test(code));
+ok("⭐ the rail steps on the SAME dash index as the hauls, not a second cycle",
+  /_dashIx=\(_dashIx\+1\)%DASH_SEQ\.length;[\s\S]{0,400}setRailFlowDash\(DASH_SEQ\[_dashIx\]\)/.test(code));
+// the pinned trio is the CHECKBOX toggle. The flow layer must not join it, or the
+// checkbox alone would switch it to 'visible' and it would march on a paused map.
+ok("⭐ the flow layer is toggled separately from the checkbox trio",
+  /'evr-rail-casing', 'evr-rail-line', 'railheads'/.test(code)
+  && !/'evr-rail-casing', 'evr-rail-line', 'railheads', 'evr-rail-flow'/.test(code)
+  && /forEach\(l => toggleLayer\(l, visible\)\);\s*applyRailFlow\(\);/.test(code));
+ok("the overlay carries the same railhead narrowing as the corridor under it",
+  /if \(map\.getLayer\('evr-rail-flow'\)\) map\.setFilter\('evr-rail-flow', idFilter\);/.test(code));
+// ⚠️ EVR is reference geometry. It is not a haul and must never be counted as one.
+ok("⭐ EVR is still not in routes-source and still not a counted route",
+  !/source: 'routes-source'[\s\S]{0,120}evr-rail/.test(code)
+  && !/evr[\s\S]{0,60}mRoutes\.add/.test(code));
+ok("the EVR note carries the provisional caveat permanently, not only when dimmed",
+  src.includes("Provisional corridor — reference only, not survey. Click the line for detail.")
+  && /note\.innerHTML =[\s\S]{0,40}'Provisional corridor/.test(src));
+ok("...and the click popup is still railPopupHTML",
+  /function railPopupHTML\(p\)/.test(code) && /map\.on\('click', 'evr-rail-line'/.test(code));
+
+// ---- 2. the KPI panel ---------------------------------------------------------
+ok("the panel has a month title", /id="kpi-title"/.test(html) && code.includes("set('kpi-title'"));
+ok("...naming the month on the playhead",
+  /set\('kpi-title', label \+ ' \\u00b7 what is moving'\)/.test(code));
+ok("the discipline breakdown is chips, not a faint run-on line",
+  /class="kpi-chips" id="kpi-by-discipline"/.test(html)
+  && /<span class="kpi-chip/.test(code) && !/const line = \(obj, suffix\)/.test(code));
+ok("material chips are marked apart from discipline chips",
+  /chips\(byMat, 'mat'\)/.test(code) && /\.kpi-chip\.mat\{/.test(html));
+ok("⭐ names written with innerHTML are escaped",
+  /const esc = t => String\(t\)\.replace\(\/\[&<>"\]\/g/.test(code));
+// "no zeros" — an empty month printing 0 routes read as a measured zero rather than as
+// nothing approved. Both are dashes now.
+ok("⭐ an empty month shows dashes, not a zero route count",
+  /if \(!mVeh\.length\) \{[\s\S]{0,260}set\('kpi-routes', '—'\)/.test(code)
+  && !/set\('kpi-routes', 0\)/.test(code));
+ok("...and it says which month is empty",
+  /set\('kpi-title', label \+ ' \\u00b7 nothing approved'\)/.test(code));
+// 🔴 the vehicles label carries "(N lines unbaked)" for the month it was computed for.
+// Neither the no-month branch nor the empty-month branch reset it, so closing the
+// timeline left that caveat sitting under a dash, about a month no longer on screen.
+ok("⭐ both empty branches reset the vehicles LABEL, not just the value",
+  (code.match(/set\('kpi-vehicles-label', 'Vehicles needed'\)/g) || []).length >= 2);
+ok("on a phone the panel is a bar above the timeline with the note hidden",
+  /@media \(max-width:700px\)\{[\s\S]{0,1000}#kpi-hud[\s\S]{0,260}bottom:74px/.test(html)
+  && /#kpi-hud \.kpi-note\{ display:none; \}/.test(html));
+// both used to sit at bottom:74px and drew on top of each other whenever a month
+// carried a warning
+ok("⭐ the phone warning stack clears the KPI bar",
+  /@media \(max-width:700px\)\{[\s\S]{0,1600}#tl-warnings\{ bottom:190px; \}/.test(html));
+ok("the four cards are one row on a phone, two on the desktop",
+  /id="kpi-cards"/.test(html) && /#kpi-cards\{ display:flex/.test(html));
+
+// ---- 3. origin / destination callouts -----------------------------------------
+ok("callouts are built from the lines carrying volume this month, inside the filter",
+  /if \(!p\.is_forecast \|\| !routePassesFilters\(p\)\) return;/.test(code));
+ok("...one carriageway only, or every end is counted twice",
+  /if \(p\.type !== 'Inbound Highway'\) return;/.test(code));
+ok("...pinned to Node points, never to a gate",
+  /f\.properties\.type !== 'Gate' && f\.properties\.name === name/.test(code));
+ok("⭐ they are their own popups — the node marker's click popup is untouched",
+  /className: 'od-callout'/.test(code) && /closeButton: false, closeOnClick: false/.test(code)
+  && /\.setPopup\(pop\)/.test(code));
+ok("capped at six, busiest end first",
+  /const OD_MAX = 6;/.test(code)
+  && /\.sort\(\(x, y\) => y\.routes - x\.routes/.test(code)
+  && /if \(OD\.popups\.length >= OD_MAX\) return;/.test(code));
+// 🔴 Found by running the page, not by reading it: Kuusiku and Rapla are ~60 px apart at
+// the default zoom and their two boxes covered each other, so neither name was readable.
+// A cap does not fix that — six boxes in one place is still six boxes.
+ok("⭐ a callout whose BOX would sit over one already placed is skipped",
+  /const OD_BOX_W = 200, OD_BOX_H = 62, OD_GAP_PX = 14;/.test(code)
+  && /const hits = \(a, b\) => !\(a\.x2 <= b\.x1/.test(code)
+  && /if \(placed\.some\(q => hits\(q, box\)\)\) return;/.test(code));
+// ⚠️ the box, not the marker. Two markers 108 px apart still overlap when the box is
+// 200 px wide and one of them hangs downwards — that was the first attempt.
+ok("...and the rectangle follows the anchor, up for an origin and down for a destination",
+  /y1: up \? pt\.y - OD_GAP_PX - OD_BOX_H : pt\.y \+ OD_GAP_PX/.test(code));
+ok("...and re-placed when the view moves, since the test is in screen space",
+  /map\.on\('moveend', \(\) => \{ if \(typeof TL !== 'undefined' && TL\.on\) renderOdCallouts\(\); \}\);/.test(code));
+ok("a site that is both in one month says so rather than picking a side",
+  /\(e\.origin && e\.dest\) \? 'Origin \\u00b7 Destination'/.test(code));
+ok("origins lift above the point, destinations sit below it",
+  /anchor: up \? 'bottom' : 'top'/.test(code) && /offset: up \? \[0, -14\] : \[0, 14\]/.test(code));
+ok("they follow the playhead and every filter change",
+  /applyRailHighlight\(\);\s*renderOdCallouts\(\);/.test(code));
+ok("⭐ cleared when the timeline closes, and before every rebuild",
+  /clearOdCallouts\(\);\s*applyZoneMonth\(null\);/.test(code)
+  && /function renderOdCallouts\(\) \{\s*clearOdCallouts\(\);/.test(code));
+ok("...and they render nothing at all with the timeline shut",
+  /if \(typeof TL === 'undefined' \|\| !TL\.on/.test(code));
+
+// ---- the two orderings the brief pins -----------------------------------------
+ok("⭐ applyZoneMonth(null) is still followed immediately by applyFilters()",
+  /applyZoneMonth\(null\);\s*applyFilters\(\);/.test(code));
+ok("⭐ applyFilters() is still followed immediately by renderTimelineWarnings(m)",
+  /applyFilters\(\);\s*renderTimelineWarnings\(m\);/.test(code));
 
 console.log();
 for (const f of fail) console.log("  FAIL:", f);
