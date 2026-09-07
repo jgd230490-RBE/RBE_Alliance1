@@ -35,6 +35,7 @@ import gates         # Phase 5a — multiple gates per location, with a directio
 import weeks         # Week 1 — the 4-week look-ahead and typed actuals (Tasks C, D)
 import stockpiles    # Week 1 — stockpile capacity and typed consumption (Task D2)
 import access        # 2026-09-02 — IPT access codes (Task F)
+import config        # 2.5b — the editable copy of factors.json
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
         # locations. Must sit HERE — after init_network_db(), which creates the table
         # those columns are ALTERed onto, and before init_tenant(), which rebuilds it.
         db.init_weeks_db()
+        db.init_config_db()         # 2.5b. No ALTERs, so its position only needs to precede the seed.
         # Phase 4.5. Must sit exactly here: init_tenant() migrates a pre-4.5 database by
         # rebuilding each table, copying the columns the table actually has — several of
         # which the init_* calls above add by ALTER. Run it before them and those columns
@@ -89,6 +91,11 @@ async def lifespan(app: FastAPI):
         counts = taxonomy.seed_taxonomy()
         if any(counts.values()):
             print("Seeded taxonomy:", counts)
+        # 2.5b: factors.json becomes the seed of the config row. From this boot on, the
+        # ROW is what every payload, density and cycle time reads.
+        if config.seed_from_file(conversions).get("seeded"):
+            print("2.5b: config.factors seeded from backend/factors.json — the file is now the "
+                  "seed, not the live copy. Edit on the Config page.")
         # Task F: lines written before `ipt` existed. Filled ONLY where the route names
         # exactly one IPT ("IPT 5"); a shared route ("IPT 3 / IPT 6") tells us nothing
         # about which of the two a line belongs to, and those stay NULL for a planner
@@ -785,6 +792,44 @@ def consume_stockpile(body: ConsumeIn):
     return res
 
 
+# ------------------------------------------------------- config (2.5b)
+class FactorsIn(BaseModel):
+    doc: dict
+    updated_by: Optional[str] = None
+
+
+@app.get("/api/config/factors")
+def get_factors_config():
+    """The live document, where it came from, and whether the file has drifted.
+    Readable by any signed-in user; only admins write."""
+    _require_access()
+    return {"doc": conversions.load_factors(), "status": config.status(conversions),
+            "file": conversions.load_factors_file()}
+
+
+@app.put("/api/admin/config/factors")
+def put_factors_config(body: FactorsIn, token: Optional[str] = None):
+    """
+    Replace the live document. Refused with the list of problems if it fails
+    config.validate() — a bad document here changes every number in the system.
+    """
+    _check_admin(token)
+    res = config.save(body.doc, by=body.updated_by, network=network)
+    if not res["ok"]:
+        raise HTTPException(400, "; ".join(res["problems"]))
+    return {"ok": True, "status": config.status(conversions)}
+
+
+@app.post("/api/admin/config/factors/reset")
+def reset_factors_config(updated_by: Optional[str] = None, token: Optional[str] = None):
+    """Overwrite the live document with backend/factors.json."""
+    _check_admin(token)
+    res = config.reset_to_file(conversions, by=updated_by)
+    if not res["ok"]:
+        raise HTTPException(400, "; ".join(res["problems"]))
+    return {"ok": True, "status": config.status(conversions)}
+
+
 # ------------------------------------------------------------------ public feed (map)
 @app.get("/api/public/route-forecasts")
 def public_route_forecasts(
@@ -839,9 +884,13 @@ def public_month_kpis(month: int = Query(..., ge=1, le=MONTH_COUNT),
     know falls back to the first PLANNING vehicle (V07, 18 t) and says so in
     `payload_fallback`, rather than to _default's 20 t.
 
-    Trips == vehicle-loads on one line — one vehicle, one load per trip — whatever
-    unit it was typed in. The two cards will read the same unless a future line model
-    changes that, and the map says so in its note rather than inventing a difference.
+    ⭐ 2026-09-03, the human's correction: vehicles and movements are DIFFERENT
+    numbers. A MOVEMENT (trip) is one load carried one way. How many movements one
+    VEHICLE can make in a day is a property of the ROUTE — the baked HERE cycle time
+    for that vehicle profile, `route_analysis()`'s `trips_per_day` — so the vehicles
+    needed are movements/day ÷ that figure, rounded UP. That figure rides along here as
+    `trips_per_vehicle_day`; it is None where the route is not baked for that vehicle,
+    and the map must show "not baked" rather than a fleet size.
 
     Approved only. Never actuals — those stay off the public map.
     """
@@ -858,6 +907,24 @@ def public_month_kpis(month: int = Query(..., ge=1, le=MONTH_COUNT),
         "SELECT * FROM forecasts WHERE tenant_id = ? AND status = 'Approved' "
         "AND month_index = ? ORDER BY route_id, discipline, section_id",
         (db.current_tenant(), int(month)))
+    # one route_analysis() per (route, vehicle) rather than per line
+    _tpv_cache = {}
+
+    def trips_per_vehicle_day(route_id, vehicle):
+        key = (route_id, vehicle)
+        if key not in _tpv_cache:
+            tpv = None
+            try:
+                res = network.route_analysis(route_id, profiles=[vehicle] if vehicle else None)
+                for row in res.get("rows", []):
+                    if row.get("alt_index") == 0 and (not vehicle or row.get("profile") == vehicle):
+                        tpv = row.get("trips_per_day")
+                        break
+            except Exception:
+                tpv = None
+            _tpv_cache[key] = tpv
+        return _tpv_cache[key]
+
     lines = []
     for r in rows:
         v = r.get("vehicle_type")
@@ -873,6 +940,8 @@ def public_month_kpis(month: int = Query(..., ge=1, le=MONTH_COUNT),
             "qty_t": round(t, 3),
             "vehicle_loads": round(t / payload, 3) if payload else 0.0,
             "payload_t": payload, "payload_fallback": (None if known else fb_name),
+            # movements one vehicle can make per day on THIS route, or None if unbaked
+            "trips_per_vehicle_day": trips_per_vehicle_day(r["route_id"], v),
         })
     return {"month": int(month), "unit": unit, "working_days": wd,
             "payload_fallback_vehicle": fb_name, "lines": lines}
@@ -1271,6 +1340,41 @@ def create_route(body: RouteIn, token: Optional[str] = None):
     _check_admin(token)
     return network.create_route(body.origin_id, body.dest_id, body.material_category,
                                 route_id=body.route_id, ipt=body.ipt)
+
+
+class RoutePatch(BaseModel):
+    origin_id: Optional[str] = None
+    dest_id: Optional[str] = None
+    material_category: Optional[str] = None
+    ipt: Optional[str] = None
+
+
+@app.get("/api/admin/routes/{route_id}/impact")
+def route_impact(route_id: str, token: Optional[str] = None):
+    """What an endpoint edit would touch — forecasts, weeks, baked profiles, haul
+    roads. Read before the edit so the UI can say it."""
+    _check_admin(token)
+    if not db.query("SELECT id FROM routes WHERE tenant_id = ? AND id = ?",
+                    (db.current_tenant(), route_id)):
+        raise HTTPException(404, "route not found")
+    return network.route_edit_impact(route_id)
+
+
+@app.patch("/api/admin/routes/{route_id}")
+def update_route(route_id: str, body: RoutePatch, token: Optional[str] = None):
+    """
+    2.5b: edit a route in place. Only the fields the client actually sent are written.
+    Moving an endpoint clears the baked geometry (profiles returned for the re-bake)
+    and that end's gate selection; forecasts, weeks and haul links are left alone.
+    """
+    _check_admin(token)
+    sent = set(_fields_set(body))
+    res = network.update_route(route_id, origin_id=body.origin_id, dest_id=body.dest_id,
+                               material_category=body.material_category, ipt=body.ipt,
+                               given=sent)
+    if res.get("error"):
+        raise HTTPException(404 if res["error"] == "route not found" else 400, res["error"])
+    return res
 
 
 @app.delete("/api/admin/routes/{route_id}")

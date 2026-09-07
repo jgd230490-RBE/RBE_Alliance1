@@ -1180,6 +1180,90 @@ def create_route(origin_id, dest_id, material_category=None, route_id=None, ipt=
             "material_category": material_category, "shared_materials": shared}
 
 
+def route_edit_impact(route_id):
+    """
+    What editing this route's endpoints would touch. Read BEFORE the edit so the UI can
+    say it — a route id survives an edit, so every forecast line on it silently starts
+    meaning a different haul.
+    """
+    tenant = db.current_tenant()
+    lines = db.query("SELECT COUNT(*) AS n, COUNT(DISTINCT discipline || '|' || section_id) AS lines "
+                     "FROM forecasts WHERE tenant_id = ? AND route_id = ?", (tenant, route_id))[0]
+    return {
+        "route_id": route_id,
+        "forecast_rows": lines["n"], "forecast_lines": lines["lines"],
+        "baked_profiles": profiles_for_route(route_id),
+        "haul_roads": [r["zone_id"] for r in db.query(
+            "SELECT zone_id FROM route_haul_roads WHERE tenant_id = ? AND route_id = ? ORDER BY seq",
+            (tenant, route_id))],
+        "week_rows": db.query("SELECT COUNT(*) AS n FROM forecast_weeks WHERE tenant_id = ? "
+                              "AND route_id = ?", (tenant, route_id))[0]["n"],
+    }
+
+
+def update_route(route_id, origin_id=None, dest_id=None, material_category=None,
+                 ipt=None, given=()):
+    """
+    2.5b: edit a route in place instead of delete-and-recreate — which threw away its
+    forecasts, its weeks and its gate selections, and minted a new id.
+
+    Only the fields in `given` are written. Changing an ENDPOINT:
+      * clears every baked geometry for the route (the coordinate HERE routed to moved),
+        returning the profiles so the caller can re-bake exactly what was there;
+      * clears that end's gate selection — a gate belongs to a location, and the old
+        one's gate cannot serve the new location;
+      * leaves forecast lines, weeks and haul-road links ALONE. They are records; the
+        caller was shown route_edit_impact() first and chose to proceed.
+    Changing material or IPT changes nothing routed.
+    """
+    given = set(given or ())
+    tenant = db.current_tenant()
+    cur = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?", (tenant, route_id))
+    if not cur:
+        return {"error": "route not found"}
+    cur = cur[0]
+    new_o = origin_id if "origin_id" in given else cur["origin_id"]
+    new_d = dest_id if "dest_id" in given else cur["dest_id"]
+    if not new_o or not new_d:
+        return {"error": "origin and destination are required"}
+    if new_o == new_d:
+        return {"error": "origin and destination must be different"}
+    for lid in (new_o, new_d):
+        if not db.query("SELECT id FROM locations WHERE tenant_id = ? AND id = ?", (tenant, lid)):
+            return {"error": f"location {lid} not found"}
+    # the same supply/receive guard create_route applies — the API must not be laxer
+    if "material_category" in given and material_category:
+        o = db.query("SELECT * FROM locations WHERE tenant_id = ? AND id = ?", (tenant, new_o))[0]
+        d = db.query("SELECT * FROM locations WHERE tenant_id = ? AND id = ?", (tenant, new_d))[0]
+        supplies = _loc_list(o, "supplies") or _loc_list(o, "materials")
+        receives = _loc_list(d, "receives")
+        if supplies and material_category not in supplies:
+            return {"error": f"{o['name']} does not supply {material_category}"}
+        if receives and material_category not in receives:
+            return {"error": f"{d['name']} does not receive {material_category}"}
+
+    origin_moved = new_o != cur["origin_id"]
+    dest_moved = new_d != cur["dest_id"]
+    new_mat = material_category if "material_category" in given else cur.get("material_category")
+    new_ipt = (ipt or None) if "ipt" in given else cur.get("ipt")
+    db.execute(
+        "UPDATE routes SET origin_id = ?, dest_id = ?, material_category = ?, ipt = ?, "
+        "origin_gate_id = ?, dest_gate_id = ? WHERE tenant_id = ? AND id = ?",
+        (new_o, new_d, new_mat, new_ipt,
+         None if origin_moved else cur.get("origin_gate_id"),
+         None if dest_moved else cur.get("dest_gate_id"),
+         tenant, route_id))
+    affected = []
+    if origin_moved or dest_moved:
+        affected = [{"id": route_id, "profiles": profiles_for_route(route_id)}]
+        db.execute("DELETE FROM route_geometry WHERE tenant_id = ? AND route_id = ?", (tenant, route_id))
+    return {"id": route_id, "origin_id": new_o, "dest_id": new_d,
+            "material_category": new_mat, "ipt": new_ipt,
+            "origin_moved": origin_moved, "dest_moved": dest_moved,
+            "gates_cleared": [k for k, m in (("origin", origin_moved), ("dest", dest_moved)) if m],
+            "affected_routes": affected}
+
+
 def delete_route(route_id):
     db.execute("DELETE FROM route_geometry WHERE tenant_id = ? AND route_id = ?",
                (db.current_tenant(), route_id))

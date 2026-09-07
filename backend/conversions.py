@@ -11,13 +11,32 @@ live in factors.json so an engineer can adjust them without touching code.
 """
 import json
 import os
+import sys
 
 UNITS = ["m3", "t", "vehicles"]
 _FACTORS_PATH = os.path.join(os.path.dirname(__file__), "factors.json")
 
 
 def load_factors():
-    """Read factors.json fresh each call so edits take effect on redeploy."""
+    """
+    The live factors document.
+
+    2.5b: the `config` table's `factors` row when it exists, else backend/factors.json.
+    The file is the SEED a fresh database starts from; once the row exists, editing the
+    file changes nothing until "Reset to file" is pressed on the Config page. See
+    config.py. A missing table, a missing row or a corrupt row all fall back to the
+    file, so nothing that reads factors can be taken down by the config layer.
+    """
+    try:
+        import config
+        return config.load(sys.modules[__name__])
+    except Exception:
+        with open(_FACTORS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+
+def load_factors_file():
+    """The file, always. For seeding, resetting, and the diff on the Config page."""
     with open(_FACTORS_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 

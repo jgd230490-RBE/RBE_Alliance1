@@ -53,6 +53,9 @@ TENANTED_TABLES = {
     # LINE and stockpile_weeks off a location; both are per-client data and both are
     # written by endpoints a second tenant would reach.
     "forecast_weeks", "stockpile_weeks",
+    # 2.5b, 2026-09-03. The editable copy of factors.json. Per tenant: two clients
+    # will not share a payload table.
+    "config",
 }
 
 # A contextvar rather than a module global, so Phase 6 can make the tenant
@@ -592,6 +595,17 @@ def init_weeks_db():
         conn.close()
 
 
+def init_config_db():
+    """2.5b. The config table. No columns are ALTERed on, so order does not matter here."""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        _create_tenanted(cur, "config")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def count_forecast_weeks():
     return query("SELECT COUNT(*) AS n FROM forecast_weeks WHERE tenant_id = ?",
                  (current_tenant(),))[0]["n"]
@@ -921,6 +935,25 @@ _TENANT_DDL = {
             PRIMARY KEY (tenant_id, location_id, month_index, week_index)
         )
     """,
+    # ----------------------------------------------------------------------- #
+    #  2.5b — config: the editable copy of factors.json                        #
+    # ----------------------------------------------------------------------- #
+    # One row per (tenant, key); today the only key is 'factors' and its value is the
+    # WHOLE document as JSON text. Seeded from backend/factors.json on first boot and
+    # never re-read from the file after that unless somebody presses "reset to file".
+    # conversions.load_factors() reads this row first and the file only as a fallback,
+    # so the file stops being the source of truth the moment the row exists - which
+    # is the point of a config page, and is why the row is stamped with who and when.
+    "config": """
+        CREATE TABLE config (
+            tenant_id  TEXT NOT NULL DEFAULT 'default',
+            key        TEXT NOT NULL,
+            value      TEXT NOT NULL,
+            updated_by TEXT,
+            updated_at TEXT,
+            PRIMARY KEY (tenant_id, key)
+        )
+    """,
 }
 
 # The primary key each table ends up with, for the Postgres in-place path.
@@ -940,6 +973,7 @@ _TENANT_PK = {
     "forecast_weeks": "(tenant_id, route_id, month_index, discipline, section_id, "
                       "week_index)",
     "stockpile_weeks": "(tenant_id, location_id, month_index, week_index)",
+    "config": "(tenant_id, key)",
 }
 
 # Extra UNIQUE constraints that must also take tenant_id. Only forecasts has one.
