@@ -192,8 +192,13 @@ ok("the FREE metadata call is made before any billable image request",
   code.indexOf("/streetview/meta") < code.indexOf("/streetview?lat="));
 ok("no imagery means no <img> at all, not a grey placeholder",
   code.includes("if(!meta || !meta.available) return;"));
+// 2026-09-08 (§A): the marker's pop.on('open') is gone with the marker. The lookup is
+// still lazy — it happens in the layer's click handler, i.e. only when a popup is
+// actually opened — so the assertion is narrowed to the property that mattered: the
+// lookup is NOT on the load path.
 ok("imagery is only looked up when a popup is actually opened",
-  code.includes("pop.on('open'"));
+  /map\.on\('click', 'locations'[\s\S]{0,700}svIntoPopup\(svId/.test(code)
+  && !/features\.forEach[\s\S]{0,400}svIntoPopup/.test(code));
 ok("a large offset between the gate and the nearest panorama is disclosed",
   src.includes("nearest imagery is"));
 
@@ -242,10 +247,24 @@ ok("§9: filters apply - origin/dest/IPT on the route, discipline on the LINE",
   /discFilter !== 'ALL' && l\.discipline !== discFilter/.test(code));
 ok("§9: an empty month says so and hides the breakdown, no zeros",
   code.includes("No approved forecast in this month.")
-  && /if \(!mVeh\.length\) \{[\s\S]{0,400}setHTML\('kpi-by-discipline', ''\)/.test(code));
-ok("§9: by-discipline and by-material breakdowns under the cards",
-  /id="kpi-by-discipline"/.test(html) && /id="kpi-by-material"/.test(html)
-  && /Object\.keys\(byMat\)\.length > 1 \? chips\(byMat/.test(code));
+  && /if \(!mVeh\.length\) \{[\s\S]{0,400}setHTML\('kpi-breakdown', ''\)/.test(code));
+// §D: and the SWITCHER goes with them — a switcher over nothing invites a click that
+// changes nothing
+ok("§D: an empty month hides the switcher too",
+  /if \(!mVeh\.length\) \{[\s\S]{0,400}setHTML\('kpi-switch', ''\)/.test(code));
+// 🔴 REPLACED 2026-09-08 (§D). Two stacked chip rows (discipline, then material when
+// the month mixed materials) became ONE row with a three-way switcher. Stacking every
+// answer made the card a column; the human asked for one card.
+ok("§D: ONE chip row, with a Discipline | IPT | Work section switcher",
+  /id="kpi-switch"/.test(html) && /id="kpi-breakdown"/.test(html)
+  && !/id="kpi-by-discipline"/.test(html) && !/id="kpi-by-material"/.test(html)
+  && /const KPI_BY = \[\['discipline', 'Discipline'\], \['ipt', 'IPT'\], \['section', 'Work section'\]\]/.test(code));
+ok("§D: discipline is the default", /by: 'discipline'/.test(code));
+ok("§D: the switch recomputes rather than re-rendering a cached grouping",
+  /function setKpiBy\(k\) \{[\s\S]{0,320}applyFilters\(\);/.test(code));
+ok("§D: IPT comes from the route, discipline and section from the line",
+  /KPI\.by === 'ipt' \? \(rp\.ipt \|\| 'no IPT'\)/.test(code)
+  && /KPI\.by === 'section' \? \(l\.section_id \|\| 'no work section'\)/.test(code));
 ok("§9: a stale fetch cannot overwrite a newer month", /if \(seq !== KPI\.seq\) return;/.test(code));
 ok("§9: the forecast toggle recomputes the cards",
   /src\.setData\(currentData\);\s*applyRailHighlight\(\);\s*applyFilters\(\);/.test(code)
@@ -741,10 +760,13 @@ ok("the gate popup is wired once, not on every style.load",
 
 // 🔴 the regression this pass exists for: gates are Points, and a Point that is a gate
 // must NOT become a site marker
-ok("buildNodeMarkers excludes gate features",
-  code.includes("f.geometry.type === 'Point' && f.properties.type !== 'Gate'"));
-ok("...and the reason is written down where someone would remove it",
-  src.includes("gates are Points too, and they are NOT sites"));
+// 🔴 the regression this pass exists for: gates are Points, and a Point that is a gate
+// must NOT become a site marker. §A moved the test from the marker loop into the layer
+// filter, so the assertion moved with it — same guarantee, different mechanism.
+ok("the locations layer excludes gate features",
+  /id: 'locations', type: 'symbol'[\s\S]{0,400}\['==', \['get', 'type'\], 'Node'\]/.test(code));
+ok("...and the layer is the only thing that draws one",
+  (code.match(/id: 'locations', type: 'symbol'/g) || []).length === 1);
 
 // 🔴 applyIptFilter() rebuilds the SAME expression and must agree with the layer
 // definition, or ticking a checkbox silently reinstates the gaps.
@@ -904,22 +926,29 @@ ok("§6a: default = casing 5 px #334155 at 35%",
   /RAIL_DIM\s*=\s*\{ casingW: 5, casingC: '#334155', casingO: 0\.35/.test(code));
 ok("§6a: ...under a 2 px #64748B dash with [2, 18]",
   /dashW: 2,\s*dashC: '#64748B',\s*dashO: 1\.0, dash: \[2, 18\]/.test(code));
-ok("§6a: highlight = casing 7 px in the rail colour at 80%",
-  /RAIL_BOLD\s*=\s*\{ casingW: 7, casingC: RAIL_COLOR, casingO: 0\.8/.test(code));
-ok("§6a: ...and a rail-coloured dash with [2, 12]",
-  /dashC: RAIL_COLOR,\s*dashO: 1\.0, dash: \[2, 12\]/.test(code));
+// 🔴 REVERSED 2026-09-08 (§B). These asserted a BOLD state painted in RAIL_COLOR.
+// That made provisional Natural Earth geometry — ~6.4 km out at Lelle — the loudest
+// thing on the map whenever a railhead was in play. The brief: never green, never bold,
+// never teal. So the assertions now refuse the state they used to require.
+ok("⭐ §B: there is no bold rail state at all", !/RAIL_BOLD/.test(code));
+ok("⭐ §B: the rail colour never reaches the corridor's paint",
+  !/(line-color'?,\s*RAIL_COLOR)/.test(code)
+  && !/casingC: RAIL_COLOR/.test(code) && !/dashC: RAIL_COLOR/.test(code));
 ok("§6a: two rail layers, casing under core", /id: 'evr-rail-casing'[\s\S]{0,900}id: 'evr-rail-line'/.test(code));
 ok("§6a: no IPT or reserved route colour in either rail style",
   !/(RAIL_DIM|RAIL_BOLD)\s*=[^}]*(#039E86|#f59e0b|#C2790B|#3398DB|#BF2E55|#003787|#0A1446|#4338CA|#6D28D9|#57534E|#9A3412|#9F1239|#5B21B6)/i.test(code));
 ok("the old single 2px/25% style is gone", !/RAIL_DIM_WIDTH/.test(code));
-// §6b — when it goes bold
-ok("§6b: bold on a railhead origin OR a railhead movement on screen",
-  /const bold = originIsHead \|\| railheadMovementOnScreen\(\)/.test(code));
-ok("§6b: 'movement on screen' needs forecast on or the timeline open",
-  /const forecastOn = !!\(cb && cb\.checked\) \|\| \(typeof TL !== 'undefined' && TL\.on\)/.test(code));
-ok("§6b: ...and a route carrying volume NOW, inside the current filter, touching a railhead",
+// §6b's question survives, with a new job: it used to decide whether the corridor went
+// BOLD, and now decides whether it TICKS. One home — railInUseOnScreen(), beside
+// railFlowOn(). Two copies of "is a railhead in use this month" would have drifted the
+// first time one of them learned about a filter.
+ok("§B: 'a railhead is in use' has exactly one implementation",
+  /function railInUseOnScreen\(\)/.test(code) && !/function railheadMovementOnScreen\(\)/.test(code));
+ok("§B: it needs forecast on or the timeline open",
+  /const forecastOn = \(typeof TL !== 'undefined' && TL\.on\)[\s\S]{0,180}toggle-forecast/.test(code));
+ok("§B: ...and a route carrying volume NOW, inside the current filter, touching a railhead",
   /f\.properties\.is_forecast && routePassesFilters\(f\.properties\)/.test(code)
-  && /locTypeById\(f\.properties\.origin_id\) === 'Railhead' \|\| locTypeById\(f\.properties\.dest_id\) === 'Railhead'/.test(code));
+  && /locTypeById\(f\.properties\.origin_id\) === 'Railhead'[\s\S]{0,80}locTypeById\(f\.properties\.dest_id\) === 'Railhead'/.test(code));
 ok("§6b: the forecast toggle recomputes it, both on and off",
   (src.match(/applyRailHighlight\(\);\s*\/\/ §6b/g) || []).length === 2);
 ok("§6b: turning forecast off clears is_forecast so the rule sees no movement",
@@ -940,8 +969,12 @@ ok("rail visibility is read from the checkbox",
   && /visibility: railVisible\(\)/.test(code));
 ok("there is a Rail network control, ON by default",
   /id="layer-rail" checked/.test(html));
-ok("toggling it moves the line AND the railhead dots",
-  /function toggleRail\(visible\) \{[\s\S]{0,160}'evr-rail-line', 'railheads'/.test(code));
+// 🔴 REVERSED 2026-09-08. This used to assert the OPPOSITE — that toggleRail() moved
+// the railhead marks with the corridor. That was the bug: a railhead is a LOCATION, and
+// unchecking "Rail network" was hiding sites. The assertion now refuses the old wiring.
+ok("⭐ the rail toggle moves the corridor and NOTHING else",
+  /function toggleRail\(visible\) \{[\s\S]{0,700}\['evr-rail-casing', 'evr-rail-line'\]\.forEach/.test(code)
+  && !/'evr-rail-line', 'railheads'/.test(code));
 
 // the highlight
 ok("the highlight follows the origin filter", /function applyRailHighlight\(\)/.test(code)
@@ -961,9 +994,8 @@ ok("heads are matched case-insensitively and by substring, both ways",
   /function railFeaturesFor\(name\)/.test(code)
   && /toLowerCase\(\)\.trim\(\)/.test(code)
   && /n\.indexOf\(hh\) >= 0 \|\| hh\.indexOf\(n\) >= 0/.test(code));
-ok("origin back to ALL returns the layer to the dim default",
-  /const st = bold \? RAIL_BOLD : RAIL_DIM/.test(code)
-  && /setPaintProperty\('evr-rail-line', 'line-dasharray', st\.dash\)/.test(code));
+ok("⭐ §B: one style, applied unconditionally — there is nothing to return FROM",
+  /const st = RAIL_DIM;/.test(code) && !/bold \? RAIL_BOLD/.test(code));
 // ⭐ the road filter must be untouched: a railhead origin still isolates its hauls
 ok("⭐ the existing road-route filter is not disturbed",
   /setFilter\('inbound-lines',/.test(code) && /setFilter\('outbound-lines',/.test(code)
@@ -976,19 +1008,28 @@ ok("filterByNode treats a Railhead as an origin",
 
 // railheads drawn as a LAYER, not only a DOM marker
 // §5 — its own mark, a symbol layer, generated glyph
-ok("§5: railheads are drawn as a real SYMBOL layer, not a circle and not a DOM marker",
-  /id: 'railheads', type: 'symbol'/.test(code) && !/id: 'railheads', type: 'circle'/.test(code));
-ok("§5: the glyph is generated on a canvas in the rail colour",
-  /function railheadGlyph\(\)/.test(code) && /g\.strokeStyle = RAIL_COLOR/.test(code)
-  && /'icon-image': 'railhead-glyph'/.test(code));
-ok("§5: two sleepers and a rail", (code.match(/g\.fillRect\(/g) || []).length === 3);
-ok("§5: the image is re-added on style.load, guarded by hasImage",
-  /if \(!map\.hasImage\('railhead-glyph'\)\) map\.addImage/.test(code));
-ok("§5: there is a Railhead legend entry", /id="legend-railhead"/.test(html) && />Railhead</.test(html));
-ok("§5: the rail toggle moves casing, core and heads together",
-  /'evr-rail-casing', 'evr-rail-line', 'railheads'/.test(code));
-ok("...filtered to Node features of that type",
-  /\['==', \['get', 'node_type'\], 'Railhead'\]/.test(code));
+// 2026-09-08 (§A): §5's railhead-only layer became the seven-mark location layer.
+// Every guarantee it made survives; it now makes them for all seven types.
+ok("§A: locations are a real SYMBOL layer, not a circle and not a DOM marker",
+  /id: 'locations', type: 'symbol'/.test(code)
+  && !/id: 'railheads'/.test(code) && !/new mapboxgl\.Marker/.test(code));
+ok("§A: the marks are generated on a canvas, one image per type",
+  /function locGlyph\(kind, fill, active\)/.test(code)
+  && /function addLocationImages\(m\)/.test(code));
+ok("§A: a railhead still carries a rail over two sleepers",
+  /kind === 'Railhead'/.test(code) && (code.match(/g\.fillRect\(/g) || []).length >= 3);
+ok("§A: the images are re-added on style.load, guarded by hasImage",
+  /if \(!m\.hasImage\(key\)\) m\.addImage\(key/.test(code)
+  && /if \(!m\.hasImage\(key \+ '-on'\)\) m\.addImage/.test(code)
+  // ⚠️ inside the style.load handler, not at load: a basemap switch drops every image
+  // with the style. Asserted by position rather than by a size window — a window is not
+  // a scope, and this file has been bitten by that before.
+  && code.indexOf("addLocationImages(map);") > code.indexOf("map.on('style.load'")
+  && code.indexOf("addLocationImages(map);") < code.indexOf("id: 'locations', type: 'symbol'"));
+ok("§A: the legend lists all seven types", /id="loc-legend"/.test(html)
+  && /const LOC_KINDS = \['Quarry', 'Port', 'Compound', 'Site', 'Railhead', 'Stockpile', 'Other'\]/.test(code));
+ok("§A: the layer is filtered to Node features, by canonical kind",
+  /\['in', \['get', 'loc_kind'\], \['literal', visibleLocKinds\(\)\]\]/.test(code));
 
 // ⭐ the honesty channel. The picture reads as authoritative; the popup is where the
 // caveat lives, exactly as the alignment's gap bridges do.
@@ -1091,8 +1132,12 @@ ok("...starting hidden, so a paused map is not marching before Play is pressed",
   /id: 'evr-rail-flow'[\s\S]{0,200}visibility: 'none'/.test(code));
 // ⭐ THE RULE. Play AND the checkbox — not one or the other. A corridor that marched
 // with its own layer switched off would be drawing something the user turned off.
-ok("⭐ the overlay is on only while Play is on AND the EVR checkbox is on",
-  /function railFlowOn\(\) \{\s*return !!\(typeof TL !== 'undefined' && TL\.playing\) && railVisible\(\);/.test(code));
+// ⭐ NARROWED 2026-09-08 (§B). Play AND the checkbox was not enough: the corridor
+// ticked in every month, which said "rail" about months with no rail movement in them.
+// A third condition, and the brief's own test — "animation only when the playhead month
+// has a Railhead movement".
+ok("⭐ the overlay ticks only on Play, with the checkbox on, in a month that USES the rail",
+  /function railFlowOn\(\) \{\s*return !!\(typeof TL !== 'undefined' && TL\.playing\) && railVisible\(\) && railInUseOnScreen\(\);/.test(code));
 ok("...pause / scrub / close hides it again",
   /function stopFlowAnimation\(\)\{[\s\S]{0,320}applyRailFlow\(\);/.test(code)
   && /if\(!TL\.playing\)\{[\s\S]{0,160}applyRailFlow\(\); return; \}/.test(code));
@@ -1100,9 +1145,9 @@ ok("⭐ the rail steps on the SAME dash index as the hauls, not a second cycle",
   /_dashIx=\(_dashIx\+1\)%DASH_SEQ\.length;[\s\S]{0,400}setRailFlowDash\(DASH_SEQ\[_dashIx\]\)/.test(code));
 // the pinned trio is the CHECKBOX toggle. The flow layer must not join it, or the
 // checkbox alone would switch it to 'visible' and it would march on a paused map.
-ok("⭐ the flow layer is toggled separately from the checkbox trio",
-  /'evr-rail-casing', 'evr-rail-line', 'railheads'/.test(code)
-  && !/'evr-rail-casing', 'evr-rail-line', 'railheads', 'evr-rail-flow'/.test(code)
+ok("⭐ the flow layer is toggled separately from the corridor pair",
+  /\['evr-rail-casing', 'evr-rail-line'\]/.test(code)
+  && !/'evr-rail-line', 'evr-rail-flow'\]/.test(code)
   && /forEach\(l => toggleLayer\(l, visible\)\);\s*applyRailFlow\(\);/.test(code));
 ok("the overlay carries the same railhead narrowing as the corridor under it",
   /if \(map\.getLayer\('evr-rail-flow'\)\) map\.setFilter\('evr-rail-flow', idFilter\);/.test(code));
@@ -1120,11 +1165,21 @@ ok("...and the click popup is still railPopupHTML",
 ok("the panel has a month title", /id="kpi-title"/.test(html) && code.includes("set('kpi-title'"));
 ok("...naming the month on the playhead",
   /set\('kpi-title', label \+ ' \\u00b7 what is moving'\)/.test(code));
-ok("the discipline breakdown is chips, not a faint run-on line",
-  /class="kpi-chips" id="kpi-by-discipline"/.test(html)
+ok("the breakdown is chips, not a faint run-on line",
+  /class="kpi-chips" id="kpi-breakdown"/.test(html)
   && /<span class="kpi-chip/.test(code) && !/const line = \(obj, suffix\)/.test(code));
-ok("material chips are marked apart from discipline chips",
-  /chips\(byMat, 'mat'\)/.test(code) && /\.kpi-chip\.mat\{/.test(html));
+// ⭐ THREE numbers per chip, and the third is TONNES on purpose. The map unit is
+// 'vehicles' by default, and in that unit "material/day" and "movements/day" are the
+// same number — printing both would put the 04 Sep correction back on screen.
+ok("⭐ §D: every chip carries vehicles, trips AND tonnes",
+  /veh\/d/.test(code) && /trips\/d/.test(code) && /t\/d<\/span>/.test(code)
+  && /g\.t \+= \(l\.qty_t \|\| 0\)/.test(code));
+// vehicles ceil() PER LINE, exactly as the headline does — a vehicle on one route
+// cannot also be on another, and the groups must add up to the card above them
+ok("⭐ §D: a group's vehicles are summed per line, not ceilinged once",
+  /g\.fleet \+= Math\.ceil\(\(l\.vehicle_loads \/ wdv\) \/ l\.trips_per_vehicle_day\)/.test(code));
+ok("§D: a group is divided by the months it appeared in, not the window length",
+  /const gm = Math\.max\(1, g\.months\.size\);/.test(code));
 ok("⭐ names written with innerHTML are escaped",
   /const esc = t => String\(t\)\.replace\(\/\[&<>"\]\/g/.test(code));
 // "no zeros" — an empty month printing 0 routes read as a measured zero rather than as
@@ -1142,57 +1197,129 @@ ok("⭐ both empty branches reset the vehicles LABEL, not just the value",
 ok("on a phone the panel is a bar above the timeline with the note hidden",
   /@media \(max-width:700px\)\{[\s\S]{0,1000}#kpi-hud[\s\S]{0,260}bottom:74px/.test(html)
   && /#kpi-hud \.kpi-note\{ display:none; \}/.test(html));
-// both used to sit at bottom:74px and drew on top of each other whenever a month
-// carried a warning
-ok("⭐ the phone warning stack clears the KPI bar",
-  /@media \(max-width:700px\)\{[\s\S]{0,1600}#tl-warnings\{ bottom:190px; \}/.test(html));
+// 🔴 both used to sit at bottom:74px. 07 Sep moved the stack to a FIXED bottom:190px,
+// which is not enough — the stack is as tall as its contents, and a month with three
+// warnings landed back on the bar. Found by giving the browser check a month that has
+// warnings. It is measured now; 190px is only the floor.
+ok("⭐ the phone warning stack clears the KPI bar, by measuring it",
+  /@media \(max-width:700px\)\{[\s\S]{0,1900}#tl-warnings\{ bottom:190px; \}/.test(html)
+  && /function positionWarnStack\(\)/.test(code)
+  && /box\.style\.bottom = \(74 \+ Math\.round\(h\) \+ 8\) \+ 'px'/.test(code));
+ok("...and it re-measures when the card changes height or the window resizes",
+  /setHTML\('kpi-breakdown', chips\);\s*positionWarnStack\(\);/.test(code)
+  && /window\.addEventListener\('resize', positionWarnStack\)/.test(code));
 ok("the four cards are one row on a phone, two on the desktop",
   /id="kpi-cards"/.test(html) && /#kpi-cards\{ display:flex/.test(html));
 
-// ---- 3. origin / destination callouts -----------------------------------------
-ok("callouts are built from the lines carrying volume this month, inside the filter",
+// ---- 3. the ends of the live routes, as ICONS (2026-09-08, §C) ------------------
+// 🔴 THE 07 SEP CALLOUT PLATES ARE GONE and these assertions are REVERSED, not deleted.
+// They pinned a white name plate per end, a cap of six, a rectangle collision skip and a
+// moveend re-placement. Every one of those existed because six name plates cover each
+// other — which is the human's point: it was a list lying on top of a map. The emphasis
+// is the location icon itself now.
+ok("⭐ no callout component survives anywhere",
+  !/od-callout/.test(html) && !/renderOdCallouts/.test(code)
+  && !/OD_MAX/.test(code) && !/OD_BOX_W/.test(code));
+ok("the ends are marked by stamping is_end on the Node feature",
+  /function markRouteEnds\(\)/.test(code) && /f\.properties\.is_end = on/.test(code));
+ok("⭐ ...which the ONE locations layer reads as a bigger image, not a second layer",
+  /'icon-image': \['case', \['coalesce', \['get', 'is_end'\], false\],/.test(code)
+  && /\['concat', \['get', 'loc_icon'\], '-on'\]/.test(code)
+  // exactly one symbol layer draws a location, in either state
+  && (code.match(/id: 'locations', type: 'symbol'/g) || []).length === 1);
+// §C asks for "+2 px with a 1 px halo". Device pixels are 2x, so +4 and a 4-wide stroke
+// straddling the edge — 2 px outside — is that, baked into the image rather than added
+// as a second layer.
+ok("§C: +2 px with a halo, baked into the -on image",
+  /if \(active\) r \+= 4;/.test(code)
+  && /locShapePath\(g, kind, cx, cy, r \+ 4\);/.test(code)
+  && /g\.lineWidth = 4; g\.strokeStyle = 'rgba\(10,20,70,0\.55\)'/.test(code));
+ok("only the lines carrying volume this month, inside the filter",
   /if \(!p\.is_forecast \|\| !routePassesFilters\(p\)\) return;/.test(code));
-ok("...one carriageway only, or every end is counted twice",
-  /if \(p\.type !== 'Inbound Highway'\) return;/.test(code));
-ok("...pinned to Node points, never to a gate",
-  /f\.properties\.type !== 'Gate' && f\.properties\.name === name/.test(code));
-ok("⭐ they are their own popups — the node marker's click popup is untouched",
-  /className: 'od-callout'/.test(code) && /closeButton: false, closeOnClick: false/.test(code)
-  && /\.setPopup\(pop\)/.test(code));
-ok("capped at six, busiest end first",
-  /const OD_MAX = 6;/.test(code)
-  && /\.sort\(\(x, y\) => y\.routes - x\.routes/.test(code)
-  && /if \(OD\.popups\.length >= OD_MAX\) return;/.test(code));
-// 🔴 Found by running the page, not by reading it: Kuusiku and Rapla are ~60 px apart at
-// the default zoom and their two boxes covered each other, so neither name was readable.
-// A cap does not fix that — six boxes in one place is still six boxes.
-ok("⭐ a callout whose BOX would sit over one already placed is skipped",
-  /const OD_BOX_W = 200, OD_BOX_H = 62, OD_GAP_PX = 14;/.test(code)
-  && /const hits = \(a, b\) => !\(a\.x2 <= b\.x1/.test(code)
-  && /if \(placed\.some\(q => hits\(q, box\)\)\) return;/.test(code));
-// ⚠️ the box, not the marker. Two markers 108 px apart still overlap when the box is
-// 200 px wide and one of them hangs downwards — that was the first attempt.
-ok("...and the rectangle follows the anchor, up for an origin and down for a destination",
-  /y1: up \? pt\.y - OD_GAP_PX - OD_BOX_H : pt\.y \+ OD_GAP_PX/.test(code));
-ok("...and re-placed when the view moves, since the test is in screen space",
-  /map\.on\('moveend', \(\) => \{ if \(typeof TL !== 'undefined' && TL\.on\) renderOdCallouts\(\); \}\);/.test(code));
-ok("a site that is both in one month says so rather than picking a side",
-  /\(e\.origin && e\.dest\) \? 'Origin \\u00b7 Destination'/.test(code));
-ok("origins lift above the point, destinations sit below it",
-  /anchor: up \? 'bottom' : 'top'/.test(code) && /offset: up \? \[0, -14\] : \[0, 14\]/.test(code));
-ok("they follow the playhead and every filter change",
-  /applyRailHighlight\(\);\s*renderOdCallouts\(\);/.test(code));
-ok("⭐ cleared when the timeline closes, and before every rebuild",
-  /clearOdCallouts\(\);\s*applyZoneMonth\(null\);/.test(code)
-  && /function renderOdCallouts\(\) \{\s*clearOdCallouts\(\);/.test(code));
-ok("...and they render nothing at all with the timeline shut",
-  /if \(typeof TL === 'undefined' \|\| !TL\.on/.test(code));
+ok("...one carriageway only", /if \(p\.type !== 'Inbound Highway'\) return;/.test(code));
+ok("⭐ nothing is emphasised with the timeline shut and forecast off",
+  /const live = \(typeof TL !== 'undefined' && TL\.on\)/.test(code));
+ok("it follows the playhead and every filter change",
+  /applyRailHighlight\(\);\s*markRouteEnds\(\);/.test(code));
+// ⚠️ setData on this source runs on every timeline tick; only when something flipped.
+ok("⭐ the source is only re-set when a mark actually changed",
+  /if \(changed\) src\.setData\(a1_data\);/.test(code));
+ok("the existing click popup is the only name surface, and it still works",
+  /map\.on\('click', 'locations'/.test(code) && /function locationPopupHTML\(props, svId\)/.test(code));
 
 // ---- the two orderings the brief pins -----------------------------------------
 ok("⭐ applyZoneMonth(null) is still followed immediately by applyFilters()",
   /applyZoneMonth\(null\);\s*applyFilters\(\);/.test(code));
 ok("⭐ applyFilters() is still followed immediately by renderTimelineWarnings(m)",
   /applyFilters\(\);\s*renderTimelineWarnings\(m\);/.test(code));
+
+// ---- §B, 2026-09-08: the corridor is grey and ticks only when the rail is used -----
+ok("⭐ §B: the sidebar note says what the ticking means, in both states",
+  src.includes("ticking: a movement this month starts or ends at a railhead")
+  && src.includes("static grey unless a movement this month uses a railhead"));
+ok("§B: the geometry is untouched — still the provisional file",
+  src.includes("data/evr_rail.js") && /function railPopupHTML\(p\)/.test(code));
+ok("§B: applyRailHighlight re-applies the flow rule, so a filter change lands on it too",
+  /if \(note\) note\.innerHTML =[\s\S]{0,260}applyRailFlow\(\);/.test(code));
+
+// ---- §E, 2026-09-08: the warning stack has three NAMED levels ---------------------
+ok("§E: the three levels are named on screen, not just coloured",
+  /const LVL_NAME = \{ clash: 'Clash', warn: 'Warning', caution: 'Caution' \}/.test(code)
+  && /class="lvl"/.test(code));
+ok("§E: a stockpile past capacity is a CLASH",
+  /lvl: 'clash', who: sp\.name/.test(code));
+// ⚠️ a Tark Tee 'breach' is a vehicle-versus-limit verdict on a drivable road, not an
+// impossibility — and it cannot judge a weak bridge at all (§A2), so it must never be
+// the loudest thing on screen.
+ok("§E: a Tark Tee exceed is a WARNING, even when its own severity says breach",
+  /lvl: 'warn', who: p\.route_id/.test(code) && !/sev: 'breach'/.test(code));
+ok("§E: a seasonal window is a CAUTION", /lvl: 'caution', who: p\.route_id/.test(code));
+ok("§E: clash sorts above warning sorts above caution",
+  /lvl: 'clash'[\s\S]{0,260}sort: 0 \}/.test(code)
+  && /lvl: 'warn', who: p\.route_id[\s\S]{0,300}sort: worst\.severity === 'breach' \? 1 : 2/.test(code)
+  && /lvl: 'caution'[\s\S]{0,200}sort: 3 \}/.test(code));
+// 🔴 the second Clash source the brief names has NO PRODUCER anywhere in the product.
+// Inventing what "two conflicting movements" means is the human's call, not mine.
+ok("⭐ §E: the missing Clash source is written down, not invented",
+  src.includes("THE SECOND CLASH SOURCE THE BRIEF NAMES DOES NOT EXIST")
+  && /TIME model, which is Phase 7/.test(src)
+  && /gate_blockers` is a deactivated gate refusing/.test(src));
+ok("§E: still no new sources and no weather API",
+  code.includes("/routes/restrictions") && code.includes("/public/stockpile-timeline")
+  && code.includes("META.seasonal")
+  && !/weather|openweather|forecast\.io/i.test(code.slice(code.indexOf("const WARN"), code.indexOf("(function initAnalysis"))));
+// the brief's own test: the stack is NOT in the KPI card
+ok("⭐ §E: the stack is its own element, outside #kpi-hud",
+  /id="tl-warnings"/.test(html)
+  && html.indexOf('id="tl-warnings"') > html.indexOf("</div>", html.indexOf('id="kpi-hud"')));
+ok("⭐ §E: no level word appears anywhere inside the KPI card markup",
+  !/(Clash|Caution)/.test(html.slice(html.indexOf('id="kpi-hud"'), html.indexOf('id="tl-warnings"'))));
+ok("§E: dismissals are keyed per month, so changing month brings them back",
+  /key: `s\|\$\{sp\.location_id\}\|\$\{month\}`/.test(code)
+  && /key: `r\|\$\{p\.route_id\}\|\$\{month\}`/.test(code));
+
+// ---- §F ride-alongs, 2026-09-08 ---------------------------------------------------
+// F1: "412 vehicles" on a route was the same confusion the 04 Sep correction was about —
+// 412 is not 412 lorries, it is 412 loads out and back.
+ok("§F1: the forecast route label says Two-way, not vehicles",
+  /const FORECAST_LABEL_UNIT = 'Two-way';/.test(code)
+  && (code.match(/\['concat', \['get', 'f_avg'\], ' ', FORECAST_LABEL_UNIT\]/g) || []).length === 2
+  && !/\['get', 'f_unit'\]\]/.test(code));
+ok("§F1: ...and the FIGURE is untouched — f_unit still rides on the feature",
+  /f\.properties\.f_unit = m\.unit/.test(code) && /f\.properties\.f_unit=unit/.test(code));
+// F4: extruded buildings, default OFF
+ok("§F4: there is a 3D buildings control and it is NOT checked",
+  /id="layer-buildings"/.test(html) && !/id="layer-buildings" checked/.test(html));
+ok("§F4: it is fill-extrusion off Mapbox's own building layer, not an ortho mesh",
+  /type: 'fill-extrusion', source: 'composite'/.test(code)
+  && /'source-layer': 'building'/.test(code) && !/mesh|photogrammetr/i.test(code));
+// ⚠️ the Maa-amet orthophoto basemap is RASTER and has no composite source. addLayer
+// would fire an error and return having added nothing — the 2026-09-01 silent failure.
+ok("⭐ §F4: guarded on the composite source, with the sidebar told when it is absent",
+  /if \(!map\.getSource\('composite'\)\) \{/.test(code)
+  && src.includes("not available on this basemap"));
+ok("§F4: only re-added on style.load when the checkbox is on",
+  /if \(buildingsVisible\(\)\) ensureBuildingLayer\(\);/.test(code));
 
 console.log();
 for (const f of fail) console.log("  FAIL:", f);

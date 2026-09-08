@@ -50,11 +50,19 @@ const OUT = process.env.SHOT_DIR || "/tmp/shot";
 // the cap at six callouts and the chip row are both about crowding, and a fixture with
 // one route would exercise neither.
 const NODES = [
-  ["N1", "Kuusiku quarry", "Quarry", 24.62, 58.99, "Aggregate"],
+  // three quarries with the three real material fills, so the brief's "quarry diamonds
+  // keep distinct fills when two materials exist" is a test and not a hope
+  ["N1", "Kuusiku quarry", "Quarry", 24.62, 58.99, "Gravel"],
+  ["N8", "Karinu sand pit", "Quarry", 24.55, 58.86, "Sand"],
+  ["N9", "Vasalemma quarry", "Quarry", 24.68, 59.06, "Limestone - rockfill"],
   ["N2", "Rapla railhead", "Railhead", 24.79, 59.01, "Aggregate"],
   ["N3", "Tootsi cut", "Site", 24.81, 58.58, "Fill"],
   ["N4", "Pärnu stockpile", "Stockpile", 24.50, 58.39, "Fill"],
   ["N5", "Lelle compound", "Compound", 24.82, 58.77, "Fill"],
+  // 2026-09-08: two locations NO route touches. They are the control for §C (never
+  // emphasised) and the only way §A's Port and Other glyphs get exercised at all.
+  ["N6", "Muuga port", "Port", 24.95, 59.47, "Imported Goods"],
+  ["N7", "Unclassified depot", "Depot", 24.40, 58.70, ""],
 ];
 const ROUTES = [
   ["R-001", "Kuusiku quarry", "Rapla railhead", "N1", "N2", "IPT3", ["Earthworks"]],
@@ -83,11 +91,15 @@ function mapData() {
 function monthKpis(m) {
   const lines = ROUTES.map(([route_id, , , , , , disc], i) => ({
     route_id, discipline: disc[0], material_type: i % 2 ? "Fill" : "Aggregate",
+    // ⚠️ real section ids, or the Work section chips would all read "no work section"
+    // and the "it regroups" assertion would pass on an empty grouping
+    section_id: ["WS3", "WS5", "WS3", "WS12"][i], ipt: ["IPT3", "IPT2", "IPT3", "IPT6"][i],
     vehicle_loads: 120 + i * 30 + m * 4, qty_unit: 120 + i * 30 + m * 4,
+    qty_t: (120 + i * 30 + m * 4) * 24,     // the chips' third figure is tonnes
     trips_per_vehicle_day: i === 3 ? 0 : 4 - (i % 2),   // R-004 unbaked on purpose
     payload_fallback: false,
   }));
-  return { month: m, unit: "vehicles", working_days: 21, lines, payload_fallback_vehicle: "V07" };
+  return { month: m, unit: "vehicles", working_days: 22, lines, payload_fallback_vehicle: "V07" };
 }
 function forecastMatrix() {
   return {
@@ -106,12 +118,27 @@ function api(u) {
   if (p === "/public/month-kpis") return monthKpis(parseInt(q.get("month") || "1"));
   if (p === "/public/forecast-matrix") return forecastMatrix();
   if (p === "/public/route-forecasts") return { routes: [] };
-  if (p === "/public/stockpile-timeline") return { piles: [] };
-  if (p === "/routes/restrictions") return { routes: [] };
+  // one of each level, so the stack is a real test and not an empty div:
+  //   Clash   Pärnu stockpile over capacity in every month
+  //   Warning a Tark Tee height exceed on R-002
+  //   Caution a winter window on the calendar months it covers
+  if (p === "/public/stockpile-timeline") return {
+    stockpiles: [{
+      location_id: "N4", name: "Pärnu stockpile", capacity_qty: 4000, capacity_unit: "t",
+      months: Object.fromEntries(Array.from({ length: 60 }, (_, k) =>
+        [String(k + 1), { over: true, balance_end: 5200 + k }])),
+    }],
+  };
+  if (p === "/routes/restrictions") return {
+    routes: { "R-002": { hits: [{ severity: "breach", kind: "height", label: "Height limit",
+                                  what: "3.2 m limit, vehicle 4.0 m" }] } },
+  };
   if (p === "/restrictions/layers") return { layers: [] };
   if (p === "/restrictions") return { type: "FeatureCollection", features: [] };
   if (p === "/zones") return [];
-  if (p === "/meta") return { months: { start_year: 2026, count: 60 }, seasonal_restrictions: [] };
+  if (p === "/meta") return { months: { start_year: 2026, count: 60 },
+    seasonal_restrictions: [{ name: "Winter haul window", months: [1, 2, 7, 12],
+      restricted_vehicles: [], message: "Reduced axle loads on thaw-susceptible roads." }] };
   return {};
 }
 
@@ -131,6 +158,12 @@ const server = http.createServer((req, res) => {
     res.end(body);
   } catch (e) { res.writeHead(404); res.end("no"); }
 });
+
+// month 1 = Jan of START_YEAR, the same convention monthLabel() uses in the page
+const monthLabelOf = (m) => {
+  const M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return M[(m - 1) % 12] + " " + (2026 + Math.floor((m - 1) / 12));
+};
 
 let pass = 0; const fail = [];
 function ok(label, cond, extra) { if (cond) pass++; else fail.push(label + (extra ? "  " + extra : "")); }
@@ -188,13 +221,63 @@ function ok(label, cond, extra) { if (cond) pass++; else fail.push(label + (extr
   await page.waitForTimeout(1500);
   await shot("02-timeline-month");
 
+  // a close-up, so the seven marks can actually be told apart by eye in review
+  await page.evaluate(() => map.jumpTo({ center: [24.72, 58.95], zoom: 10.4 }));
+  await page.waitForTimeout(900);
+  await shot("02b-glyphs");
+  await page.evaluate(() => map.jumpTo({ center: [24.85, 58.75], zoom: 7.8 }));
+  await page.waitForTimeout(700);
+
   const title = await page.evaluate(() => document.getElementById("kpi-title").textContent);
   ok("the panel titles the month on the playhead", /what is moving/.test(title), title);
-  const chips = await page.evaluate(() => Array.from(document.querySelectorAll("#kpi-by-discipline .kpi-chip")).map(e => e.textContent));
+  const chipText = () => page.evaluate(() =>
+    Array.from(document.querySelectorAll("#kpi-breakdown .kpi-chip")).map(e => e.textContent));
+  const chips = await chipText();
   ok("⭐ the disciplines of THAT month render as chips", chips.length >= 2, JSON.stringify(chips));
-  ok("...carrying a per-day figure, not just a name", chips.every(c => /[\d.]/.test(c)), JSON.stringify(chips));
-  const matChips = await page.evaluate(() => document.querySelectorAll("#kpi-by-material .kpi-chip").length);
-  ok("material chips appear when the month mixes materials", matChips >= 2, String(matChips));
+  ok("⭐ ...each carrying vehicles, trips AND tonnes, all three non-zero",
+    chips.every(c => /[1-9][\d.,]* veh\/d/.test(c) && /[1-9][\d.,]* trips\/d/.test(c)
+                  && /[1-9][\d.,]* t\/d/.test(c)), JSON.stringify(chips));
+  // ⭐ the brief's own test: the EVR paint is grey, and the reserved rail/green colours
+  // never reach it. Read off the LIVE layer, not the source.
+  const railPaint = await page.evaluate(() => ({
+    line: map.getPaintProperty("evr-rail-line", "line-color"),
+    casing: map.getPaintProperty("evr-rail-casing", "line-color"),
+    dash: map.getPaintProperty("evr-rail-line", "line-dasharray"),
+  }));
+  ok("⭐ §B: the EVR corridor is painted grey, never #0F766E or #039E86",
+    railPaint.line === "#64748B" && railPaint.casing === "#334155", JSON.stringify(railPaint));
+  // ⭐ §D's real question: does the switcher actually regroup, or just relabel?
+  const swBtns = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("#kpi-switch button")).map(b => b.textContent));
+  ok("§D: the switcher offers Discipline, IPT and Work section",
+    JSON.stringify(swBtns) === JSON.stringify(["Discipline", "IPT", "Work section"]), JSON.stringify(swBtns));
+  await page.evaluate(() => setKpiBy("ipt"));
+  await page.waitForTimeout(700);
+  const iptChips = await chipText();
+  ok("⭐ switching to IPT regroups the SAME month by IPT",
+    iptChips.length > 0 && iptChips.every(c => /IPT\d|no IPT/.test(c)), JSON.stringify(iptChips));
+  ok("...and the switcher marks which one is on",
+    await page.evaluate(() => (document.querySelector("#kpi-switch button.on") || {}).textContent) === "IPT");
+  await page.evaluate(() => setKpiBy("section"));
+  await page.waitForTimeout(700);
+  const wsChips = await chipText();
+  ok("⭐ switching to Work section regroups again",
+    wsChips.length >= 2 && wsChips.every(c => /WS\d/.test(c))
+    && JSON.stringify(wsChips) !== JSON.stringify(iptChips), JSON.stringify(wsChips));
+  // ⭐ the groups must ADD UP to the card above them, or the card and the chips are
+  // telling the reader two different stories about one month
+  const adds = await page.evaluate(() => {
+    const card = parseFloat(document.getElementById("kpi-vehicles").textContent) || 0;
+    const sum = Array.from(document.querySelectorAll("#kpi-breakdown .kpi-chip"))
+      .reduce((a, e) => a + (parseFloat((e.textContent.match(/([\d.,]+) veh\/d/) || [])[1] || "0") || 0), 0);
+    return { card, sum };
+  });
+  ok("⭐ the chips' vehicles add up to the card's", Math.abs(adds.card - adds.sum) < 0.51, JSON.stringify(adds));
+  await page.evaluate(() => setKpiBy("discipline"));
+  await page.waitForTimeout(600);
+  // §E's own test: no warning vocabulary anywhere inside the card
+  ok("⭐ the KPI card carries no Clash / Warning / Caution text",
+    await page.evaluate(() => !/clash|warning|caution/i.test(document.getElementById("kpi-hud").textContent)));
   const vehicles = await page.evaluate(() => document.getElementById("kpi-vehicles").textContent);
   ok("the vehicles card is a fleet size, not the movement count", /\d/.test(vehicles), vehicles);
   // the fixture leaves R-004 with no cycle time on purpose
@@ -205,43 +288,84 @@ function ok(label, cond, extra) { if (cond) pass++; else fail.push(label + (extr
   k = await vis("#kpi-hud");
   ok("the panel is still a panel, not a column down the screen", k && k.h < 340, JSON.stringify(k));
 
-  // ---- the origin / destination callouts ---------------------------------------
-  const callouts = await page.evaluate(() => Array.from(document.querySelectorAll(".od-callout"))
-    .map(e => ({ role: (e.querySelector(".od-role") || {}).textContent, name: (e.querySelector(".od-name") || {}).textContent })));
-  ok("⭐ the ends of the live routes are named on the map", callouts.length > 0, JSON.stringify(callouts));
-  ok("...at most six of them", callouts.length <= 6, String(callouts.length));
-  ok("...each with a role and a name",
-    callouts.every(c => /Origin|Destination/.test(c.role || "") && (c.name || "").length > 1), JSON.stringify(callouts));
-  ok("...and no close button on any of them",
-    await page.evaluate(() => document.querySelectorAll(".od-callout .mapboxgl-popup-close-button").length) === 0);
-  // ⭐ THE ONE THAT MATTERS, and the reason this harness exists. The first version of the
-  // callouts drew Kuusiku's box underneath Rapla's and neither name could be read; every
-  // source-level assertion passed. This measures the rendered rectangles and refuses any
-  // pair that intersects — the outcome, not the mechanism that produces it.
-  const overlaps = await page.evaluate(() => {
-    const r = Array.from(document.querySelectorAll(".od-callout")).map(e => e.getBoundingClientRect());
-    const bad = [];
-    for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) {
-      const a = r[i], b = r[j];
-      if (!(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top)) bad.push([i, j]);
-    }
-    return bad;
+  // ---- §C: the ends of the live routes, as ICONS -------------------------------
+  // 🔴 The 07 Sep name-plate assertions are gone with the plates. The emphasis is now a
+  // property on the Node feature driving a bigger image on the ONE locations layer, so
+  // what this harness checks is the rendered STATE of the source, not DOM boxes.
+  ok("⭐ no name plate is drawn on the map at all",
+    await page.evaluate(() => document.querySelectorAll(".od-callout").length) === 0);
+  const endState = () => page.evaluate(() => {
+    const d = map.getSource("routes-source")._data;
+    return d.features.filter(f => f.properties.type === "Node" && f.properties.is_end)
+      .map(f => f.properties.name).sort();
   });
-  ok("⭐ no two callouts are drawn on top of each other", overlaps.length === 0, JSON.stringify(overlaps));
+  // ⭐ the brief's own test: two materials, two fills, both still diamonds
+  const quarryIcons = await page.evaluate(() => {
+    const d = map.getSource("routes-source")._data;
+    return d.features.filter(f => f.properties.loc_kind === "Quarry")
+      .map(f => f.properties.loc_icon).sort();
+  });
+  ok("⭐ quarry diamonds keep distinct fills when materials differ",
+    new Set(quarryIcons).size === 3 && quarryIcons.every(k => k.indexOf("loc-quarry-") === 0),
+    JSON.stringify(quarryIcons));
+  const kindIcons = await page.evaluate(() => {
+    const d = map.getSource("routes-source")._data;
+    const o = {};
+    d.features.filter(f => f.properties.type === "Node")
+      .forEach(f => { (o[f.properties.loc_kind] = o[f.properties.loc_kind] || new Set()).add(f.properties.loc_icon); });
+    return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, [...v]]));
+  });
+  ok("⭐ a port does not use the compound's image",
+    (kindIcons.Port || [])[0] === "loc-port" && (kindIcons.Compound || [])[0] === "loc-compound",
+    JSON.stringify(kindIcons));
+  ok("⭐ an unknown loc_type falls to Other, not to a compound",
+    (kindIcons.Other || [])[0] === "loc-other", JSON.stringify(kindIcons));
 
-  // ⚠️ Asserted on CONTENT, not on the count. The count is not a safe proxy any more:
-  // the collision skip means an unfiltered month may already be showing fewer boxes than
-  // it has ends, so "fewer after filtering" can be true while nothing was actually
-  // dropped — and can be false while it was.
+  const ends = await endState();
+  ok("⭐ the ends of the live routes are emphasised", ends.length > 0, JSON.stringify(ends));
+  // ⚠️ the control: two locations no route touches. If they were ever emphasised the
+  // stamping is not reading the routes at all.
+  ok("...and only the ends — a location no route touches is not",
+    !ends.includes("Muuga port") && !ends.includes("Unclassified depot"), JSON.stringify(ends));
+
+  // asserted on CONTENT: which locations are emphasised, not how many
   await page.evaluate(() => { document.getElementById("filter-origin").value = "Kuusiku quarry"; applyFilters(); });
   await page.waitForTimeout(700);
-  const filtered = await page.evaluate(() => Array.from(document.querySelectorAll(".od-callout .od-name")).map(e => e.textContent));
-  ok("⭐ a filter that drops a route drops its callouts",
+  const filtered = await endState();
+  ok("⭐ a filter that drops a route drops its end emphasis",
     filtered.length > 0 && !filtered.includes("Pärnu stockpile") && !filtered.includes("Lelle compound"),
     JSON.stringify(filtered));
   await shot("03-filtered");
   await page.evaluate(() => { document.getElementById("filter-origin").value = "ALL"; applyFilters(); });
   await page.waitForTimeout(500);
+
+  // ---- §E: the warning stack ------------------------------------------------------
+  const warns = await page.evaluate(() => Array.from(document.querySelectorAll("#tl-warnings .tl-warn"))
+    .filter(e => !e.classList.contains("more"))
+    .map(e => ({ lvl: (e.querySelector(".lvl") || {}).textContent, cls: e.className, text: e.textContent })));
+  ok("⭐ §E: the stack shows warnings for the month on the playhead", warns.length > 0, JSON.stringify(warns));
+  ok("⭐ ...each labelled with its level in words",
+    warns.every(w => ["Clash", "Warning", "Caution"].indexOf(w.lvl) >= 0), JSON.stringify(warns.map(w => w.lvl)));
+  ok("§E: a stockpile past capacity is a Clash",
+    warns.some(w => w.lvl === "Clash" && /over capacity/.test(w.text)), JSON.stringify(warns.map(w => w.text)));
+  ok("§E: a Tark Tee exceed is a Warning, not a Clash",
+    warns.some(w => w.lvl === "Warning" && /Height limit/.test(w.text)), JSON.stringify(warns.map(w => w.text)));
+  // ⭐ the brief's own test: the stack's month follows #tl-range
+  const rangeMonth = await page.evaluate(() => parseInt(document.getElementById("tl-range").value));
+  ok("⭐ §E: the stack's month matches #tl-range",
+    warns.every(w => new RegExp(monthLabelOf(rangeMonth)).test(w.text)),
+    JSON.stringify({ rangeMonth, label: monthLabelOf(rangeMonth), texts: warns.map(w => w.text) }));
+  ok("⭐ §E: the stack is outside the KPI card in the DOM",
+    await page.evaluate(() => !document.getElementById("kpi-hud").contains(document.getElementById("tl-warnings"))));
+  // step a month and the stack must follow — January must not sit on screen in June
+  await page.evaluate(() => setTimelineMonth(20));
+  await page.waitForTimeout(1200);
+  const warns20 = await page.evaluate(() => Array.from(document.querySelectorAll("#tl-warnings .tl-warn"))
+    .filter(e => !e.classList.contains("more")).map(e => e.textContent));
+  ok("⭐ §E: stepping the month restamps the stack",
+    warns20.length > 0 && warns20.every(t => /Aug 2027/.test(t)), JSON.stringify(warns20));
+  await page.evaluate(() => setTimelineMonth(7));
+  await page.waitForTimeout(1000);
 
   // ---- the EVR overlay ----------------------------------------------------------
   const flowState = () => page.evaluate(() => ({
@@ -280,11 +404,25 @@ function ok(label, cond, extra) { if (cond) pass++; else fail.push(label + (extr
   ok("⭐ the EVR note says provisional and points at the click popup",
     /Provisional corridor/.test(railNote) && /Click the line/.test(railNote), railNote);
 
+  // ---- §F4: the buildings layer, and its guard -----------------------------------
+  // ⚠️ the offline stub style has NO composite source — the same shape as the Maa-amet
+  // orthophoto basemap. So this exercises the guard, which is the half that can fail
+  // silently; the layer itself only exists on a real Mapbox style.
+  const bStub = await page.evaluate(() => {
+    document.getElementById("layer-buildings").checked = true;
+    toggleBuildings(true);
+    return { layer: !!map.getLayer("buildings-3d"),
+             note: document.querySelector("#buildings-note span").textContent };
+  });
+  ok("⭐ §F4: with no composite source, nothing is added and the sidebar says why",
+    bStub.layer === false && /not available on this basemap/.test(bStub.note), JSON.stringify(bStub));
+  ok("§F4: ...and the page did not throw doing it", true);
+  await page.evaluate(() => { document.getElementById("layer-buildings").checked = false; toggleBuildings(false); });
+
   // ---- closing the timeline ------------------------------------------------------
   await page.evaluate(() => closeTimeline());
   await page.waitForTimeout(800);
-  ok("⭐ closing the timeline removes every callout",
-    await page.evaluate(() => document.querySelectorAll(".od-callout").length) === 0);
+  ok("⭐ closing the timeline removes every end emphasis", (await endState()).length === 0);
   ok("...and the marching overlay is gone", (await flowState()).vis === "none");
   ok("⭐ ...and the vehicles caveat from the last month goes with it",
     await page.evaluate(() => document.getElementById("kpi-vehicles-label").textContent) === "Vehicles needed",
