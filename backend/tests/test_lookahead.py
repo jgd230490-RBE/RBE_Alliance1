@@ -520,6 +520,252 @@ ok("days.py imports weeks and does not reimplement its writes",
 
 
 # =========================================================================== #
+#  10. SLICE 2 — context and derived figures, computed on read (2026-09-09)    #
+# =========================================================================== #
+# Fresh database. Four lines, one per case the brief's §8 names:
+#   R1/WS1  tonnes, baked both legs      -> every figure, cycle from HERE
+#   R2/WS2  tonnes, NOT baked            -> trips + tonnes only, UNBAKED flag
+#   R3/WS3  unit=vehicles, loaded only   -> trips = qty, return estimated (‡), km_trip = loaded
+#   R1/WS4  a vehicle factors.json does not know -> V07 fallback, same as month-kpis
+import derived  # noqa: E402
+reset_db()
+_as("planner123")
+db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L1", "Pit", 58.5, 24.0))
+db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L2", "Site", 58.6, 24.4))
+for _rid, _ipt in (("R1", "IPT 1"), ("R2", "IPT 2"), ("R3", "IPT 3 / IPT 6")):
+    db.execute("INSERT INTO routes (id, origin_id, dest_id, ipt) VALUES (?, ?, ?, ?)", (_rid, "L1", "L2", _ipt))
+V8 = "Rigid 8-wheeler (32t)"                                  # payload 20 t
+V12 = "N3 tractor (BC) + O4 tipping semi (DA) GCW 40/44 t"    # code V12, payload 26 t
+
+
+def _geom2(rid, prof, leg, km, hr):
+    db.execute("INSERT INTO route_geometry (tenant_id, route_id, vehicle_profile, leg, alt_index, "
+               "geometry, distance_km, duration_hr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+               ("default", rid, prof, leg, 0, "[[24,58.5],[24.4,58.6]]", km, hr))
+
+
+_geom2("R1", V8, "loaded", 30.0, 0.75)
+_geom2("R1", V8, "return", 30.0, 0.65)      # cycle 0.75 + 0.65 + 20/60 = 1.7333 h -> 5 per 10 h shift
+_geom2("R3", V12, "loaded", 30.0, 0.7)      # no return leg
+
+
+def _line2(rid, disc, sect, unit, qty, veh, ipt=None):
+    main.save_matrix_row(main.MatrixRow(
+        route_id=rid, discipline=disc, section_id=sect, material_type="Small aggregate",
+        material_description=None, vehicle_type=veh, submitted_by="tester", unit=unit,
+        status="Pending", cells=[main.Cell(month_index=m, quantity=qty) for m in MONTHS], ipt=ipt))
+    main.set_route_status(rid, main.StatusUpdate(status="Approved"), discipline=disc, section_id=sect)
+
+
+_line2("R1", "earthworks", "WS1", "t", 4000.0, V8, ipt="IPT1")
+_line2("R2", "earthworks", "WS2", "t", 800.0, V8, ipt="IPT2")
+_line2("R3", "substructure", "WS3", "vehicles", 100.0, V12, ipt="IPT3")
+_line2("R1", "earthworks", "WS4", "t", 900.0, "Ghost truck", ipt="IPT1")
+
+n_days_before = db.query("SELECT COUNT(*) AS n FROM forecast_days WHERE tenant_id = ?", (db.current_tenant(),))[0]["n"]
+res = main.list_forecast_days()
+L = {l["section_id"]: l for l in res["lines"]}
+ok("slice 2: every line carries context and week_derived, every day carries derived",
+   len(L) == 4 and all("context" in l and "week_derived" in l for l in res["lines"])
+   and all("derived" in d for l in res["lines"] for d in l["days"]))
+ok("...and the response carries totals", isinstance(res.get("totals"), dict))
+ok("🔴 computed, NOT stored — the read created exactly the day rows slice 1 would have, no more",
+   db.query("SELECT COUNT(*) AS n FROM forecast_days WHERE tenant_id = ?", (db.current_tenant(),))[0]["n"]
+   == len(DATES) * 4 and n_days_before == 0)
+ok("...no new table, no new column: sixteen tenanted tables, forecast_days' DDL unchanged",
+   len(db.TENANTED_TABLES) == 16 and "trips" not in db._TENANT_DDL["forecast_days"].lower())
+
+# ---- context chips
+c1 = L["WS1"]["context"]
+ok("context names both ends of the route and the route's own IPT",
+   c1.get("origin_name") == "Pit" and c1.get("dest_name") == "Site"
+   and c1.get("origin_id") == "L1" and c1.get("route_ipt") == "IPT 1")
+ok("...and the LINE's IPT, WS, material, vehicle and unit",
+   c1.get("ipt") == "IPT1" and c1.get("section_id") == "WS1" and c1.get("material_type") == "Small aggregate"
+   and c1.get("vehicle_type") == V8 and c1.get("unit") == "t")
+ok("vehicle_short: the EU code where factors.json has one, the de-prefixed legacy name otherwise",
+   L["WS3"]["context"].get("vehicle_short") == "V12" and c1.get("vehicle_short") == "8-wheeler (32t)")
+ok("payload is the planning figure with no fallback for a known vehicle",
+   c1.get("payload_t") == 20.0 and c1.get("payload_fallback") is None)
+ok("a baked line: baked, return_baked, both distances, km_trip = loaded + return, no ‡",
+   c1.get("baked") is True and c1.get("return_baked") is True and c1.get("distance_km") == 30.0
+   and c1.get("return_km") == 30.0 and c1.get("km_trip") == 60.0 and c1.get("cycle_mark") is None
+   and c1.get("cycle_source") == "here")
+ok("cycle_min is route_analysis' cycle in minutes (104.0 = 1.7333 h)", c1.get("cycle_min") == 104.0)
+ok("⭐ cycles_per_vehicle_day IS route_analysis().trips_per_day — floor(600 / 104) = 5",
+   c1.get("cycles_per_vehicle_day") == 5 and c1.get("shift_hours") == 10.0)
+ab = main.routes_analysis_batch(route_ids="R1")
+ok("⭐ ...and it equals what /api/routes/analysis-batch reports for the same (route, vehicle)",
+   (ab.get("analysis", {}).get("R1", {}).get(V8) or {}).get("trips_per_day") == c1.get("cycles_per_vehicle_day")
+   and (ab.get("analysis", {}).get("R1", {}).get(V8) or {}).get("loaded_km") == c1.get("distance_km"))
+ok("a baked line raises no flag", c1.get("flags") == [])
+
+# ---- the formulas, brief §4, on a weekday of the baked tonnes line
+wk1 = L["WS1"]["week"]
+q = float(wk1["planned_qty"]) / NWD
+import math as _m
+wd = [d for d in L["WS1"]["days"] if datetime.date.fromisoformat(d["day_date"]).weekday() <= 4]
+we = [d for d in L["WS1"]["days"] if datetime.date.fromisoformat(d["day_date"]).weekday() > 4]
+f = wd[0]["derived"]
+exp_trips = int(_m.ceil(round(q / 20.0, 9)))
+exp_veh = int(_m.ceil(exp_trips / 5))
+ok("trips = ceil(qty / payload)", f.get("trips") == exp_trips and exp_trips > 0, str(f))
+ok("tonnes = the quantity, for a line typed in t", abs(f.get("tonnes") - q) < 1e-6)
+ok("vehicles_need = ceil(trips / cycles_per_veh)", f.get("vehicles") == exp_veh, str(f))
+ok("km_day = trips × km_trip (both legs)", abs(f.get("km_day") - exp_trips * 60.0) < 1e-6)
+ok("km_per_vehicle = km_day / vehicles", abs(f.get("km_per_vehicle") - round(exp_trips * 60.0 / exp_veh, 2)) < 1e-6)
+ok("⭐ tonne_km = tonnes × LOADED distance only — 30, not the 60 km round trip",
+   abs(f.get("tonne_km") - round(q * 30.0, 1)) < 1e-6)
+ok("every weekday of a derived week is identical", all(d["derived"] == f for d in wd))
+ok("Sat/Sun: 0 trips, 0 vehicles, 0 km — zeros, because the day IS planned at 0",
+   all(d["derived"]["trips"] == 0 and d["derived"]["vehicles"] == 0 and d["derived"]["km_day"] == 0.0
+       for d in we))
+w1 = L["WS1"]["week_derived"]
+ok("week_derived sums the days and takes the PEAK vehicles, not the sum",
+   w1.get("trips") == exp_trips * NWD and w1.get("vehicles_peak") == exp_veh
+   and abs(w1.get("tonne_km") - round(q * 30.0 * NWD, 1)) < 0.11
+   and abs(w1.get("km") - exp_trips * 60.0 * NWD) < 1e-6)
+
+# ---- the ceiling does not round up a float artefact
+ok("⭐ ceil(3.0000000000000004) is 3, not 4", derived._ceil(3.0000000000000004) == 3 and derived._ceil(3.01) == 4)
+
+# ---- unbaked: trips and tonnes only, UNBAKED flag, nothing invented
+c2 = L["WS2"]["context"]
+f2 = [d for d in L["WS2"]["days"] if datetime.date.fromisoformat(d["day_date"]).weekday() <= 4][0]["derived"]
+q2 = float(L["WS2"]["week"]["planned_qty"]) / NWD
+ok("🔴 an unbaked line still computes trips from the planning payload",
+   f2.get("trips") == int(_m.ceil(round(q2 / 20.0, 9))) and f2.get("trips") > 0)
+ok("🔴 ...but vehicles, km and t·km are None — not 0, not a 45 km/h guess",
+   f2.get("vehicles") is None and f2.get("km_day") is None and f2.get("km_per_vehicle") is None
+   and f2.get("tonne_km") is None)
+ok("...its context says so: not baked, no distance, no cycle, and the UNBAKED flag",
+   c2.get("baked") is False and c2.get("distance_km") is None and c2.get("km_trip") is None
+   and c2.get("cycle_min") is None and c2.get("cycle_source") is None
+   and c2.get("cycles_per_vehicle_day") is None and c2.get("flags") == [derived.FLAG_UNBAKED])
+ok("...and its week_derived carries None for every distance figure",
+   L["WS2"]["week_derived"].get("vehicles_peak") is None and L["WS2"]["week_derived"].get("km") is None
+   and L["WS2"]["week_derived"].get("trips") > 0)
+derived_src = open(os.path.join(BACKEND, "derived.py"), encoding="utf-8").read()
+ok("🔴 derived.py never reads avg_haul_speed_kmh — the fallback speed is not applied anywhere",
+   "avg_haul_speed" not in derived_src)
+ok("🔴 derived.py writes nothing", "INSERT" not in derived_src and "UPDATE" not in derived_src)
+
+# ---- unit = vehicles, loaded leg only
+c3, l3 = L["WS3"]["context"], L["WS3"]
+f3 = [d for d in l3["days"] if datetime.date.fromisoformat(d["day_date"]).weekday() <= 4][0]
+q3 = float(l3["week"]["planned_qty"]) / NWD
+ok("unit=vehicles: trips = ceil(qty) itself, not qty / payload",
+   f3["derived"]["trips"] == int(_m.ceil(round(q3, 9))))
+ok("...and tonnes = qty × the same payload trips use (26 t for V12)",
+   abs(f3["derived"]["tonnes"] - q3 * 26.0) < 1e-6 and c3.get("payload_t") == 26.0)
+ok("⭐ loaded leg only: baked, return NOT baked, cycle marked ‡, km_trip = loaded leg alone",
+   c3.get("baked") is True and c3.get("return_baked") is False and c3.get("cycle_mark") == "‡"
+   and c3.get("cycle_source") == "here_return_estimated" and c3.get("km_trip") == 30.0
+   and c3.get("return_km") is None)
+ra3 = network.route_analysis("R3", profiles=[V12])["rows"][0]
+ok("...its cycle is route_analysis' return-estimated cycle, not a re-derivation",
+   ra3.get("return_estimated") is True and c3.get("cycles_per_vehicle_day") == ra3.get("trips_per_day")
+   and c3.get("cycle_min") == round(ra3["cycle_hr"] * 60.0, 1))
+ok("...and km_day uses that one-leg km_trip", abs(f3["derived"]["km_day"] - f3["derived"]["trips"] * 30.0) < 1e-6)
+ok("a loaded-only bake is still 'baked' — no UNBAKED flag", c3.get("flags") == [])
+
+# ---- unknown vehicle: the month-kpis fallback, and the two agree
+c4 = L["WS4"]["context"]
+kp = {l["section_id"]: l for l in main.public_month_kpis(month=MI, unit="t")["lines"]}
+ok("an unknown vehicle falls back to the first planning vehicle's payload and names it",
+   c4.get("payload_fallback") == kp["WS4"].get("payload_fallback") and c4.get("payload_fallback") is not None
+   and c4.get("payload_t") == kp["WS4"].get("payload_t") == 18.0)
+ok("⭐ month-kpis and the Look-ahead agree on payload for every line this month",
+   all(L[s]["context"]["payload_t"] == kp[s]["payload_t"] for s in ("WS1", "WS2", "WS3", "WS4")))
+ok("⭐ ...and on movements-per-vehicle-per-day, baked or not",
+   all(L[s]["context"]["cycles_per_vehicle_day"] == kp[s]["trips_per_vehicle_day"]
+       for s in ("WS1", "WS2", "WS3", "WS4")))
+ok("an unknown vehicle on an unbaked pairing has no cycle, so no vehicles",
+   c4.get("baked") is False and derived.FLAG_UNBAKED in c4.get("flags", []))
+
+# ---- totals: what the KPI strip reads
+T = res["totals"]
+exp_planned_t = sum(l["week_derived"]["tonnes"] for l in res["lines"])
+exp_trips_all = sum(l["week_derived"]["trips"] for l in res["lines"])
+ok("totals.planned_t is the sum of every line's tonnes, unbaked included",
+   abs(T.get("planned_t") - exp_planned_t) < 1e-6 and T.get("lines") == 4)
+ok("totals.trips is the sum of every line's trips, unbaked included", T.get("trips") == exp_trips_all)
+peak_day_veh = f.get("vehicles") + f3["derived"]["vehicles"]
+ok("⭐ totals.vehicles_peak is the largest SAME-DAY sum across baked lines (R1 + R3 on a weekday)",
+   T.get("vehicles_peak") == peak_day_veh and T.get("vehicles_peak_date") in ISO
+   and datetime.date.fromisoformat(T["vehicles_peak_date"]).weekday() <= 4)
+ok("...and it is not the sum of per-line peaks when those fall on different days (same here, asserted equal)",
+   T.get("vehicles_peak") == max(T["vehicles_by_day"].values()))
+ok("totals.tonne_km and km omit BOTH unbaked lines (WS2, and WS4 whose vehicle R1 is not baked for), and say so",
+   T.get("unbaked_lines") == 2 and T.get("excludes_unbaked") is True
+   and abs(T.get("tonne_km") - (w1["tonne_km"] + l3["week_derived"]["tonne_km"])) < 1e-6,
+   f"tonne_km={T.get('tonne_km')} w1={w1['tonne_km']} l3={l3['week_derived']['tonne_km']} unbaked={T.get('unbaked_lines')} lines={[ (l['section_id'], l['context']['baked'], l['week_derived']['tonne_km']) for l in res['lines']]}")
+
+# ---- a quantity that does NOT divide by the payload: ceil, not floor (the seeded 200 t/day did)
+first_wd_iso = wd[0]["day_date"]
+main.edit_forecast_day(main.DayEdit(route_id="R1", month_index=MI, discipline="earthworks",
+                                    section_id="WS1", day_date=first_wd_iso, planned_qty=210.0))
+_d210 = [d for d in {l["section_id"]: l for l in main.list_forecast_days()["lines"]}["WS1"]["days"]
+         if d["day_date"] == first_wd_iso][0]["derived"]
+ok("⭐ 210 t on a 20 t payload is 11 trips — ceil, not floor (10)", _d210.get("trips") == 11, str(_d210))
+ok("...and 11 trips at 5 cycles is 3 vehicles, not 2", _d210.get("vehicles") == 3)
+
+# ---- two lines peaking on DIFFERENT days: the KPI is the largest same-day sum, not a sum of peaks
+second_wd_iso = wd[1]["day_date"]
+main.edit_forecast_day(main.DayEdit(route_id="R3", month_index=MI, discipline="substructure",
+                                    section_id="WS3", day_date=second_wd_iso, planned_qty=q3 * 40))
+main.edit_forecast_day(main.DayEdit(route_id="R1", month_index=MI, discipline="earthworks",
+                                    section_id="WS1", day_date=second_wd_iso, planned_qty=0.0))
+_rp = main.list_forecast_days()
+_Lp = {l["section_id"]: l for l in _rp["lines"]}
+_sum_of_peaks = sum((l["week_derived"].get("vehicles_peak") or 0) for l in _rp["lines"])
+ok("⭐ totals.vehicles_peak is strictly LESS than the sum of per-line peaks when they fall on different days",
+   _rp["totals"]["vehicles_peak"] == max(_rp["totals"]["vehicles_by_day"].values())
+   and _rp["totals"]["vehicles_peak"] < _sum_of_peaks
+   and _rp["totals"]["vehicles_peak_date"] == second_wd_iso
+   and _Lp["WS3"]["week_derived"]["vehicles_peak"] > f3["derived"]["vehicles"],
+   f"peak={_rp['totals']['vehicles_peak']} sum={_sum_of_peaks} by_day={_rp['totals']['vehicles_by_day']}")
+# put the two days back so the assertions below start from the derived week
+main.edit_forecast_day(main.DayEdit(route_id="R3", month_index=MI, discipline="substructure",
+                                    section_id="WS3", day_date=second_wd_iso, planned_qty=q3))
+main.edit_forecast_day(main.DayEdit(route_id="R1", month_index=MI, discipline="earthworks",
+                                    section_id="WS1", day_date=second_wd_iso, planned_qty=q))
+
+# ---- computed on READ: edit a day and the figures follow without a write of their own
+main.edit_forecast_day(main.DayEdit(route_id="R1", month_index=MI, discipline="earthworks",
+                                    section_id="WS1", day_date=first_wd_iso, planned_qty=0.0))
+res_b = main.list_forecast_days()
+Lb = {l["section_id"]: l for l in res_b["lines"]}
+db0 = [d for d in Lb["WS1"]["days"] if d["day_date"] == first_wd_iso][0]["derived"]
+ok("⭐ zero a day and its trips, vehicles and km read 0 on the next read — nothing was stored to update",
+   db0.get("trips") == 0 and db0.get("vehicles") == 0 and db0.get("km_day") == 0.0 and db0.get("tonne_km") == 0.0)
+ok("...the week's trips drop by exactly that day's trips",
+   Lb["WS1"]["week_derived"]["trips"] == w1["trips"] - exp_trips)
+ok("...and totals.trips drops by the same amount", res_b["totals"]["trips"] == T["trips"] - exp_trips)
+
+# ---- the access filter comes first: totals are for what the caller can see
+os.environ.update({"IPT1_CODE": "one-secret", "IPT2_CODE": "two-secret",
+                   "PLANNER_CODE": "plan-secret", "ADMIN_CODE": "adm-secret"})
+_as("two-secret")
+res2 = main.list_forecast_days()
+ok("⭐ an IPT2 code's totals cover ONLY IPT2's line — one line, and it is the unbaked one",
+   res2["totals"].get("lines") == 1 and res2["totals"].get("unbaked_lines") == 1
+   and res2["totals"].get("vehicles_peak") == 0 and res2["totals"].get("vehicles_peak_date") is None
+   and {l["section_id"] for l in res2["lines"]} == {"WS2"})
+for _v in ("IPT1_CODE", "IPT2_CODE", "PLANNER_CODE", "ADMIN_CODE"):
+    os.environ.pop(_v, None)
+_as("planner123")
+
+# ---- the endpoint is the only place it is wired, and it is after the filter
+main_src = open(os.path.join(BACKEND, "main.py"), encoding="utf-8").read()
+_i_filter = main_src.find("access.filter_lines(res[\"lines\"], acc)")
+_i_dec = main_src.find("derived.decorate(res)")
+ok("🔴 derived.decorate() runs AFTER access.filter_lines() in the days endpoint",
+   0 < _i_filter < _i_dec and main_src.count("derived.decorate(") == 1)
+ok("no € anywhere yet — rates are slice 5", "rate_eur" not in derived_src and "eur" not in derived_src.lower().replace("neur", ""))
+
+
+# =========================================================================== #
 print()
 print(f"{PASS} passed, {len(FAIL)} failed")
 for f in FAIL:
