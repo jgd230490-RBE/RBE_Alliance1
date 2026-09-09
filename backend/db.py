@@ -611,6 +611,38 @@ def init_weeks_db():
         conn.close()
 
 
+def init_lookahead_db():
+    """
+    Look-ahead v2 slices 3-5, 2026-09-09. Five planning columns on `routes` and three
+    on `forecast_weeks`. No new table. Runs after init_weeks_db() (forecast_weeks must
+    exist to be ALTERed) and BEFORE init_tenant(), for the reason every ALTER in this
+    file repeats: the SQLite rebuild keeps the intersection of live columns and the
+    DDL, so each column is in the DDL as well as here. Idempotent — a second boot
+    rolls back harmlessly on SQLite and is a no-op on Postgres.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        for table, col, typ in (("routes", "max_vehicles_per_day", "INTEGER"),
+                                ("routes", "rate_eur_per_load", "REAL"),
+                                ("routes", "rate_eur_per_t", "REAL"),
+                                ("routes", "rate_eur_per_km", "REAL"),
+                                ("routes", "km_basis", "TEXT"),
+                                ("forecast_weeks", "actual_cost_eur", "REAL"),
+                                ("forecast_weeks", "calibrated_at", "TEXT"),
+                                ("forecast_weeks", "calibrated_qty", "REAL")):
+            try:
+                if IS_PG:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {typ}")
+                else:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+                conn.commit()
+            except Exception:
+                conn.rollback()  # column already present — fine
+    finally:
+        conn.close()
+
+
 def init_config_db():
     """2.5b. The config table. No columns are ALTERed on, so order does not matter here."""
     conn = get_conn()
@@ -713,6 +745,16 @@ _TENANT_DDL = {
             -- SQLite tenant rebuild copies only the intersection and drops them.
             origin_gate_id    TEXT,
             dest_gate_id      TEXT,
+            -- 2026-09-09 (Look-ahead v2 slices 3-5). All nullable and never seeded.
+            -- A typed planning cap (a flag never a block) and three contract rates
+            -- which are SUMMED where filled. km_basis says which distance the
+            -- per-km rate and t.km use: 'round_trip' or 'loaded'. Listed here AND
+            -- ALTERed in init_lookahead_db() or the SQLite tenant rebuild drops them.
+            max_vehicles_per_day INTEGER,
+            rate_eur_per_load REAL,
+            rate_eur_per_t    REAL,
+            rate_eur_per_km   REAL,
+            km_basis          TEXT,
             PRIMARY KEY (tenant_id, id)
         )
     """,
@@ -928,6 +970,14 @@ _TENANT_DDL = {
             -- there. Listed here AND ALTERed in init_weeks_db() or the SQLite tenant
             -- rebuild drops it.
             actual_source TEXT,
+            -- 2026-09-09 (Look-ahead v2 slices 3-5). The confirmed cost of the week in
+            -- euros as typed beside the actual quantity. And what calibrate has already
+            -- carried out of this week: calibrated_qty is the variance applied so far so
+            -- a second press carries only the DIFFERENCE. Both ALTERed in
+            -- init_lookahead_db() as well.
+            actual_cost_eur REAL,
+            calibrated_at TEXT,
+            calibrated_qty REAL,
             created_at   TEXT,
             updated_at   TEXT,
             PRIMARY KEY (tenant_id, route_id, month_index, discipline, section_id,

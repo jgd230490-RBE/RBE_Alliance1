@@ -27,7 +27,14 @@ THE RULES THAT MATTER
         km_day         = trips * km_trip
         km_per_vehicle = km_day / vehicles_need
         tonne_km       = tonnes(qty) * distance_km     -- loaded leg only
-   € is slice 5 (rates on the route) and is not computed here.
+   € (slice 5, 2026-09-09 evening) is the SUM of the three route rates where filled —
+   not the brief's "first non-null", because the commonest Estonian quote is a base
+   charge per load PLUS a per-km rate and an exclusive rule cannot hold it:
+        eur = trips × rate_eur_per_load + tonnes × rate_eur_per_t
+              + trips × basis_km × rate_eur_per_km
+   `basis_km` follows the route's km_basis: 'round_trip' (loaded + baked return —
+   the default, because a haulier charges the empty leg too) or 'loaded'. The human
+   chose per-route on 09 Sep (C20), and the same basis is used for t·km.
 
 3. **A route that is not baked for the line's vehicle gets trips and tonnes only.**
    Decided by the human on 09 Sep: "the route has to be baked — if not, show a
@@ -110,18 +117,39 @@ def vehicle_short(vehicle, factors):
     return vehicle
 
 
+KM_BASES = ("round_trip", "loaded")
+
+
+def km_basis_of(route):
+    """The route's km basis, defaulting to round_trip — what a haulier charges."""
+    b = (route or {}).get("km_basis")
+    return b if b in KM_BASES else "round_trip"
+
+
+def _num(v):
+    try:
+        return float(v) if v is not None and v != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _routes_and_names():
-    """{route_id: {origin_id, dest_id, ipt, origin_name, dest_name}} for the tenant."""
+    """{route_id: {origin_id, dest_id, ipt, names, rates, cap, km_basis}} for the tenant."""
     names = {r["id"]: r["name"] for r in db.query(
         "SELECT id, name FROM locations WHERE tenant_id = ?", (db.current_tenant(),))}
     out = {}
-    for r in db.query("SELECT id, origin_id, dest_id, ipt FROM routes WHERE tenant_id = ?",
-                      (db.current_tenant(),)):
+    for r in db.query("SELECT * FROM routes WHERE tenant_id = ?", (db.current_tenant(),)):
         out[r["id"]] = {
             "origin_id": r.get("origin_id"), "dest_id": r.get("dest_id"),
             "route_ipt": r.get("ipt"),
             "origin_name": names.get(r.get("origin_id")),
             "dest_name": names.get(r.get("dest_id")),
+            "max_vehicles_per_day": (int(r["max_vehicles_per_day"])
+                                     if r.get("max_vehicles_per_day") is not None else None),
+            "rate_eur_per_load": _num(r.get("rate_eur_per_load")),
+            "rate_eur_per_t": _num(r.get("rate_eur_per_t")),
+            "rate_eur_per_km": _num(r.get("rate_eur_per_km")),
+            "km_basis": km_basis_of(r),
         }
     return out
 
@@ -173,6 +201,11 @@ def line_context(line, factors, routes=None, cache=None):
     flags = []
     if not baked and week_qty > 0:
         flags.append(FLAG_UNBAKED)
+    basis = rt.get("km_basis") or "round_trip"
+    basis_km = (dist if basis == "loaded" else km_trip) if baked else None
+    rates = {"per_load": rt.get("rate_eur_per_load"), "per_t": rt.get("rate_eur_per_t"),
+             "per_km": rt.get("rate_eur_per_km")}
+    rate_set = any(v is not None for v in rates.values())
     return {
         "origin_id": rt.get("origin_id"), "origin_name": rt.get("origin_name"),
         "dest_id": rt.get("dest_id"), "dest_name": rt.get("dest_name"),
@@ -197,6 +230,11 @@ def line_context(line, factors, routes=None, cache=None):
         # brief: cycles_per_veh = floor(shift_min / cycle_min). route_analysis() already
         # holds exactly that as trips_per_day; reading it is what keeps every surface equal
         "cycles_per_vehicle_day": (int(row.get("trips_per_day") or 0) if baked else None),
+        # slices 3-5: the route's planning cap and contract rates, as typed (never seeded)
+        "max_vehicles_per_day": rt.get("max_vehicles_per_day"),
+        "rates": rates, "rate_set": rate_set,
+        "km_basis": basis,
+        "basis_km": (round(basis_km, 2) if basis_km is not None else None),
         "flags": flags,
     }
 
@@ -226,19 +264,32 @@ def day_figures(qty, ctx, factors):
     else:
         trips = _ceil(t / payload) if payload > 0 else 0
     out = {"tonnes": round(t, 3), "trips": trips,
-           "vehicles": None, "km_day": None, "km_per_vehicle": None, "tonne_km": None}
+           "vehicles": None, "km_day": None, "km_per_vehicle": None, "tonne_km": None,
+           "eur": None, "eur_partial": False}
+    rates = ctx.get("rates") or {}
+    per_load, per_t, per_km = rates.get("per_load"), rates.get("per_t"), rates.get("per_km")
     if not ctx.get("baked"):
+        # no distance ⇒ the per-km term cannot be priced; the other two still can, and
+        # the result says it is partial rather than pretending to be the whole cost
+        if per_load is not None or per_t is not None:
+            out["eur"] = round(trips * (per_load or 0) + t * (per_t or 0), 2)
+            out["eur_partial"] = per_km is not None
         return out
     cycles = max(int(ctx.get("cycles_per_vehicle_day") or 0), 1)
     vehicles = _ceil(trips / cycles) if trips > 0 else 0
     km_trip = float(ctx.get("km_trip") or 0)
+    basis_km = float(ctx.get("basis_km") if ctx.get("basis_km") is not None else km_trip)
     km_day = trips * km_trip
     out.update({
         "vehicles": vehicles,
         "km_day": round(km_day, 2),
         "km_per_vehicle": round(km_day / vehicles, 2) if vehicles > 0 else 0.0,
-        "tonne_km": round(t * float(ctx.get("distance_km") or 0), 1),
+        # t·km on the route's chosen basis (C20, decided per route on 09 Sep)
+        "tonne_km": round(t * basis_km, 1),
     })
+    if ctx.get("rate_set"):
+        out["eur"] = round(trips * (per_load or 0) + t * (per_t or 0)
+                           + trips * basis_km * (per_km or 0), 2)
     return out
 
 
@@ -256,24 +307,30 @@ def decorate(res, factors=None):
     cache = {}
     by_day = {}                                  # date -> summed vehicles across lines
     tot = {"planned_t": 0.0, "trips": 0, "tonne_km": 0.0, "km": 0.0,
-           "lines": 0, "unbaked_lines": 0}
+           "lines": 0, "unbaked_lines": 0, "eur": 0.0, "eur_lines": 0, "eur_partial": False}
     for line in res.get("lines", []) or []:
         ctx = line_context(line, factors, routes=routes, cache=cache)
         line["context"] = ctx
         wk = {"tonnes": 0.0, "trips": 0, "vehicles_peak": (0 if ctx["baked"] else None),
               "km": (0.0 if ctx["baked"] else None),
-              "tonne_km": (0.0 if ctx["baked"] else None)}
+              "tonne_km": (0.0 if ctx["baked"] else None),
+              "eur": None, "eur_partial": False}
         for d in line.get("days", []) or []:
             f = day_figures(d.get("planned_qty"), ctx, factors)
             d["derived"] = f
             wk["tonnes"] += f["tonnes"]
             wk["trips"] += f["trips"]
+            if f["eur"] is not None:
+                wk["eur"] = (wk["eur"] or 0.0) + f["eur"]
+                wk["eur_partial"] = wk["eur_partial"] or f["eur_partial"]
             if ctx["baked"]:
                 wk["vehicles_peak"] = max(wk["vehicles_peak"], f["vehicles"] or 0)
                 wk["km"] += f["km_day"] or 0.0
                 wk["tonne_km"] += f["tonne_km"] or 0.0
                 by_day[d["day_date"]] = by_day.get(d["day_date"], 0) + (f["vehicles"] or 0)
         wk["tonnes"] = round(wk["tonnes"], 3)
+        if wk["eur"] is not None:
+            wk["eur"] = round(wk["eur"], 2)
         if ctx["baked"]:
             wk["km"] = round(wk["km"], 2)
             wk["tonne_km"] = round(wk["tonne_km"], 1)
@@ -285,6 +342,10 @@ def decorate(res, factors=None):
         tot["lines"] += 1
         if FLAG_UNBAKED in ctx["flags"]:
             tot["unbaked_lines"] += 1
+        if wk["eur"] is not None:
+            tot["eur"] += wk["eur"]
+            tot["eur_lines"] += 1
+            tot["eur_partial"] = tot["eur_partial"] or wk["eur_partial"]
     peak_date = max(by_day, key=lambda k: by_day[k]) if by_day else None
     res["totals"] = {
         "planned_t": round(tot["planned_t"], 3),
@@ -299,5 +360,10 @@ def decorate(res, factors=None):
         "unbaked_lines": tot["unbaked_lines"],
         # every distance figure above omits unbaked lines; say so where the KPI is read
         "excludes_unbaked": tot["unbaked_lines"] > 0,
+        # € only where a rate is typed: None when no line has one, so a KPI can say
+        # "rate not set" instead of printing €0
+        "eur": (round(tot["eur"], 2) if tot["eur_lines"] else None),
+        "eur_lines": tot["eur_lines"],
+        "eur_partial": tot["eur_partial"],
     }
     return res

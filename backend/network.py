@@ -1466,9 +1466,71 @@ def routes_status():
             # route, and it is what makes the route table able to show the reason.
             "origin_gate_id": r.get("origin_gate_id"),
             "dest_gate_id": r.get("dest_gate_id"),
+            # Look-ahead v2 slices 3-5: the planning cap and contract rates, as typed
+            "max_vehicles_per_day": r.get("max_vehicles_per_day"),
+            "rate_eur_per_load": r.get("rate_eur_per_load"),
+            "rate_eur_per_t": r.get("rate_eur_per_t"),
+            "rate_eur_per_km": r.get("rate_eur_per_km"),
+            "km_basis": (r.get("km_basis") or "round_trip"),
             "gate_blockers": gates.bake_blockers(r, o, d, gates_by_loc),
             "profiles": profs,
         })
+    return out
+
+
+PLANNING_FIELDS = ("max_vehicles_per_day", "rate_eur_per_load", "rate_eur_per_t",
+                   "rate_eur_per_km", "km_basis")
+
+
+def set_route_planning(route_id, given, **vals):
+    """
+    Look-ahead v2 slices 3-5 (2026-09-09): the typed planning cap and contract rates on
+    ONE route. Only the fields in `given` are written; a blank clears. Nothing here is
+    seeded and nothing here touches geometry, gates, forecasts or weeks — these are
+    planning inputs, and the cap is a FLAG on the Look-ahead, never a block.
+    """
+    given = set(given or ())
+    tenant = db.current_tenant()
+    cur = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?", (tenant, route_id))
+    if not cur:
+        return {"error": "route not found"}
+    cur = cur[0]
+    new = {}
+    for f in PLANNING_FIELDS:
+        if f not in given:
+            new[f] = cur.get(f)
+            continue
+        v = vals.get(f)
+        if v is None or v == "":
+            new[f] = None
+        elif f == "km_basis":
+            if v not in ("round_trip", "loaded"):
+                return {"error": "km_basis must be round_trip or loaded"}
+            new[f] = v
+        elif f == "max_vehicles_per_day":
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                return {"error": "max_vehicles_per_day must be a whole number"}
+            if iv < 0:
+                return {"error": "max_vehicles_per_day cannot be negative"}
+            new[f] = iv
+        else:
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return {"error": f"{f} must be a number"}
+            if fv < 0:
+                return {"error": f"{f} cannot be negative"}
+            new[f] = fv
+    db.execute(
+        "UPDATE routes SET max_vehicles_per_day = ?, rate_eur_per_load = ?, rate_eur_per_t = ?, "
+        "rate_eur_per_km = ?, km_basis = ? WHERE tenant_id = ? AND id = ?",
+        (new["max_vehicles_per_day"], new["rate_eur_per_load"], new["rate_eur_per_t"],
+         new["rate_eur_per_km"], new["km_basis"], tenant, route_id))
+    out = {"id": route_id}
+    out.update(new)
+    out["km_basis"] = new["km_basis"] or "round_trip"
     return out
 
 

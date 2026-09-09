@@ -121,6 +121,32 @@ def commit_bucket(start_year=None, today=None):
     return weeks.editable_week(sy, today=today)
 
 
+#: Which buckets may carry days. 'commit' is the bucket containing today (the brief's
+#: rule). 'next' is the bucket after it — added 2026-09-09 for the Thursday process:
+#: "we may confirm next week's look-ahead on a Thursday for next week's deliveries."
+#: Days for 'next' are materialised only when a caller asks for that bucket, so the
+#: default read is exactly the brief's.
+DAY_BUCKETS = ("commit", "next")
+
+
+def bucket_of(name, start_year=None, today=None):
+    """(month_index, week_index) for a DAY_BUCKETS name. Unknown names read as 'commit'."""
+    mi, wi = commit_bucket(start_year, today)
+    if mi is None:
+        return None, None
+    if name == "next":
+        return weeks.next_week(mi, wi)
+    return mi, wi
+
+
+def day_buckets(start_year=None, today=None):
+    """Every (month_index, week_index) that may carry days, commit first."""
+    mi, wi = commit_bucket(start_year, today)
+    if mi is None:
+        return []
+    return [(mi, wi), weeks.next_week(mi, wi)]
+
+
 def split_week(planned_qty, dates):
     """
     Rule 2 as a function: {date: planned} with the week's quantity spread evenly over the
@@ -166,7 +192,8 @@ def _decorate_day(row, week):
     return row
 
 
-def list_days(from_date=None, to_date=None, route_id=None, start_year=None, today=None):
+def list_days(from_date=None, to_date=None, route_id=None, start_year=None, today=None,
+              bucket="commit"):
     """
     The commit week, day by day, grouped by forecast line.
 
@@ -181,10 +208,11 @@ def list_days(from_date=None, to_date=None, route_id=None, start_year=None, toda
     `from_date` / `to_date` clip the days returned; the default is the whole bucket. They
     do not widen it — there are no days outside the commit week to return.
     """
-    mi, wi = commit_bucket(start_year, today)
+    cmi, cwi = commit_bucket(start_year, today)
+    mi, wi = bucket_of(bucket, start_year, today)
     if mi is None:
-        return {"commit_week": None, "lines": []}
-    materialise_commit_week(start_year=start_year, today=today)
+        return {"commit_week": None, "bucket": bucket, "lines": []}
+    materialise_commit_week(start_year=start_year, today=today, bucket=bucket)
     dates = bucket_dates(mi, wi, start_year)
     lo = _date(from_date) if from_date else dates[0]
     hi = _date(to_date) if to_date else dates[-1]
@@ -213,6 +241,10 @@ def list_days(from_date=None, to_date=None, route_id=None, start_year=None, toda
     return {"commit_week": {"month_index": mi, "week_index": wi,
                             "from": _iso(dates[0]), "to": _iso(dates[-1]),
                             "weekdays": len(weekdays_in(dates)), "days": len(dates)},
+            # which bucket this is, and where today's bucket sits, so a UI switched to
+            # 'next' can still say which week contains today
+            "bucket": ("next" if bucket == "next" else "commit"),
+            "today_week": {"month_index": cmi, "week_index": cwi},
             "lines": out}
 
 
@@ -267,15 +299,16 @@ def materialise_week_days(route_id, month_index, discipline, section_id, week_in
     return {"created": created, "refreshed": refreshed, "kept": kept}
 
 
-def materialise_commit_week(start_year=None, today=None):
+def materialise_commit_week(start_year=None, today=None, bucket="commit"):
     """
-    Days for every Approved line's week row in the commit bucket. Idempotent.
+    Days for every Approved line's week row in ONE bucket — the commit bucket by
+    default, or the one after it when asked (`bucket="next"`). Idempotent.
 
-    Nothing outside the bucket is touched, and a line whose parent month is not Approved
+    Nothing outside that bucket is touched, and a line whose parent month is not Approved
     has no week row and therefore gets no days — the Pending case falls out of rule 1 of
     weeks.py rather than needing its own check here.
     """
-    mi, wi = commit_bucket(start_year, today)
+    mi, wi = bucket_of(bucket, start_year, today)
     out = {"commit_week": {"month_index": mi, "week_index": wi},
            "created": 0, "refreshed": 0, "kept": 0}
     if mi is None:
@@ -294,10 +327,19 @@ def materialise_commit_week(start_year=None, today=None):
 #  Writes                                                                      #
 # --------------------------------------------------------------------------- #
 def _in_commit_bucket(month_index, day, start_year=None, today=None):
-    mi, wi = commit_bucket(start_year, today)
-    if mi is None or int(month_index) != int(mi):
-        return False, mi, wi
-    return _date(day) in set(bucket_dates(mi, wi, start_year)), mi, wi
+    """
+    (ok, month_index, week_index) — is this day in a bucket that may carry days, and
+    which one. Checks the commit bucket first, then the next one (the Thursday case).
+    When neither matches, the commit bucket is returned so the error can name it.
+    """
+    buckets = day_buckets(start_year, today)
+    if not buckets:
+        return False, None, None
+    d = _date(day)
+    for mi, wi in buckets:
+        if int(month_index) == int(mi) and d in set(bucket_dates(mi, wi, start_year)):
+            return True, mi, wi
+    return False, buckets[0][0], buckets[0][1]
 
 
 def set_day(route_id, month_index, discipline, section_id, day_date, planned_qty,
@@ -312,8 +354,8 @@ def set_day(route_id, month_index, discipline, section_id, day_date, planned_qty
     """
     ok, mi, wi = _in_commit_bucket(month_index, day_date, start_year, today)
     if not ok:
-        return {"error": "that day is not in the commit week — only the week that "
-                         "contains today has editable days",
+        return {"error": "that day is not in the commit week or the week after it — "
+                         "only those two buckets have editable days",
                 "commit_week": {"month_index": mi, "week_index": wi}}
     w = _week_row(route_id, month_index, discipline, section_id, wi)
     if not w:
@@ -419,9 +461,8 @@ def confirm_week(route_id, month_index, discipline, section_id, week_index,
                              by=by, flags=flags)
     if res.get("error"):
         return res
-    mi, wi = commit_bucket(start_year, today)
     stamped = 0
-    if mi is not None and int(month_index) == int(mi) and int(week_index) == int(wi):
+    if (int(month_index), int(week_index)) in [(int(a), int(b)) for a, b in day_buckets(start_year, today)]:
         materialise_week_days(route_id, month_index, discipline, section_id, week_index)
         dates = [_iso(d) for d in bucket_dates(month_index, week_index, start_year)]
         marks = ",".join("?" * len(dates))
@@ -464,9 +505,7 @@ def calibrate(route_id, month_index, discipline, section_id, week_index,
     Weeks after next are never touched.
     """
     nm, nw = weeks.next_week(month_index, week_index)
-    mi, wi = commit_bucket(start_year, today)
-    target_is_commit = (mi is not None and int(nm) == int(mi) and int(nw) == int(nw)
-                        and int(nw) == int(wi))
+    target_is_commit = (int(nm), int(nw)) in [(int(a), int(b)) for a, b in day_buckets(start_year, today)]
     before = _week_row(route_id, nm, discipline, section_id, nw)
     before_qty = float(before.get("planned_qty") or 0) if before else None
 
@@ -482,8 +521,9 @@ def calibrate(route_id, month_index, discipline, section_id, week_index,
 
     if not target_is_commit:
         res["spread"] = {"applied": False,
-                         "note": "the calibrated week is not the commit week, so it has "
-                                 "no days to spread across — the week total was written"}
+                         "note": "the calibrated week is neither the commit week nor the "
+                                 "one after it, so it has no days to spread across — the "
+                                 "week total was written"}
         return res
 
     after = _week_row(route_id, nm, discipline, section_id, nw)
@@ -516,6 +556,28 @@ def calibrate(route_id, month_index, discipline, section_id, week_index,
     res["spread"] = {"applied": True, "delta": round(delta, 6),
                      "per_day": round(per_day, 6), "days": [_iso(d) for d in dates]}
     res["line"] = _line_view(route_id, nm, discipline, section_id, nw)
+    return res
+
+
+def reopen_week(route_id, month_index, discipline, section_id, week_index, by=None,
+                start_year=None, today=None):
+    """
+    weeks.reopen_week(), then every `confirmed` day of that week goes back to `edited`.
+    Not `derived`: the figures were chosen when the week was confirmed and must not be
+    re-uniformed by the next read. Nothing is deleted.
+    """
+    res = weeks.reopen_week(route_id, month_index, discipline, section_id, week_index, by=by)
+    if res.get("error"):
+        return res
+    dates = [_iso(d) for d in bucket_dates(month_index, week_index, start_year)]
+    marks = ",".join("?" * len(dates))
+    db.execute(
+        f"UPDATE forecast_days SET status = 'edited', updated_at = ? "
+        f"WHERE tenant_id = ? AND route_id = ? AND month_index = ? AND discipline = ? "
+        f"AND section_id = ? AND day_date IN ({marks}) AND status = 'confirmed'",
+        (_now(), db.current_tenant(), route_id, int(month_index), discipline or "",
+         section_id or "", *dates))
+    res["line"] = _line_view(route_id, month_index, discipline, section_id, week_index)
     return res
 
 

@@ -35,6 +35,8 @@ import gates         # Phase 5a — multiple gates per location, with a directio
 import weeks         # Week 1 — the 4-week look-ahead and typed actuals (Tasks C, D)
 import days         # Look-ahead v2 slice 1 (2026-09-09) — the commit week by day
 import derived      # Look-ahead v2 slice 2 (2026-09-09) — trips / vehicles / km / t·km on read
+import lookahead    # Look-ahead v2 slices 3-6 — the page's read model, clashes, account, horizon
+import export       # Look-ahead v2 slice 4 — XLSX + PDF of the commit week
 import stockpiles    # Week 1 — stockpile capacity and typed consumption (Task D2)
 import access        # 2026-09-02 — IPT access codes (Task F)
 import config        # 2.5b — the editable copy of factors.json
@@ -70,6 +72,7 @@ async def lifespan(app: FastAPI):
         # locations. Must sit HERE — after init_network_db(), which creates the table
         # those columns are ALTERed onto, and before init_tenant(), which rebuilds it.
         db.init_weeks_db()
+        db.init_lookahead_db()      # Look-ahead v2 slices 3-5. ALTERs only; after weeks, before tenant.
         db.init_config_db()         # 2.5b. No ALTERs, so its position only needs to precede the seed.
         # Phase 4.5. Must sit exactly here: init_tenant() migrates a pre-4.5 database by
         # rebuilding each table, copying the columns the table actually has — several of
@@ -633,6 +636,13 @@ class WeekActual(WeekKey):
     actual_qty: Optional[float] = None
     actual_note: Optional[str] = None
     actual_by: Optional[str] = None
+    # Look-ahead v2 slices 3-5: the confirmed cost of the week, typed beside the actual.
+    # Written only when the field is SENT; an absent field leaves the stored cost alone.
+    actual_cost_eur: Optional[float] = None
+
+
+class WeekReopen(WeekKey):
+    reopened_by: Optional[str] = None
 
 
 class WeekCalibrate(WeekKey):
@@ -718,7 +728,23 @@ def set_forecast_week_actual(body: WeekActual):
     res = weeks.set_actual(body.route_id, body.month_index, body.discipline,
                            body.section_id, body.week_index,
                            actual_qty=body.actual_qty, actual_note=body.actual_note,
-                           by=body.actual_by)
+                           by=body.actual_by, actual_cost_eur=body.actual_cost_eur,
+                           cost_given=("actual_cost_eur" in set(_fields_set(body))))
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    return res
+
+
+@app.post("/api/forecast-weeks/reopen")
+def reopen_forecast_week(body: WeekReopen):
+    """
+    Look-ahead v2: take a confirmed week back to `edited`. Its days follow. Nothing is
+    deleted — the mocks' footer promises "re-open the week in Look-ahead to change the
+    plan", and this is that.
+    """
+    _require_line(body.route_id, body.month_index, body.discipline, body.section_id)
+    res = days.reopen_week(body.route_id, body.month_index, body.discipline,
+                           body.section_id, body.week_index, by=body.reopened_by)
     if res.get("error"):
         raise HTTPException(400, res["error"])
     return res
@@ -769,7 +795,8 @@ class DayActual(DayKey):
 @app.get("/api/forecast-days")
 def list_forecast_days(from_date: Optional[str] = Query(None, alias="from"),
                        to_date: Optional[str] = Query(None, alias="to"),
-                       route_id: Optional[str] = None):
+                       route_id: Optional[str] = None,
+                       bucket: str = "commit"):
     """
     The commit week's days, grouped by forecast line, with the sum-rule flag per line.
 
@@ -783,7 +810,10 @@ def list_forecast_days(from_date: Optional[str] = Query(None, alias="from"),
     carries `totals` for the KPI strip. See derived.py for the formulas (brief §4).
     """
     acc = _require_access()
-    res = days.list_days(from_date, to_date, route_id=route_id)
+    # `bucket=next` reads (and materialises) the week AFTER the commit week — the
+    # Thursday process: next week's look-ahead confirmed for next week's deliveries.
+    res = days.list_days(from_date, to_date, route_id=route_id,
+                         bucket=("next" if bucket == "next" else "commit"))
     res["lines"] = access.filter_lines(res["lines"], acc)
     # Look-ahead v2 slice 2: context chips and the derived columns, computed on read
     # from the SAME route_analysis() path analysis-batch and month-kpis use. After the
@@ -793,6 +823,59 @@ def list_forecast_days(from_date: Optional[str] = Query(None, alias="from"),
     res["statuses"] = list(days.DAY_STATUSES)
     res["summary"] = days.summary()
     return res
+
+
+@app.get("/api/lookahead")
+def lookahead_page(bucket: str = "commit", route_id: Optional[str] = None,
+                   tark_tee: int = 1):
+    """
+    Look-ahead v2 slices 3-6: everything the page's three views need in one read —
+    commit (days + derived + totals), account (last week), horizon (roles), stock and
+    the clash rail. `bucket=next` is the Thursday process. `tark_tee=0` skips the live
+    restriction check (the rail then says the source was not consulted).
+    """
+    acc = _require_access()
+    return lookahead.page(bucket=("next" if bucket == "next" else "commit"),
+                          route_id=route_id, acc=acc, with_tark_tee=bool(tark_tee))
+
+
+@app.get("/api/forecast-weeks/clashes")
+def forecast_week_clashes(bucket: str = "commit", route_id: Optional[str] = None,
+                          tark_tee: int = 1):
+    """The rail alone (brief §6), for a caller that already has the grid."""
+    acc = _require_access()
+    pg = lookahead.page(bucket=("next" if bucket == "next" else "commit"),
+                        route_id=route_id, acc=acc, with_tark_tee=bool(tark_tee))
+    out = dict(pg["clashes"])
+    out["stock"] = pg["stock"]
+    out["commit_week"] = pg["commit_week"]
+    return out
+
+
+@app.get("/api/forecast-weeks/export")
+def forecast_week_export(format: str = "xlsx", bucket: str = "commit",
+                         route_id: Optional[str] = None, tark_tee: int = 1):
+    """
+    Browser download of the commit week — xlsx (day × line, stock, clashes) or the PDF
+    one-pager. No email, no upload. Built from the same read the page shows.
+    """
+    from fastapi.responses import Response       # not in the test stub; imported here
+    acc = _require_access()
+    pg = lookahead.page(bucket=("next" if bucket == "next" else "commit"),
+                        route_id=route_id, acc=acc, with_tark_tee=bool(tark_tee))
+    cw = pg.get("commit_week") or {}
+    stem = f"lookahead-{cw.get('from', 'week')}"
+    try:
+        if format == "pdf":
+            data, mime, ext = export.build_pdf(pg), "application/pdf", "pdf"
+        else:
+            data, mime, ext = (export.build_xlsx(pg),
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               "xlsx")
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    return Response(content=data, media_type=mime,
+                    headers={"Content-Disposition": f'attachment; filename="{stem}.{ext}"'})
 
 
 @app.put("/api/forecast-days")
@@ -1476,6 +1559,29 @@ def update_route(route_id: str, body: RoutePatch, token: Optional[str] = None):
     res = network.update_route(route_id, origin_id=body.origin_id, dest_id=body.dest_id,
                                material_category=body.material_category, ipt=body.ipt,
                                given=sent)
+    if res.get("error"):
+        raise HTTPException(404 if res["error"] == "route not found" else 400, res["error"])
+    return res
+
+
+class RoutePlanning(BaseModel):
+    max_vehicles_per_day: Optional[int] = None
+    rate_eur_per_load: Optional[float] = None
+    rate_eur_per_t: Optional[float] = None
+    rate_eur_per_km: Optional[float] = None
+    km_basis: Optional[str] = None
+
+
+@app.put("/api/admin/routes/{route_id}/planning")
+def set_route_planning(route_id: str, body: RoutePlanning, token: Optional[str] = None):
+    """
+    Look-ahead v2 slices 3-5: the typed planning cap and the three contract rates on one
+    route, plus the km basis they use. Only sent fields are written; a null clears.
+    Never seeded. The cap is a flag on the Look-ahead, never a block.
+    """
+    _check_admin(token)
+    sent = set(_fields_set(body))
+    res = network.set_route_planning(route_id, sent, **{k: getattr(body, k) for k in sent})
     if res.get("error"):
         raise HTTPException(404 if res["error"] == "route not found" else 400, res["error"])
     return res

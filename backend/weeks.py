@@ -48,7 +48,10 @@ FLAG_FIELDS = ("weather", "wetness", "traffic", "other")
 # added to the table does not silently start appearing in an API response.
 _COLS = ("route_id, month_index, discipline, section_id, week_index, planned_qty, "
          "unit, status, weather, wetness, traffic, other, confirmed_by, confirmed_at, "
-         "actual_qty, actual_note, actual_by, actual_at, parent_qty")
+         "actual_qty, actual_note, actual_by, actual_at, parent_qty, "
+         # Look-ahead v2 slices 3-5 (2026-09-09): the confirmed cost, and what
+         # calibrate has already carried out of this week
+         "actual_cost_eur, calibrated_at, calibrated_qty")
 
 
 def _now():
@@ -360,7 +363,8 @@ def confirm_week(route_id, month_index, discipline, section_id, week_index,
 
 
 def set_actual(route_id, month_index, discipline, section_id, week_index,
-               actual_qty=None, actual_note=None, by=None):
+               actual_qty=None, actual_note=None, by=None, actual_cost_eur=None,
+               cost_given=False):
     """
     Type what actually moved in one week.
 
@@ -387,6 +391,17 @@ def set_actual(route_id, month_index, discipline, section_id, week_index,
         (q, actual_note, by, _now(), ("typed" if q is not None else None), _now(),
          db.current_tenant(), route_id, int(month_index), discipline or "",
          section_id or "", int(week_index)))
+    # Look-ahead v2 slices 3-5: the confirmed cost of the week, in euros, typed beside
+    # the actual. Written ONLY when the caller sent the field — an absent field is not
+    # a cleared cost, and a day-actual sync (days.py) never touches it.
+    if cost_given:
+        c = None if actual_cost_eur is None or actual_cost_eur == "" else float(actual_cost_eur)
+        db.execute(
+            "UPDATE forecast_weeks SET actual_cost_eur = ?, updated_at = ? WHERE tenant_id = ? "
+            "AND route_id = ? AND month_index = ? AND discipline = ? AND section_id = ? "
+            "AND week_index = ?",
+            (c, _now(), db.current_tenant(), route_id, int(month_index), discipline or "",
+             section_id or "", int(week_index)))
     return {"week": get_week(route_id, month_index, discipline, section_id, week_index)}
 
 
@@ -424,15 +439,25 @@ def calibrate(route_id, month_index, discipline, section_id, week_index,
                          "reopen it before calibrating into it",
                 "blocked_by": "confirmed"}
 
+    # Look-ahead v2 (2026-09-09, the Thursday case): a week may be calibrated TWICE —
+    # once on Thursday with a partial actual, again when Friday's figure lands. The
+    # second press must carry only what the first did not: variance NOW minus the
+    # variance already applied (`calibrated_qty`). Adding the whole variance again would
+    # double-count everything before Friday.
+    already = float(this.get("calibrated_qty") or 0)
+    variance = None
+    if this.get("actual_qty") is not None:
+        variance = float(this.get("planned_qty") or 0) - float(this["actual_qty"])
     if override_qty is not None and override_qty != "":
         new_qty = float(override_qty)
         basis = "override"
+        delta = None
     else:
-        if this.get("actual_qty") is None:
+        if variance is None:
             return {"error": "no actual typed for this week, so there is no variance "
                              "to apply — type an actual or use the override"}
-        variance = float(this.get("planned_qty") or 0) - float(this["actual_qty"])
-        new_qty = float(nxt.get("planned_qty") or 0) + variance
+        delta = variance - already
+        new_qty = float(nxt.get("planned_qty") or 0) + delta
         basis = "variance"
 
     parent = _parent_of(route_id, nm, discipline, section_id)
@@ -444,12 +469,46 @@ def calibrate(route_id, month_index, discipline, section_id, week_index,
          float(parent["quantity"]) if parent else nxt.get("parent_qty"),
          _now(), db.current_tenant(), route_id, int(nm), discipline or "",
          section_id or "", int(nw)))
+    # stamp the SOURCE week: when, and how much of its variance is now carried. An
+    # override is taken to account for the whole variance as it stood.
+    db.execute(
+        "UPDATE forecast_weeks SET calibrated_at = ?, calibrated_qty = ?, updated_at = ? "
+        "WHERE tenant_id = ? AND route_id = ? AND month_index = ? AND discipline = ? "
+        "AND section_id = ? AND week_index = ?",
+        (_now(), variance, _now(), db.current_tenant(), route_id, int(month_index),
+         discipline or "", section_id or "", int(week_index)))
     return {
         "from": {"month_index": int(month_index), "week_index": int(week_index)},
         "to": {"month_index": int(nm), "week_index": int(nw)},
         "basis": basis,
+        # the amount actually added this press (None on an override)
+        "delta": (round(delta, 6) if delta is not None else None),
+        "already_carried": already,
         "week": get_week(route_id, nm, discipline, section_id, nw),
     }
+
+
+def reopen_week(route_id, month_index, discipline, section_id, week_index, by=None):
+    """
+    Look-ahead v2 (2026-09-09): take a confirmed week back to `edited` so its plan can
+    change and calibrate can reach it again. The mocks' footer promises it: "Re-open
+    the week in Look-ahead to change the plan." Nothing is deleted — the actual, the
+    notes, the confirmation stamp all stay; confirmed_by/at are kept as the record of
+    the last confirmation and `status` is what changes.
+    """
+    cur = get_week(route_id, month_index, discipline, section_id, week_index)
+    if not cur:
+        return {"error": "no such week — the parent month is not approved"}
+    if cur["status"] != "confirmed":
+        return {"error": f"week {week_index} is not confirmed"}
+    db.execute(
+        "UPDATE forecast_weeks SET status = ?, updated_at = ? WHERE tenant_id = ? "
+        "AND route_id = ? AND month_index = ? AND discipline = ? AND section_id = ? "
+        "AND week_index = ?",
+        ("edited", _now(), db.current_tenant(), route_id, int(month_index),
+         discipline or "", section_id or "", int(week_index)))
+    return {"week": get_week(route_id, month_index, discipline, section_id, week_index),
+            "reopened_by": by}
 
 
 def summary():
