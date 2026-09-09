@@ -1107,6 +1107,123 @@ ok("no email, no upload anywhere in the export or the endpoints",
 
 
 # =========================================================================== #
+#  12. THE DEPLOYMENT'S READ COST (2026-09-09 night) — measured live at 17.7 s   #
+#      for ONE line: one Postgres connection per statement, and a read that     #
+#      rewrote every derived row it had just read                               #
+# =========================================================================== #
+import collections as _co
+_orig_q, _orig_x = db.query, db.execute
+_cnt = _co.Counter()
+def _q(sql, *a, **k):
+    _cnt["query"] += 1
+    return _orig_q(sql, *a, **k)
+def _x(sql, *a, **k):
+    _cnt["execute"] += 1
+    return _orig_x(sql, *a, **k)
+db.query, db.execute = _q, _x
+try:
+    _as("planner123")
+    _cnt.clear(); main.list_forecast_days(); first = dict(_cnt)
+    _cnt.clear(); main.list_forecast_days(); second = dict(_cnt)
+    ok("🔴 a SECOND read of the same days writes NOTHING — derived rows are rewritten only when they moved",
+       second.get("execute", 0) == 0, f"second read: {second}")
+    ok(f"...and the days read stays under a statement budget (was 91 for 3 lines): {second.get('query', 0)} reads",
+       second.get("query", 0) <= 60)
+    _cnt.clear(); lookahead.page(bucket="commit"); pg_cost = dict(_cnt)
+    ok(f"the page read for 3 lines: {pg_cost.get('query', 0)} reads, {pg_cost.get('execute', 0)} writes — writes must be 0 on a settled week",
+       pg_cost.get("execute", 0) == 0 and pg_cost.get("query", 0) <= 130, str(pg_cost))
+    # but a week that MOVED still refreshes its derived days
+    main.save_matrix_row(main.MatrixRow(route_id="R1", discipline="earthworks", section_id="WS1",
+        material_type="Small aggregate", material_description=None, vehicle_type=V8, submitted_by="tester",
+        unit="t", status="Pending", cells=[main.Cell(month_index=m, quantity=5000.0) for m in MONTHS], ipt="IPT1"))
+    main.set_route_status("R1", main.StatusUpdate(status="Approved"), discipline="earthworks", section_id="WS1")
+    _cnt.clear(); main.list_forecast_days(); moved = dict(_cnt)
+    ok("⭐ ...while a week whose parent moved DOES rewrite its derived days (the refresh still works)",
+       moved.get("execute", 0) > 0 and abs(float({l["section_id"]: l for l in main.list_forecast_days()["lines"]}["WS1"]["week"]["planned_qty"]) - 5000.0 * len(DATES) / 30) < 400)
+finally:
+    db.query, db.execute = _orig_q, _orig_x
+
+# ---- the pool: psycopg2 is absent here, so the proxy and the retry are exercised on stand-ins
+class _FakeConn:
+    def __init__(self, tx=0, closed=False, fail_first=False):
+        self.tx, self.closed, self.fail_first = tx, closed, fail_first
+        self.rolled_back = self.committed = False; self.executed = []
+    def get_transaction_status(self): return self.tx
+    def rollback(self): self.rolled_back = True; self.tx = 0
+    def commit(self): self.committed = True
+    def close(self): self.closed = True
+    def cursor(self, **k):
+        conn = self
+        class _Cur:
+            def execute(self_, sql, params=()):
+                if conn.fail_first:
+                    conn.fail_first = False
+                    raise type("OperationalError", (Exception,), {})("server closed the connection unexpectedly")
+                conn.executed.append(sql)
+            def fetchall(self_): return [{"n": 1}]
+        return _Cur()
+class _FakePool:
+    def __init__(self): self.put = []; self.given = []; self.next = []
+    def getconn(self):
+        c = self.next.pop(0) if self.next else _FakeConn(); self.given.append(c); return c
+    def putconn(self, conn, close=False): self.put.append((conn, close))
+
+_pool = _FakePool(); _c = _FakeConn(tx=2)          # tx=2: mid-transaction (TRANSACTION_STATUS_INTRANS)
+_pc = db._PooledConn(_pool, _c)
+ok("a pooled connection quacks like the real one (cursor/commit/rollback pass through)",
+   _pc.cursor() is not None and (_pc.commit() or _c.committed))
+_pc.close()
+ok("⭐ close() RETURNS the connection to the pool, rolling back a half-open transaction first",
+   _pool.put == [(_c, False)] and _c.rolled_back and not _c.closed)
+try:
+    _pc.cursor(); ok("...and a returned connection cannot be used again by mistake", False)
+except RuntimeError:
+    ok("...and a returned connection cannot be used again by mistake", True)
+_pool2 = _FakePool(); _dead = _FakeConn(closed=True)
+db._PooledConn(_pool2, _dead).close()
+ok("a connection that died is returned with close=True, never reused", _pool2.put == [(_dead, True)])
+_pool3 = _FakePool(); _pc3 = db._PooledConn(_pool3, _FakeConn()); _pc3.discard()
+ok("discard() drops it from the pool for good", _pool3.put and _pool3.put[0][1] is True)
+# the retry: first statement hits a dead pooled connection, the second succeeds on a fresh one
+_pool4 = _FakePool(); _pool4.next = [_FakeConn(fail_first=True), _FakeConn()]
+_orig_get, _orig_pg = db.get_conn, db.IS_PG
+db.get_conn = lambda: db._PooledConn(_pool4, _pool4.getconn())
+db.IS_PG = False                                   # keep the sqlite cursor path (no psycopg2.extras here)
+try:
+    try:
+        rows = db.query("SELECT 1")
+    except Exception as e:                       # an assertion that can crash hides every one after it
+        rows = f"raised {type(e).__name__}"
+    ok("🔴 a statement on a dead pooled connection is retried ONCE on a fresh one and succeeds",
+       rows == [{"n": 1}] and len(_pool4.given) == 2 and _pool4.put[0][1] is True and _pool4.put[1][1] is False, str(rows))
+    _pool4.next = [_FakeConn(fail_first=True), _FakeConn(fail_first=True)]; _pool4.given.clear(); _pool4.put.clear()
+    try:
+        db.query("SELECT 1"); ok("...but only once — two dead connections in a row raise", False)
+    except Exception as e:
+        ok("...but only once — two dead connections in a row raise", type(e).__name__ == "OperationalError" and len(_pool4.given) == 2)
+    # a STATEMENT error (bad SQL) must NOT be retried — only a dead connection is
+    class _BadSqlConn(_FakeConn):
+        def cursor(self, **k):
+            class _Cur:
+                def execute(self_, sql, params=()):
+                    raise type("ProgrammingError", (Exception,), {})("bad sql")
+            return _Cur()
+    _pool4.next = [_BadSqlConn(), _FakeConn()]; _pool4.given.clear(); _pool4.put.clear()
+    try:
+        db.query("SELECT bad"); ok("a STATEMENT error is not retried (a retry would not fix bad SQL)", False)
+    except Exception as e:
+        ok("a STATEMENT error is not retried (a retry would not fix bad SQL)",
+           type(e).__name__ == "ProgrammingError" and len(_pool4.given) == 1 and _pool4.put[0][1] is False)
+finally:
+    db.get_conn, db.IS_PG = _orig_get, _orig_pg
+db_src = open(os.path.join(BACKEND, "db.py"), encoding="utf-8").read()
+ok("get_conn() on Postgres borrows from the pool, and DB_POOL=0 turns it off",
+   "ThreadedConnectionPool" in db_src and 'os.getenv("DB_POOL", "1")' in db_src and "return _PooledConn(pool, conn)" in db_src)
+ok("query() and execute() both go through the retrying _run()",
+   db_src.count("return _run(sql, params, fetch=True)") == 1 and db_src.count("_run(sql, params, fetch=False)") == 1)
+
+
+# =========================================================================== #
 print()
 print(f"{PASS} passed, {len(FAIL)} failed")
 for f in FAIL:
