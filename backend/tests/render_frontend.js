@@ -178,6 +178,56 @@ if (loaded) {
       return o.includes("T") && o.includes("S") && o.includes("<button"); })());
   ok("EmptyState renders its title and body",
     ReactDOMServer.renderToStaticMarkup(h(EmptyState, { title: "T", body: "B" })).includes("B"));
+
+  // ---- Look-ahead v2 (09 Sep evening): the three views, POPULATED ----------------
+  // useEffect never runs here, so the page is handed in through `initialPage` — a fixture
+  // written by the BACKEND test harness (test_lookahead.py's own scratch database, run
+  // through lookahead.page()). The shape the page renders is therefore the shape the
+  // server actually produces, not one typed by hand.
+  const fixPath = path.join(__dirname, "fixtures", "lookahead_page.json");
+  ok("the Look-ahead page fixture exists (written by test_lookahead.py)", fs.existsSync(fixPath));
+  const fixture = fs.existsSync(fixPath) ? JSON.parse(fs.readFileSync(fixPath, "utf8")) : null;
+  const laMeta = { ...meta, months: { start_year: 2026, count: 60 } };
+  if (fixture) {
+    const commitOut = render("the Commit view renders with a populated page",
+      h(LookAhead, { meta: laMeta, who: "t", initialPage: fixture, initialView: "commit" }));
+    ok("...with the KPI strip, the clash rail and one row per line",
+      commitOut.includes("planned this week") && commitOut.includes("+" + (fixture.clashes.count - 3) + " more")
+      && (commitOut.match(/▶/g) || []).length === fixture.commit.lines.length);
+    ok("...the day headers name today and the weekend default",
+      commitOut.includes("· today") && commitOut.includes("0 default"));
+    ok("...every weekday cell carries trips and vehicles (baked fixture)",
+      (commitOut.match(/ tr · /g) || []).length >= fixture.commit.lines.length * 5);
+    ok("...the stock card says the pile is OVER", commitOut.includes("Stock held") && commitOut.includes("OVER by"));
+    ok("...Export XLSX and the green Confirm week are in the bar",
+      commitOut.includes(">Export XLSX<") && commitOut.includes(">Confirm week<"));
+    ok("...nothing renders as 'undefined' or 'NaN'", !/undefined|NaN/.test(commitOut));
+
+    const acctOut = render("the Account view renders with a populated page",
+      h(LookAhead, { meta: laMeta, who: "t", initialPage: fixture, initialView: "account" }));
+    ok("...with the four KPI cards and the held / applied / waiting states of the fixture",
+      acctOut.includes("last week delivered · 98% band") && acctOut.includes("open to calibrate")
+      && acctOut.includes(">held<") && acctOut.includes("applied · ") && acctOut.includes(">waiting<"));
+    ok("...the confirmed cost box is rendered next to the actual",
+      acctOut.includes("The confirmed cost of this week"));
+    ok("...and the footer states the not-reported rule",
+      acctOut.includes("Empty actual is not zero"));
+
+    const hzOut = render("the Horizon view renders with a populated page",
+      h(LookAhead, { meta: laMeta, who: "t", initialPage: fixture, initialView: "horizon" }));
+    ok("...with the role labels on the columns and no Confirm button",
+      hzOut.includes("COMMIT") && hzOut.includes("MAKE-READY") && hzOut.includes("EARLY WARNING")
+      && !hzOut.includes(">Confirm week<"));
+    ok("...and the stockpile panel under it", hzOut.includes("Stock held") || hzOut.includes("stockpile") || hzOut.includes("Stockpile"));
+
+    // the empty page: no lines, no account, no horizon — every view has an EmptyState
+    const empty = { ...fixture, commit: { ...fixture.commit, lines: [], totals: {} }, account: { week: null, rows: [] },
+                    horizon: { rows: [], from_month: 9, to_month: 10, roles: {} }, clashes: { flags: [], count: 0, sources: {} }, stock: [] };
+    for (const v of ["commit", "account", "horizon"]) {
+      const o = render(`the ${v} view renders its empty state`, h(LookAhead, { meta: laMeta, who: "t", initialPage: empty, initialView: v }));
+      ok(`...${v}: an EmptyState, and nothing undefined`, o.includes("border-dashed") && !/undefined|NaN/.test(o));
+    }
+  }
 }
 
 console.log();

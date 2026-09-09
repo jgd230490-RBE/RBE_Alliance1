@@ -421,9 +421,20 @@ ok("calibrate with spread off writes the week only",
    r["spread"] is None and abs(float(r["week"]["planned_qty"]) - (target_before + 180.0)) < 1e-6)
 days_after = {x["day_date"]: float(x["planned_qty"]) for x in days._days_of("R1", MI, "earthworks", "WS2", WI)}
 ok("...and no day planned figure moved", days_after == days_before)
+# 2026-09-09, the Thursday case: the source week now records what was carried
+src = weeks.get_week("R1", pm, "earthworks", "WS2", pw)
+ok("⭐ the source week is stamped with the variance it has carried (180) and when",
+   abs(float(src.get("calibrated_qty") or 0) - 180.0) < 1e-6 and bool(src.get("calibrated_at"))
+   and abs(r.get("delta") - 180.0) < 1e-6 and r.get("already_carried") == 0)
+# 🔴 pressing again with the SAME actual must carry NOTHING — not another 180
+r = days.calibrate("R1", pm, "earthworks", "WS2", pw, spread=True, spread_from=WD[0])
+ok("🔴 a second calibrate with an unchanged actual carries a delta of 0 — no double count",
+   abs(r.get("delta")) < 1e-9 and r.get("already_carried") == 180.0
+   and abs(float(r["week"]["planned_qty"]) - (target_before + 180.0)) < 1e-6)
 
-# spread ON, from the first weekday: 180 over every weekday
-weeks.set_actual("R1", pm, "earthworks", "WS2", pw, actual_qty=float(prev["planned_qty"]) - 180.0)
+# spread ON, from the first weekday: the actual worsens by ANOTHER 180 (Friday's figure
+# landed) — only that difference is carried, over every weekday
+weeks.set_actual("R1", pm, "earthworks", "WS2", pw, actual_qty=float(prev["planned_qty"]) - 360.0)
 # ⚠️ The expectation is built from the WEEK as it stands before this calibrate, not from
 # `days_after`. Those days are still `derived` and have not been read since the first
 # calibrate moved the week, so they are a stale snapshot that no longer sums to it. The
@@ -445,11 +456,13 @@ ok("🔴 ...and Sat/Sun stayed at 0",
 ok("...and the days still sum to the week — the spread keeps the sum rule",
    r["line"]["days_ne_week"] is False)
 
-# spread from a later weekday: only the days from there on
-weeks.set_actual("R1", pm, "earthworks", "WS2", pw, actual_qty=float(prev["planned_qty"]) - 90.0)
+# spread from a later weekday: only the days from there on. 360 carried so far; the
+# actual worsens to 450 short, so the delta is 90
+weeks.set_actual("R1", pm, "earthworks", "WS2", pw, actual_qty=float(prev["planned_qty"]) - 450.0)
 r = days.calibrate("R1", pm, "earthworks", "WS2", pw, spread=True, spread_from=WD[-2])
 ok("⭐ spread_from limits it to the weekdays on or after that date",
-   r["spread"]["days"] == WD[-2:] and abs(r["spread"]["per_day"] - 45.0) < 1e-6)
+   r["spread"]["days"] == WD[-2:] and abs(r["spread"]["per_day"] - 45.0) < 1e-6
+   and abs(r["spread"]["delta"] - 90.0) < 1e-6)
 # spread from after the last weekday: nothing to spread onto, said plainly
 weeks.set_actual("R1", pm, "earthworks", "WS2", pw, actual_qty=float(prev["planned_qty"]) - 10.0)
 r = days.calibrate("R1", pm, "earthworks", "WS2", pw, spread=True,
@@ -614,8 +627,11 @@ ok("tonnes = the quantity, for a line typed in t", abs(f.get("tonnes") - q) < 1e
 ok("vehicles_need = ceil(trips / cycles_per_veh)", f.get("vehicles") == exp_veh, str(f))
 ok("km_day = trips × km_trip (both legs)", abs(f.get("km_day") - exp_trips * 60.0) < 1e-6)
 ok("km_per_vehicle = km_day / vehicles", abs(f.get("km_per_vehicle") - round(exp_trips * 60.0 / exp_veh, 2)) < 1e-6)
-ok("⭐ tonne_km = tonnes × LOADED distance only — 30, not the 60 km round trip",
-   abs(f.get("tonne_km") - round(q * 30.0, 1)) < 1e-6)
+# C20, decided 09 Sep evening: t·km uses the ROUTE'S km basis, default round trip (what a
+# haulier charges). Reversed from the brief's loaded-leg reading; a route can say 'loaded'.
+ok("⭐ tonne_km = tonnes × the route's basis km — 60 (round trip) by default, not the 30 loaded leg",
+   abs(f.get("tonne_km") - round(q * 60.0, 1)) < 1e-6 and c1.get("km_basis") == "round_trip"
+   and c1.get("basis_km") == 60.0)
 ok("every weekday of a derived week is identical", all(d["derived"] == f for d in wd))
 ok("Sat/Sun: 0 trips, 0 vehicles, 0 km — zeros, because the day IS planned at 0",
    all(d["derived"]["trips"] == 0 and d["derived"]["vehicles"] == 0 and d["derived"]["km_day"] == 0.0
@@ -623,7 +639,7 @@ ok("Sat/Sun: 0 trips, 0 vehicles, 0 km — zeros, because the day IS planned at 
 w1 = L["WS1"]["week_derived"]
 ok("week_derived sums the days and takes the PEAK vehicles, not the sum",
    w1.get("trips") == exp_trips * NWD and w1.get("vehicles_peak") == exp_veh
-   and abs(w1.get("tonne_km") - round(q * 30.0 * NWD, 1)) < 0.11
+   and abs(w1.get("tonne_km") - round(q * 60.0 * NWD, 1)) < 0.11
    and abs(w1.get("km") - exp_trips * 60.0 * NWD) < 1e-6)
 
 # ---- the ceiling does not round up a float artefact
@@ -762,7 +778,296 @@ _i_filter = main_src.find("access.filter_lines(res[\"lines\"], acc)")
 _i_dec = main_src.find("derived.decorate(res)")
 ok("🔴 derived.decorate() runs AFTER access.filter_lines() in the days endpoint",
    0 < _i_filter < _i_dec and main_src.count("derived.decorate(") == 1)
-ok("no € anywhere yet — rates are slice 5", "rate_eur" not in derived_src and "eur" not in derived_src.lower().replace("neur", ""))
+# reversed 09 Sep evening: slice 5 landed in the same zip — € is computed, never seeded
+ok("€ is computed from the route's typed rates, and no default rate exists in the module",
+   "rate_eur_per_km" in derived_src and "eur" in f and f.get("eur") is None
+   and c1.get("rate_set") is False and "DEFAULT_RATE" not in derived_src)
+
+
+# =========================================================================== #
+#  11. SLICES 3–6 — rates + €, the clash rail, account, horizon, reopen,       #
+#      the 'next' bucket, and the export (2026-09-09, evening)                 #
+# =========================================================================== #
+import lookahead  # noqa: E402
+import clashes    # noqa: E402
+import export     # noqa: E402
+reset_db()
+_as("planner123")
+db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L1", "Pit", 58.5, 24.0))
+db.execute("INSERT INTO locations (id, name, lat, lon, capacity_qty, capacity_unit, opening_qty) "
+           "VALUES (?, ?, ?, ?, ?, ?, ?)", ("L2", "Site", 58.6, 24.4, 1000.0, "t", 100.0))
+db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L3", "Yard", 58.7, 24.5))
+for _rid, _o, _d in (("R1", "L1", "L2"), ("R2", "L1", "L2"), ("R3", "L3", "L2")):
+    db.execute("INSERT INTO routes (id, origin_id, dest_id) VALUES (?, ?, ?)", (_rid, _o, _d))
+for _rid in ("R1", "R2", "R3"):
+    _geom2(_rid, V8, "loaded", 30.0, 0.75)
+    _geom2(_rid, V8, "return", 30.0, 0.65)          # 5 cycles per 10 h shift, 60 km round trip
+
+# ---- the schema: five route columns, three week columns, no new table
+ok("routes gained the five planning columns (DDL and live table)",
+   all(c in db._TENANT_DDL["routes"] for c in ("max_vehicles_per_day", "rate_eur_per_load", "rate_eur_per_t", "rate_eur_per_km", "km_basis"))
+   and all(c in [x.lower() for x in db._columns_of(db.get_conn().cursor(), "routes")]
+           for c in ("max_vehicles_per_day", "rate_eur_per_km", "km_basis")))
+ok("forecast_weeks gained actual_cost_eur, calibrated_at, calibrated_qty",
+   all(c in [x.lower() for x in db._columns_of(db.get_conn().cursor(), "forecast_weeks")]
+       for c in ("actual_cost_eur", "calibrated_at", "calibrated_qty")))
+ok("...and still sixteen tenanted tables — no new table for slices 3-6", len(db.TENANTED_TABLES) == 16)
+db.init_lookahead_db()
+ok("init_lookahead_db() is idempotent on a table that already has the columns", True)
+
+# ---- route planning: only sent fields written, blanks clear, validation
+r = network.set_route_planning("R1", {"rate_eur_per_t", "rate_eur_per_km", "max_vehicles_per_day"},
+                               rate_eur_per_t=2.0, rate_eur_per_km=1.5, max_vehicles_per_day=4)
+ok("route planning writes the sent fields and defaults km_basis to round_trip",
+   r.get("rate_eur_per_t") == 2.0 and r.get("rate_eur_per_km") == 1.5 and r.get("max_vehicles_per_day") == 4
+   and r.get("km_basis") == "round_trip" and r.get("rate_eur_per_load") is None)
+r = network.set_route_planning("R1", {"rate_eur_per_load"}, rate_eur_per_load=45.0)
+ok("...a later write of ONE field leaves the others alone",
+   r.get("rate_eur_per_load") == 45.0 and r.get("rate_eur_per_t") == 2.0 and r.get("max_vehicles_per_day") == 4)
+ok("...km_basis must be round_trip or loaded",
+   "km_basis" in (network.set_route_planning("R1", {"km_basis"}, km_basis="both").get("error") or ""))
+ok("...a negative rate is refused",
+   "negative" in (network.set_route_planning("R1", {"rate_eur_per_t"}, rate_eur_per_t=-1).get("error") or ""))
+try:
+    main.set_route_planning("R9", main.RoutePlanning(rate_eur_per_t=1.0))
+    ok("the planning endpoint 404s an unknown route", False)
+except Exception as e:
+    ok("the planning endpoint 404s an unknown route", getattr(e, "status_code", None) == 404)
+network.set_route_planning("R3", {"rate_eur_per_t", "km_basis"}, rate_eur_per_t=3.0, km_basis="loaded")
+ok("routes_status carries the planning fields",
+   {x["id"]: x for x in network.routes_status()}["R1"].get("rate_eur_per_km") == 1.5)
+
+# ---- lines: R1 for IPT1 and IPT2 (shared route → IPT_SHARE, and a cap of 4 veh/day), R3 for IPT3
+_line2("R1", "earthworks", "WS1", "t", 4000.0, V8, ipt="IPT1")     # 200 t/day → 10 trips → 2 veh
+_line2("R1", "earthworks", "WS2", "t", 6000.0, V8, ipt="IPT2")     # 300 t/day → 15 trips → 3 veh  ⇒ 5 > cap 4
+_line2("R3", "substructure", "WS3", "t", 2000.0, V8, ipt="IPT3")   # 100 t/day → 5 trips → 1 veh
+
+pg = lookahead.page(bucket="commit")
+L = {l["section_id"]: l for l in pg["commit"]["lines"]}
+ok("the page read returns commit, account, horizon, stock and clashes",
+   all(k in pg for k in ("commit", "account", "horizon", "stock", "clashes")) and len(L) == 3)
+
+# ---- € per day, summed terms, on the route's basis
+f1 = [d for d in L["WS1"]["days"] if datetime.date.fromisoformat(d["day_date"]).weekday() <= 4][0]["derived"]
+q1 = float(L["WS1"]["week"]["planned_qty"]) / NWD
+exp_eur = f1["trips"] * 45.0 + q1 * 2.0 + f1["trips"] * 60.0 * 1.5
+ok("⭐ € = trips×per_load + tonnes×per_t + trips×basis_km×per_km — all three SUMMED, round trip",
+   abs(f1.get("eur") - round(exp_eur, 2)) < 0.011 and L["WS1"]["context"]["rate_set"] is True
+   and L["WS1"]["context"]["km_basis"] == "round_trip", str(f1))
+f3 = [d for d in L["WS3"]["days"] if datetime.date.fromisoformat(d["day_date"]).weekday() <= 4][0]["derived"]
+q3 = float(L["WS3"]["week"]["planned_qty"]) / NWD
+ok("⭐ a route on the LOADED basis uses 30 km for t·km, and € with only per_t set is tonnes×per_t",
+   L["WS3"]["context"]["km_basis"] == "loaded" and L["WS3"]["context"]["basis_km"] == 30.0
+   and abs(f3.get("tonne_km") - round(q3 * 30.0, 1)) < 0.11 and abs(f3.get("eur") - round(q3 * 3.0, 2)) < 0.011)
+ok("...rates live on the ROUTE: R1's second line (another IPT) prices with the same rates",
+   L["WS2"]["context"]["rates"] == L["WS1"]["context"]["rates"])
+T = pg["commit"]["totals"]
+ok("totals.eur sums the priced lines and counts them",
+   T.get("eur") is not None and T.get("eur_lines") == 3 and T.get("eur_partial") is False)
+
+# ---- the rail
+codes = pg["clashes"]["by_code"]
+flags = pg["clashes"]["flags"]
+ok("🔴 ROUTE_CAP: 2 + 3 vehicles on R1 against a typed cap of 4 flags BOTH lines, every weekday",
+   codes.get("ROUTE_CAP") == 2 * NWD and all(f["cap"] == 4 and f["vehicles"] == 5 for f in flags if f["code"] == "ROUTE_CAP"))
+ok("🔴 IPT_SHARE: IPT1 + IPT2 on the same route_id the same day — and on the same origin+dest",
+   codes.get("IPT_SHARE", 0) >= 2 * NWD
+   and {f["share"] for f in flags if f["code"] == "IPT_SHARE"} == {"route", "od"}
+   and all(f["ipts"] == ["IPT1", "IPT2"] for f in flags if f["code"] == "IPT_SHARE"))
+ok("...R3 (IPT3 alone, a different origin) raises no share flag",
+   not any(f["route_id"] == "R3" for f in flags if f["code"] == "IPT_SHARE"))
+# a cap EQUAL to the day's vehicles is not exceeded: R3 runs 1 veh/day; cap it at 1
+network.set_route_planning("R3", {"max_vehicles_per_day"}, max_vehicles_per_day=1)
+_pg_cap = lookahead.page(bucket="commit")
+ok("🔴 ROUTE_CAP fires only ABOVE the cap — 1 veh against a cap of 1 raises nothing",
+   not any(f["route_id"] == "R3" for f in _pg_cap["clashes"]["flags"] if f["code"] == "ROUTE_CAP")
+   and any(f["route_id"] == "R1" for f in _pg_cap["clashes"]["flags"] if f["code"] == "ROUTE_CAP"))
+network.set_route_planning("R3", {"max_vehicles_per_day"}, max_vehicles_per_day=None)
+# a line with NO IPT cannot share a route with anyone — IPT3 + nobody is not a share
+_line2("R3", "substructure", "WS4", "t", 1000.0, V8, ipt=None)
+_pg_noipt = lookahead.page(bucket="commit")
+ok("🔴 IPT_SHARE never counts a line with no IPT as a second IPT",
+   not any(f["route_id"] == "R3" for f in _pg_noipt["clashes"]["flags"] if f["code"] == "IPT_SHARE")
+   and any(l["section_id"] == "WS4" for l in _pg_noipt["commit"]["lines"]))
+db.execute("DELETE FROM forecast_days WHERE tenant_id = ? AND section_id = 'WS4'", (db.current_tenant(),))
+db.execute("DELETE FROM forecast_weeks WHERE tenant_id = ? AND section_id = 'WS4'", (db.current_tenant(),))
+db.execute("DELETE FROM forecasts WHERE tenant_id = ? AND section_id = 'WS4'", (db.current_tenant(),))
+ok("the empty cap on R3 raises no ROUTE_CAP — no 40-trip constant anywhere",
+   not any(f["route_id"] == "R3" for f in flags if f["code"] == "ROUTE_CAP")
+   and "40" not in open(os.path.join(BACKEND, "clashes.py"), encoding="utf-8").read().replace("40-trip", ""))
+st = {s["location_id"]: s for s in pg["stock"]}
+exp_in = sum(float(L[w]["week"]["planned_qty"]) for w in ("WS1", "WS2", "WS3"))
+ok("⭐ stock forecast: opening + planned inbound of every line into the pile − consume, over when > capacity",
+   st["L2"]["over"] is True and abs(st["L2"]["inbound_planned"] - exp_in) < 1e-6
+   and abs(st["L2"]["forecast"] - (100.0 + exp_in)) < 1e-6 and abs(st["L2"]["over_by"] - (100.0 + exp_in - 1000.0)) < 1e-6)
+ok("🔴 PILE_OVER on every line into the over-capacity pile", codes.get("PILE_OVER") == 3)
+ok("Tark Tee is reported as unavailable in the sandbox, and no TARK_TEE flag is invented either way",
+   pg["clashes"]["sources"]["tark_tee"] in ("unavailable", "ok") and codes.get("TARK_TEE") is None)
+ok("no UNBAKED, no DAYS_NE_WEEK, no SHORTAGE on a fresh derived week",
+   not any(c in codes for c in ("UNBAKED", "DAYS_NE_WEEK", "SHORTAGE")))
+ok("flags are ordered by the brief's code order", [f["code"] for f in flags] == sorted([f["code"] for f in flags], key=lambda c: clashes.CODES.index(c)))
+
+# ---- an IPT code sees only its own flags, but the cross-IPT fact still reaches it
+os.environ.update({"IPT1_CODE": "one-secret", "IPT2_CODE": "two-secret", "IPT3_CODE": "three-secret",
+                   "PLANNER_CODE": "plan-secret", "ADMIN_CODE": "adm-secret"})
+_as("one-secret")
+pg1 = lookahead.page(bucket="commit")
+ok("⭐ IPT1 sees one line, its own ROUTE_CAP and IPT_SHARE flags — the other IPT's quantity never appears",
+   len(pg1["commit"]["lines"]) == 1 and pg1["commit"]["lines"][0]["ipt"] == "IPT1"
+   and all(f["ipt"] == "IPT1" for f in pg1["clashes"]["flags"])
+   and pg1["clashes"]["by_code"].get("ROUTE_CAP") == NWD and pg1["clashes"]["by_code"].get("IPT_SHARE", 0) >= NWD
+   and pg1["commit"]["totals"]["lines"] == 1)
+ok("...and the stock read is not IPT-scoped (C10), so IPT1 still sees the pile forecast", len(pg1["stock"]) == 1)
+for _v in ("IPT1_CODE", "IPT2_CODE", "IPT3_CODE", "PLANNER_CODE", "ADMIN_CODE"):
+    os.environ.pop(_v, None)
+_as("planner123")
+
+# ---- the 'next' bucket: the Thursday process
+nm, nw = weeks.next_week(MI, WI)
+n_before = db.query("SELECT COUNT(*) AS n FROM forecast_days WHERE tenant_id = ?", (db.current_tenant(),))[0]["n"]
+pgn = lookahead.page(bucket="next")
+ok("⭐ bucket=next reads the week AFTER the commit week and materialises its days on demand",
+   pgn["bucket"] == "next" and (pgn["commit_week"]["month_index"], pgn["commit_week"]["week_index"]) == (nm, nw)
+   and pgn["today_week"] == {"month_index": MI, "week_index": WI}
+   and db.query("SELECT COUNT(*) AS n FROM forecast_days WHERE tenant_id = ?", (db.current_tenant(),))[0]["n"] > n_before)
+ok("...its account week is THIS week", pgn["account"]["week"] == {"month_index": MI, "week_index": WI,
+   "from": ISO[0], "to": ISO[-1]})
+ok("🔴 the default read did NOT materialise the next bucket first — the brief's rule holds by default",
+   n_before == len(DATES) * 3)
+nd = days.bucket_dates(nm, nw)
+r = days.set_day("R1", nm, "earthworks", "WS1", nd[0].isoformat(), 5.0)
+ok("a day in the next bucket is typeable", r.get("error") is None)
+r = days.set_day("R1", MI, "earthworks", "WS1", (DATES[0] - datetime.timedelta(days=20)).isoformat(), 5.0)
+ok("...a day two buckets away is still refused", "not in the commit week" in (r.get("error") or ""))
+
+# ---- account: hold band, actions, cost, € variance
+pm, pw = lookahead.prev_week(MI, WI)
+if pm >= 1:
+    prev1 = weeks.get_week("R1", pm, "earthworks", "WS1", pw)
+    prev2 = weeks.get_week("R1", pm, "earthworks", "WS2", pw)
+    prev3 = weeks.get_week("R3", pm, "substructure", "WS3", pw)
+    p1, p2 = float(prev1["planned_qty"]), float(prev2["planned_qty"])
+    main.set_forecast_week_actual(main.WeekActual(route_id="R1", month_index=pm, discipline="earthworks", section_id="WS1",
+                                                  week_index=pw, actual_qty=p1 * 0.985, actual_cost_eur=1234.5))
+    main.set_forecast_week_actual(main.WeekActual(route_id="R1", month_index=pm, discipline="earthworks", section_id="WS2",
+                                                  week_index=pw, actual_qty=p2 - 180.0))
+    pg = lookahead.page(bucket="commit")
+    A = {r["section_id"]: r for r in pg["account"]["rows"]}
+    ok("⭐ 98 % band: 98.5 % delivered holds; 180 short does not; untyped waits",
+       A["WS1"]["held"] is True and A["WS1"]["action"] == "held"
+       and A["WS2"]["held"] is False and A["WS2"]["action"] == "spread" and abs(A["WS2"]["remaining_short"] - 180.0) < 1e-6
+       and A["WS3"]["action"] == "waiting" and A["WS3"]["actual_qty"] is None)
+    ok("...the KPI figures: 1 of 3 delivered, 2 reported, shortfall 180, 1 open to calibrate",
+       pg["account"]["delivered"] == 1 and pg["account"]["lines"] == 3 and pg["account"]["reported"] == 2
+       and abs(pg["account"]["shortfall"] - 180.0) < 1e-6 and pg["account"]["open_to_calibrate"] == 1)
+    ok("⭐ the actual cost is stored and € variance = planned € − actual €",
+       A["WS1"]["actual_cost_eur"] == 1234.5 and A["WS1"]["planned_eur"] is not None
+       and abs(A["WS1"]["eur_variance"] - round(A["WS1"]["planned_eur"] - 1234.5, 2)) < 1e-6
+       and A["WS2"]["actual_cost_eur"] is None and A["WS2"]["eur_variance"] is None)
+    main.set_forecast_week_actual(main.WeekActual(route_id="R1", month_index=pm, discipline="earthworks", section_id="WS1",
+                                                  week_index=pw, actual_qty=p1 * 0.985, actual_note="re-typed"))
+    ok("🔴 re-saving the actual WITHOUT the cost field leaves the stored cost alone",
+       weeks.get_week("R1", pm, "earthworks", "WS1", pw)["actual_cost_eur"] == 1234.5)
+    main.set_forecast_week_actual(main.WeekActual(route_id="R1", month_index=pm, discipline="earthworks", section_id="WS1",
+                                                  week_index=pw, actual_qty=p1 * 0.985, actual_cost_eur=None))
+    ok("🔴 ...but an EXPLICIT null clears it — absent and null are different things",
+       weeks.get_week("R1", pm, "earthworks", "WS1", pw)["actual_cost_eur"] is None)
+    main.set_forecast_week_actual(main.WeekActual(route_id="R1", month_index=pm, discipline="earthworks", section_id="WS1",
+                                                  week_index=pw, actual_qty=p1 * 0.985, actual_cost_eur=1234.5))
+    ok("🔴 SHORTAGE is on the rail for the short line and not for the held one",
+       {f["section_id"] for f in pg["clashes"]["flags"] if f["code"] == "SHORTAGE"} == {"WS2"})
+    # carry it: the shortage leaves the rail and the action reads applied
+    days.calibrate("R1", pm, "earthworks", "WS2", pw, spread=True)
+    pg = lookahead.page(bucket="commit")
+    A = {r["section_id"]: r for r in pg["account"]["rows"]}
+    ok("⭐ after calibrate the line reads `applied`, its shortage is carried, and SHORTAGE leaves the rail",
+       A["WS2"]["action"] == "applied" and abs(A["WS2"]["carried"] - 180.0) < 1e-6
+       and not any(f["code"] == "SHORTAGE" for f in pg["clashes"]["flags"])
+       and pg["account"]["open_to_calibrate"] == 0)
+    ok("...and the spread made the days ≠ week flag stay quiet (the spread keeps the sum rule)",
+       not any(f["code"] == "DAYS_NE_WEEK" for f in pg["clashes"]["flags"]))
+else:
+    for _ in range(7):
+        ok("(account assertions skipped — no previous bucket inside the horizon)", True)
+
+# ---- the render fixture: written HERE so render_frontend.js renders the shape this
+# backend actually produces (timestamps scrubbed). The js harness runs after this file.
+import json as _json
+_fix_dir = os.path.join(HERE, "fixtures")
+os.makedirs(_fix_dir, exist_ok=True)
+def _scrub(o):
+    if isinstance(o, dict):
+        return {k: ("<ts>" if k.endswith("_at") and isinstance(v, str) else _scrub(v)) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_scrub(x) for x in o]
+    return o
+_fix = _scrub(lookahead.page(bucket="commit"))
+with open(os.path.join(_fix_dir, "lookahead_page.json"), "w", encoding="utf-8") as _fh:
+    _fh.write(_json.dumps(_fix, indent=1, ensure_ascii=False))
+ok("the render fixture is written with three lines, a rail, a pile and an account week",
+   len(_fix["commit"]["lines"]) == 3 and _fix["clashes"]["count"] > 3 and len(_fix["stock"]) == 1
+   and len(_fix["account"]["rows"]) == (3 if pm >= 1 else 0))
+
+# ---- horizon roles
+hz = pg["horizon"]
+roles = {(r["month_index"], r["week_index"]): r["role"] for r in hz["rows"]}
+ok("horizon rows carry account / commit / make-ready / early-warning relative to the commit bucket",
+   roles.get((MI, WI)) == "commit" and roles.get(tuple(weeks.next_week(MI, WI))) == "make-ready"
+   and roles.get(tuple(weeks.next_week(*weeks.next_week(MI, WI)))) == "early-warning"
+   and (pm < 1 or roles.get((pm, pw)) == "account")
+   and hz["from_month"] == MI and hz["to_month"] == MI + 1)
+
+# ---- confirm, then reopen — days follow both ways
+main.confirm_forecast_week(main.WeekConfirm(route_id="R3", month_index=MI, discipline="substructure", section_id="WS3", week_index=WI))
+ok("confirm still stamps the days", all(d["status"] == "confirmed" for d in days._days_of("R3", MI, "substructure", "WS3", WI)))
+r = days.set_day("R3", MI, "substructure", "WS3", ISO[0], 1.0)
+ok("...and a confirmed week's days are read-only", r.get("blocked_by") == "confirmed")
+r = main.reopen_forecast_week(main.WeekReopen(route_id="R3", month_index=MI, discipline="substructure", section_id="WS3", week_index=WI))
+ok("⭐ reopen takes the week and its days back to `edited` — nothing deleted",
+   r.get("error") is None and r["week"]["status"] == "edited" and r["week"]["confirmed_at"]
+   and all(d["status"] == "edited" for d in days._days_of("R3", MI, "substructure", "WS3", WI)))
+r = days.set_day("R3", MI, "substructure", "WS3", ISO[0], 1.0)
+ok("...so the plan can change again", r.get("error") is None)
+try:
+    main.reopen_forecast_week(main.WeekReopen(route_id="R3", month_index=MI, discipline="substructure", section_id="WS3", week_index=WI))
+    ok("reopening a week that is not confirmed is a 400", False)
+except Exception as e:
+    ok("reopening a week that is not confirmed is a 400", getattr(e, "status_code", None) == 400)
+
+# ---- export: bytes that open, with the right sheets and the right rows
+pg = lookahead.page(bucket="commit")
+xb = export.build_xlsx(pg)
+ok("the XLSX builds", isinstance(xb, bytes) and xb[:2] == b"PK")
+import io
+import openpyxl as _ox
+wb = _ox.load_workbook(io.BytesIO(xb))
+ok("...with four sheets: Commit week, Stock, Clashes, About",
+   wb.sheetnames == ["Commit week", "Stock", "Clashes", "About"])
+ws = wb["Commit week"]
+ok("...sheet 1 is day × line: one row per day per visible line, headers from the export mock",
+   ws.max_row - 1 == 3 * len(DATES) and [c.value for c in ws[1]][:6] == ["Date", "Route", "Origin", "Destination", "IPT", "WS"])
+ok("...a priced row carries €, a weekend row carries 0 qty and 0 trips",
+   any(ws.cell(row=i, column=18).value not in (None, "") for i in range(2, ws.max_row + 1))
+   and any(ws.cell(row=i, column=10).value == 0 and ws.cell(row=i, column=13).value == 0 for i in range(2, ws.max_row + 1)))
+# .get-style access: a renamed sheet must FAIL these, not crash the report (lesson 13)
+_sh = lambda n: wb[n] if n in wb.sheetnames else None
+ok("...the Stock sheet has the pile and says OVER",
+   _sh("Stock") is not None and _sh("Stock").max_row == 2 and _sh("Stock").cell(row=2, column=9).value == "yes")
+ok("...the Clashes sheet has every flag the rail has",
+   _sh("Clashes") is not None and _sh("Clashes").max_row - 1 == pg["clashes"]["count"])
+pb = export.build_pdf(pg)
+ok("the PDF builds", isinstance(pb, bytes) and pb[:5] == b"%PDF-")
+ptxt = pb.decode("latin-1")
+ok("...and carries the disclaimer, the origin grouping, the flags heading and the footer lines",
+   # reportlab escapes parentheses inside PDF strings, so the heading is matched without them
+   "not a delivery note" in ptxt and "Origin: Pit" in ptxt and "not a stop" in ptxt
+   and "Vignette is time-based" in ptxt and "Re-open the week" in ptxt)
+ok("...the collapse rule prints MON" + "–FRI EACH DAY where every weekday is identical",
+   "FRI EACH DAY" in ptxt)
+ok("...a draft week says so, never CONFIRMED", "not confirmed" in ptxt and "CONFIRMED" not in ptxt.replace("not confirmed", ""))
+ok("no email, no upload anywhere in the export or the endpoints",
+   "smtp" not in open(os.path.join(BACKEND, "export.py"), encoding="utf-8").read().lower()
+   and "UploadFile" not in open(os.path.join(BACKEND, "main.py"), encoding="utf-8").read())
 
 
 # =========================================================================== #

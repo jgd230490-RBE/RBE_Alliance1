@@ -268,16 +268,37 @@ ok("...and it renders the LookAhead component",
 // this into a second, inconsistent permission.
 ok("⭐ the Track group is NOT admin-gated",
   !/group: "Track", admin/.test(code));
-ok("the window is the current month plus the next one",
-  /to: Math\.min\(months\.count, from \+ 1\)/.test(code));
-// ⭐ which cell is editable comes from the SERVER, not the browser clock
-ok("⭐ the editable week comes from the server's next_week",
-  code.includes("payload.next_week") && /const isNext = \(r\) =>/.test(code));
-ok("only next week, or an already-edited week, is editable",
-  /r\.status !== "confirmed" && \(next \|\| r\.status === "edited"\)/.test(code));
+// Look-ahead v2 (09 Sep evening): the page reads ONE endpoint and the server decides
+// every window. Reversed from "current month + next" — the browser no longer does
+// month arithmetic for the look-ahead at all.
+const _laBody = (() => {
+  const i = code.indexOf("function LookAhead(");
+  const j = code.indexOf("function RoutePlanning(", i);
+  return i >= 0 && j > i ? code.slice(i, j) : "";
+})();
+ok("LookAhead is findable in the source", _laBody.length > 1000);
+ok("⭐ the window comes from the server's horizon block, not the browser clock",
+  _laBody.includes("horizon.from_month") && !/new Date\(\)\.getMonth/.test(_laBody)
+  && !/months\.count, from \+ 1/.test(_laBody));
+// ⭐ which week is the commit week comes from the SERVER; the browser only picks the bucket
+ok("⭐ the commit week comes from the server's commit_week, through /lookahead?bucket=",
+  _laBody.includes("fetch(`${API}/lookahead?bucket=${bucket}`)") && _laBody.includes("page.commit_week")
+  && !_laBody.includes("payload.next_week"));
+ok("...and the bucket switch offers exactly this week and next week — the Thursday process",
+  /\[\["commit", "this week"\], \["next", "next week"\]\]/.test(_laBody));
+ok("a planned day is editable while its week is not confirmed, this bucket or next",
+  /const locked = w\.status === "confirmed"/.test(_laBody) && /\{!locked \? \(/.test(_laBody));
 ok("a confirmed week's plan is read-only", code.includes("Confirmed — reopen it to change the plan"));
-ok("Confirm next week is its own button, separate from editing",
-  code.includes("Confirm next week") && code.includes("/forecast-weeks/confirm"));
+ok("⭐ Confirm week is ONE button for the whole week, separate from editing (L6)",
+  _laBody.includes(">Confirm week<") && _laBody.includes("/forecast-weeks/confirm")
+  && /const doConfirm = async \(\) => \{[\s\S]*?for\(const l of lines\)/.test(_laBody));
+// scoped to doConfirm's own body: a `break` after the first line would confirm ONE line
+// and still contain the loop, so the loop alone proved nothing (regression F2 was green)
+const _doConfirmBody = (() => { const i = _laBody.indexOf("const doConfirm ="); const j = _laBody.indexOf("const doReopen =", i); return i >= 0 && j > i ? _laBody.slice(i, j) : ""; })();
+ok("⭐ ...and doConfirm walks EVERY unconfirmed line — the only break is the failed-request one",
+  _doConfirmBody.length > 0 && (_doConfirmBody.match(/break;/g) || []).length === 1 && _doConfirmBody.includes("if(!j) break;"));
+ok("...and a confirmed week can be re-opened, through its own endpoint, deleting nothing",
+  _laBody.includes("/forecast-weeks/reopen") && _laBody.includes("Nothing is deleted"));
 ok("confirm offers exactly the four flag fields, all optional",
   /\["weather", "wetness", "traffic", "other"\]/.test(code)
   && code.includes("optional and may be left blank"));
@@ -296,14 +317,20 @@ const _saveActualBody = (() => {
 ok("saveActual is findable in the source", !!_saveActualBody);
 ok("⭐ and saveActual's own body never touches the calibrate endpoint",
   !!_saveActualBody && !_saveActualBody.includes("forecast-weeks/calibrate"));
-ok("⭐ calibrate is reached only from the → next week button",
+// C18, decided: the per-line "spread on this week" button (the Account mock), not a
+// dialog checkbox. Still the ONLY thing that reaches calibrate.
+ok("⭐ calibrate is reached only from the per-line 'spread on this week' button",
   (code.match(/\/forecast-weeks\/calibrate/g) || []).length === 1
-  && code.includes("→ next week"));
-ok("...and the button is disabled when next week is confirmed",
-  code.includes('after.status !== "confirmed"')
-  && code.includes("Next week is already confirmed"));
-ok("the calibrate dialog offers a typed override instead of the formula",
-  code.includes("override_qty") && code.includes("leave blank to use the formula"));
+  && code.includes("spread on this week") && /const doSpread = \(row\) => send\("\/forecast-weeks\/calibrate", \{ \.\.\.wkBody\(row\), spread: true/.test(_laBody));
+ok("...and the button says the server refuses it when that week is confirmed",
+  _laBody.includes("Refused if that week is confirmed"));
+// reversed: the calibrate DIALOG is gone with C18 — there is no typed override in the UI
+// (the endpoint keeps it; nothing in the page sends override_qty)
+ok("the calibrate dialog and its typed override are gone from the page (C18: per-line button)",
+  !_laBody.includes("override_qty") && !_laBody.includes("leave blank to use the formula")
+  && !_laBody.includes("setCalibrating"));
+ok("the four action states of the Account mock are all rendered: held · spread · applied · waiting",
+  ['r.action === "held"', 'r.action === "spread"', 'r.action === "applied"', 'r.action === "waiting"'].every(t => _laBody.includes(t)));
 ok("variance is blank rather than 0 until an actual is typed",
   /r\.variance == null \? "—"/.test(code));
 ok("an emptied actual box clears it back to null, not to zero",
@@ -312,6 +339,71 @@ ok("a week whose parent month changed says so",
   code.includes("parent month changed") && code.includes("parent_changed"));
 ok("reopening a month is shown as a note, not by hiding its weeks",
   code.includes("month is now"));
+
+// ---- 4d2. Look-ahead v2 slices 3-6 — the page (09 Sep evening) ------------------
+ok("three pills, in the mock's order, and the page lands on Commit",
+  /pill\("account", "Account"\)/.test(_laBody) && /pill\("commit", /.test(_laBody) && /pill\("horizon", "Horizon"\)/.test(_laBody)
+  && /localStorage\.getItem\("rbe_la_view"\) \|\| "commit"/.test(_laBody));
+ok("the pills sit under PageHeader — the left rail stays (C18's unsettled point, decided)",
+  /<PageHeader title="Look-ahead"/.test(_laBody) && !_laBody.includes("Dashboard · Submit Forecast"));
+ok("the Commit KPI strip carries the mock's cards: planned, trips, vehicles peak, t·km, last-week shortage, last-week delivered — and planned €",
+  ["planned this week", "trips", "vehicles / day peak", "t·km", "last week shortage", "last week delivered", "planned €"]
+    .every(t => _laBody.includes(t)));
+ok("🔴 the word PPC is printed nowhere (L5)", !/\bPPC\b/.test(code));
+ok("⭐ the clash rail is ONE row with '+N more', not a stack",
+  _laBody.includes("rail.flags.slice(0, 3)") && _laBody.includes("more`") && !_laBody.includes("dismiss"));
+ok("...and a Tark Tee outage is said, not rendered as 'no restrictions'",
+  _laBody.includes('rail.sources.tark_tee === "unavailable"') && _laBody.includes("were NOT checked"));
+ok("today's column carries the wash and the '· today' suffix; weekends read '0 default'",
+  _laBody.includes('" · today"') && _laBody.includes('"0 default"') && _laBody.includes('#eff6ff'));
+ok("the expanded row prints km/trip, km/week, t·km, cycle and € or 'rate not set'",
+  _laBody.includes("km/trip") && _laBody.includes("t·km (") && _laBody.includes("cycle {grp(c.cycle_min)} min")
+  && _laBody.includes('"rate not set"'));
+ok("⭐ the honest-gap sentence for an unbaked line ships as written",
+  _laBody.includes("km — until the route is baked · trips still from"));
+ok("an unbaked line shows trips and NO vehicle count (the human's rule), never a 1",
+  _laBody.includes("veh —") && _laBody.includes("Vehicles need a baked route"));
+ok("the expand trigger is the Routes table's ▶ toggle, reused",
+  _laBody.includes('{isOpen ? "▼" : "▶"}'));
+ok("the empty state uses EmptyState", _laBody.includes("<EmptyState title={`No approved forecast line in the commit week"));
+ok("planned days are saved through PUT /forecast-days with the day's key",
+  /send\("\/forecast-days", \{ route_id: line\.route_id, month_index: line\.month_index,[\s\S]*?day_date: d\.day_date, planned_qty:/.test(_laBody)
+  && _laBody.includes('"PUT"'));
+// slice 4 — export
+ok("⭐ export downloads through fetch + blob, never a bare <a href> (the access code is a header)",
+  /fetch\(`\$\{API\}\/forecast-weeks\/export\?format=\$\{format\}&bucket=\$\{bucket\}`\)/.test(_laBody)
+  && _laBody.includes("URL.createObjectURL(blob)") && !/href=\{`\$\{API\}\/forecast-weeks\/export/.test(code));
+ok("...the mock's bar: Export XLSX beside the green Confirm week, PDF as a smaller second button",
+  _laBody.includes(">Export XLSX<") && _laBody.includes('download("pdf")') && _laBody.includes('background: "var(--green)" }}>{anyConfirmed'));
+ok("no email and no upload in the page", !/mailto:|sendEmail|<input type="file"/.test(_laBody));
+// slice 5 — rates and the confirmed cost
+ok("⭐ the confirmed cost is sent ONLY when its box was touched — an absent field leaves it alone",
+  /if\(draft\[kc\] !== undefined\) body\.actual_cost_eur =/.test(_laBody)
+  && !/actual_cost_eur: draft\[kc\] \?\?/.test(_laBody));
+ok("the Account table has Planned €, Actual € and € var columns",
+  _laBody.includes(">Planned €<") && _laBody.includes(">Actual €<") && _laBody.includes(">€ var<"));
+ok("the route form gained a RoutePlanning block with the three rates, the cap and the km basis",
+  /function RoutePlanning\(/.test(code) && /<RoutePlanning route=/.test(code)
+  && code.includes("/planning${qs}") && ["rate_eur_per_load", "rate_eur_per_t", "rate_eur_per_km", "max_vehicles_per_day", "km_basis"].every(k => code.includes(k))
+  && code.includes('<option value="round_trip">') && code.includes('<option value="loaded">'));
+ok("🔴 no default rate anywhere in the page — blank means 'rate not set'",
+  !/rate_eur_per_\w+: \d/.test(code) && code.includes('Blank = no rate'));
+// palette C — the IPT pills reuse the map's six hexes
+const _mapSeg = fs.readFileSync(path.join(ROOT, "map", "ipt_segments.js"), "utf8");
+const _mapHex = {};
+for (const m of _mapSeg.matchAll(/ipt: 'IPT (\d)'[^\n]*colour: '(#[0-9A-Fa-f]{6})'/g)) _mapHex["IPT" + m[1]] = m[2];
+const _pageHex = (() => { const m = code.match(/const IPT_PALETTE_C = \{([^}]*)\}/); const o = {};
+  if (m) for (const x of m[1].matchAll(/(IPT\d): "(#[0-9A-Fa-f]{6})"/g)) o[x[1]] = x[2]; return o; })();
+ok("⭐ the IPT pills use palette C — the same six hexes the public map paints the corridor with",
+  Object.keys(_mapHex).length === 6 && ["IPT1", "IPT2", "IPT3", "IPT4", "IPT5", "IPT6"].every(k => _pageHex[k] && _pageHex[k].toUpperCase() === _mapHex[k].toUpperCase()));
+// the Horizon view
+ok("the Horizon columns carry a ROLE label — account · commit · make-ready · early warning",
+  ["ACCOUNT", "COMMIT", "MAKE-READY", "EARLY WARNING"].every(t => _laBody.includes(`"${t}"`)) && _laBody.includes("horizon.roles"));
+ok("...and no Confirm button lives on the Horizon view",
+  (() => { const i = _laBody.indexOf("{horizon.rows.length === 0"); const j = _laBody.indexOf("{confirming && (", i);
+           const h = i > 0 && j > i ? _laBody.slice(i, j) : ""; return h.length > 0 && !h.includes("Confirm week") && h.includes("No day columns here"); })());
+ok("the Horizon footer states the weeks-not-days rule and the blue-column rule",
+  _laBody.includes("stay week totals so hauliers are not sent a four-week daily spreadsheet") && _laBody.includes("That is the only week that materialises daily rows"));
 
 // ---- 4e. Task D2 — stock held --------------------------------------------------
 ok("the stockpile panel sits under the look-ahead",
