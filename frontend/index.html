@@ -1911,6 +1911,11 @@ function LookAhead({ meta, who, initialPage, initialView }){
   const [flags, setFlags] = useState({ weather: "", wetness: "", traffic: "", other: "" });
   const pick = (v) => { setView(v); try { localStorage.setItem("rbe_la_view", v); } catch(e){} };
 
+  // Tark Tee road restrictions — LIVE data plus a geometry loop, so it is fetched on its
+  // own AFTER the page has rendered (09 Sep night: on the critical path it froze the
+  // page at "Loading…" the moment a baked line was approved). The rail says "checking"
+  // until it answers, and "unavailable" if it cannot — never a silent clean.
+  const [tt, setTt] = useState({ status: "checking", flags: [] });
   useEffect(() => {
     let live = true;
     setErr("");
@@ -1920,6 +1925,16 @@ function LookAhead({ meta, who, initialPage, initialView }){
       .catch(e => { if(live) setErr(`Couldn't load the look-ahead (${e}).`); });
     return () => { live = false; };
   }, [bucket, tick]);
+  useEffect(() => {
+    if(!page || initialPage) return;               // the harness hands the page in; nothing to fetch
+    let live = true;
+    setTt({ status: "checking", flags: [] });
+    fetch(`${API}/forecast-weeks/tark-tee?bucket=${bucket}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(j => { if(live) setTt({ status: j.status || "ok", flags: j.flags || [] }); })
+      .catch(() => { if(live) setTt({ status: "unavailable", flags: [] }); });
+    return () => { live = false; };
+  }, [page && page.commit_week && page.commit_week.from, bucket]);
 
   const send = (path, body, method) => {
     setBusy(path);
@@ -1937,7 +1952,12 @@ function LookAhead({ meta, who, initialPage, initialView }){
   const totals = commit.totals || {};
   const account = (page && page.account) || { rows: [] };
   const horizon = (page && page.horizon) || { rows: [] };
-  const rail = (page && page.clashes) || { flags: [], count: 0, sources: {} };
+  const rail = useMemo(() => {
+    const base = (page && page.clashes) || { flags: [], count: 0, sources: {} };
+    // the page's own flags plus the Tark Tee ones, once they arrive
+    const flags = [...(base.flags || []), ...(tt.flags || [])];
+    return { ...base, flags, count: flags.length, sources: { ...(base.sources || {}), tark_tee: tt.status } };
+  }, [page, tt]);
   const stock = (page && page.stock) || [];
   const today = page ? page.today : null;
   const dates = lines.length ? lines[0].days.map(d => d.day_date) : [];
@@ -2093,6 +2113,9 @@ function LookAhead({ meta, who, initialPage, initialView }){
           )}
           {rail.sources && rail.sources.tark_tee === "unavailable" && (
             <div className="text-[11px] text-amber-700 mb-3">Tark Tee could not be reached — road restrictions were NOT checked for this week. That is not the same as "no restrictions".</div>
+          )}
+          {rail.sources && rail.sources.tark_tee === "checking" && lines.length > 0 && (
+            <div className="text-[11px] text-slate-400 mb-3">checking road restrictions (Tark Tee)…</div>
           )}
 
           {lines.length === 0 ? (
