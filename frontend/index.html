@@ -1794,13 +1794,16 @@ function ConfigPage({ meta, who, access }){
   );
 }
 
-// ================================================================= Look-ahead (Week 1)
-// Tasks C, D and D2's panel. Sits ON the month line — there is no week_index on
-// `forecasts`, no upload, no importer, and the public map's timeline stays monthly.
+// ================================================================= Look-ahead v2 (2026-09-09)
+// One tab, three views — Account · Commit · Horizon — over ONE read, /api/lookahead.
+// The brief (claude/lookahead-brief-0909.md) wins on the rules; the four signed mocks
+// (artifacts/lookahead_mock_*.png) win on the chrome. Where they disagree (C18) the
+// mock's button bar, per-line spread button and single clash rail were chosen.
 //
-// Window: the current month and the next one. The browser's clock picks the WINDOW
-// only; which cell is editable comes from the server's `next_week`, so a laptop with
-// the wrong date cannot let someone confirm a different week.
+// Nothing about WHICH week is the commit week is decided in the browser: the server's
+// commit_week is the bucket that contains today, and `bucket=next` asks for the one
+// after it — the Thursday process, where next week's plan is confirmed for next week's
+// deliveries. The browser only chooses which of the two to look at.
 const WEEK_NOS = [1, 2, 3, 4];
 const WEEK_DAYS = { 1: "1–7", 2: "8–14", 3: "15–21", 4: "22–end" };
 const wkKey = (r) => `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}|${r.month_index}|${r.week_index}`;
@@ -1809,6 +1812,27 @@ const wkBody = (r) => ({ route_id: r.route_id, month_index: r.month_index,
                          discipline: r.discipline || "", section_id: r.section_id || "",
                          week_index: r.week_index });
 const numOr = (v, d) => (v === "" || v == null || isNaN(+v)) ? d : +v;
+// thousands with a thin space, the way the mocks print them: 4 200 t · 86 400
+const grp = (n, d) => (n == null || isNaN(+n)) ? "—"
+  : (+n).toLocaleString("en-US", { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 }).replace(/,/g, " ");
+const eurFmt = (n) => (n == null) ? "rate not set" : "€ " + grp(n);
+const unitLbl = (u) => u === "m3" ? "m³" : (u || "");
+// Palette C — the same six hexes the public map paints the corridor with. Reused, not
+// invented (lookahead-mockups-0909.md: "the colours track the existing IPT palette").
+const IPT_PALETTE_C = { IPT1: "#4C1D95", IPT2: "#155E75", IPT3: "#57534E",
+                        IPT4: "#92400E", IPT5: "#831843", IPT6: "#0F766E" };
+const iptKey = (s) => String(s || "").replace(/\s+/g, "").toUpperCase();
+const dayName = (iso) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(iso + "T00:00:00").getDay()];
+const dayNum = (iso) => parseInt(iso.slice(8, 10), 10);
+const isWeekend = (iso) => { const d = new Date(iso + "T00:00:00").getDay(); return d === 0 || d === 6; };
+const longDate = (iso) => { const d = new Date(iso + "T00:00:00"); return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
+const spanLabel = (a, b) => {
+  if(!a || !b) return "";
+  const da = new Date(a + "T00:00:00"), db = new Date(b + "T00:00:00");
+  return da.getMonth() === db.getMonth()
+    ? `${da.getDate()}–${db.getDate()} ${MONTHS[da.getMonth()]} ${da.getFullYear()}`
+    : `${da.getDate()} ${MONTHS[da.getMonth()]} – ${db.getDate()} ${MONTHS[db.getMonth()]} ${db.getFullYear()}`;
+};
 
 function StatusChip({ s, parentChanged }){
   const map = { derived: ["#64748b", "rgba(100,116,139,.12)"],
@@ -1831,267 +1855,585 @@ function StatusChip({ s, parentChanged }){
   );
 }
 
-function LookAhead({ meta, who }){
-  const { months, routes } = meta;
-  const routeById = useMemo(() => Object.fromEntries((routes || []).map(r => [r.route_id, r])), [routes]);
+function IptPill({ ipt }){
+  const k = iptKey(ipt);
+  if(!k) return <span className="text-[10px] text-slate-400">no IPT</span>;
+  return <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full text-white"
+    style={{ background: IPT_PALETTE_C[k] || "#64748B" }}>{k}</span>;
+}
+function WsPill({ ws }){
+  if(!ws) return null;
+  return <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+    style={{ background: "rgba(0,55,135,.08)", color: "var(--navy)" }}>{ws}</span>;
+}
+function Kpi({ value, caption, tone }){
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 min-w-0">
+      <div className="text-2xl font-bold tabular-nums truncate"
+        style={{ color: tone === "red" ? "var(--red)" : "var(--navy-deep)" }}>{value}</div>
+      <div className="text-[10px] uppercase tracking-wide text-slate-400 mt-0.5">{caption}</div>
+    </div>
+  );
+}
+// the status pill column between the line and the days — sparse by design
+function LineFlags({ flags }){
+  const codes = Array.from(new Set((flags || []).map(f => f.code)));
+  const label = { UNBAKED: "NOT BAKED", IPT_SHARE: "SHARE", ROUTE_CAP: "CAP", DAYS_NE_WEEK: "DAYS ≠ WEEK",
+                  PILE_OVER: "PILE OVER", TARK_TEE: "TARK TEE", SHORTAGE: "SHORT", PARENT_CHANGED: "MONTH CHANGED" };
+  return (
+    <span className="inline-flex flex-col gap-1 items-start">
+      {codes.map(c => (
+        <span key={c} className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          style={{ color: c === "UNBAKED" ? "#B45309" : "var(--red)",
+                   background: c === "UNBAKED" ? "rgba(217,119,6,.14)" : "rgba(191,46,85,.10)" }}>
+          {label[c] || c}
+        </span>
+      ))}
+    </span>
+  );
+}
 
-  // current month + next month, clamped to the horizon
-  const win = useMemo(() => {
-    const now = new Date();
-    const cur = (now.getFullYear() - months.start_year) * 12 + (now.getMonth() + 1);
-    const from = Math.max(1, Math.min(cur, months.count));
-    return { from, to: Math.min(months.count, from + 1), outside: cur < 1 || cur > months.count };
-  }, [months]);
-
-  const [payload, setPayload] = useState(null);
+// `initialPage` / `initialView` exist for the render harness only — useEffect does not run
+// under renderToStaticMarkup, so without them the populated views could never be rendered
+// in a test. The app never passes them.
+function LookAhead({ meta, who, initialPage, initialView }){
+  const { months } = meta;
+  const [view, setView] = useState(() => { if(initialView) return initialView; try { return localStorage.getItem("rbe_la_view") || "commit"; } catch(e){ return "commit"; } });
+  const [bucket, setBucket] = useState("commit");        // 'commit' = the week containing today · 'next' = the Thursday process
+  const [page, setPage] = useState(initialPage || null);
   const [err, setErr] = useState("");
   const [tick, setTick] = useState(0);
   const [busy, setBusy] = useState("");
-  const [draft, setDraft] = useState({});                // cellKey -> unsaved input
-  const [confirming, setConfirming] = useState(null);    // week whose flag dialog is open
+  const [draft, setDraft] = useState({});                // key -> unsaved input
+  const [open, setOpen] = useState({});                  // line key -> expanded
+  const [railOpen, setRailOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);   // the whole-week flag dialog
   const [flags, setFlags] = useState({ weather: "", wetness: "", traffic: "", other: "" });
-  const [calibrating, setCalibrating] = useState(null);  // {row, override}
+  const pick = (v) => { setView(v); try { localStorage.setItem("rbe_la_view", v); } catch(e){} };
 
   useEffect(() => {
     let live = true;
     setErr("");
-    fetch(`${API}/forecast-weeks?from_month=${win.from}&to_month=${win.to}`)
+    fetch(`${API}/lookahead?bucket=${bucket}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(j => { if(live){ setPayload(j); setDraft({}); } })
+      .then(j => { if(live){ setPage(j); setDraft({}); } })
       .catch(e => { if(live) setErr(`Couldn't load the look-ahead (${e}).`); });
     return () => { live = false; };
-  }, [win.from, win.to, tick]);
-
-  const rows = (payload && payload.weeks) || [];
-  const nextW = (payload && payload.next_week) || {};
-  const isNext = (r) => r.month_index === nextW.month_index && r.week_index === nextW.week_index;
-
-  const lines = useMemo(() => {
-    const g = {};
-    rows.forEach(r => {
-      const k = lineKeyOf(r);
-      (g[k] || (g[k] = { key: k, route_id: r.route_id, discipline: r.discipline || "",
-                         section_id: r.section_id || "", month_index: r.month_index,
-                         unit: r.unit, material_type: r.material_type,
-                         vehicle_type: r.vehicle_type, parent_status: r.parent_status,
-                         weeks: {} })).weeks[r.week_index] = r;
-    });
-    return Object.values(g).sort((a, b) => (a.month_index - b.month_index)
-      || a.route_id.localeCompare(b.route_id) || a.discipline.localeCompare(b.discipline));
-  }, [rows]);
+  }, [bucket, tick]);
 
   const send = (path, body, method) => {
     setBusy(path);
     return fetch(`${API}${path}`, { method: method || "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
       .then(async r => { if(!r.ok){ throw new Error((await r.text()).slice(0, 200)); } return r.json(); })
-      .then(() => { setTick(t => t + 1); setErr(""); })
-      .catch(e => setErr(String(e.message || e)))
+      .then((j) => { setTick(t => t + 1); setErr(""); return j; })
+      .catch(e => { setErr(String(e.message || e)); return null; })
       .finally(() => setBusy(""));
   };
 
-  const savePlanned = (r) => {
-    const v = draft[wkKey(r) + "|p"];
+  const cw = (page && page.commit_week) || {};
+  const commit = (page && page.commit) || { lines: [], totals: {} };
+  const lines = commit.lines || [];
+  const totals = commit.totals || {};
+  const account = (page && page.account) || { rows: [] };
+  const horizon = (page && page.horizon) || { rows: [] };
+  const rail = (page && page.clashes) || { flags: [], count: 0, sources: {} };
+  const stock = (page && page.stock) || [];
+  const today = page ? page.today : null;
+  const dates = lines.length ? lines[0].days.map(d => d.day_date) : [];
+  const flagsByLine = useMemo(() => {
+    const g = {};
+    (rail.flags || []).forEach(f => { const k = lineKeyOf(f); (g[k] || (g[k] = [])).push(f); });
+    return g;
+  }, [rail]);
+  const allConfirmed = lines.length > 0 && lines.every(l => l.week && l.week.status === "confirmed");
+  const anyConfirmed = lines.some(l => l.week && l.week.status === "confirmed");
+
+  // ---- writes ------------------------------------------------------------------
+  const saveDay = (line, d) => {
+    const k = `${lineKeyOf(line)}|${d.day_date}|p`;
+    const v = draft[k];
     if(v === undefined) return;
-    send("/forecast-weeks", { ...wkBody(r), planned_qty: numOr(v, r.planned_qty), edited_by: who || null }, "PUT");
+    send("/forecast-days", { route_id: line.route_id, month_index: line.month_index,
+      discipline: line.discipline || "", section_id: line.section_id || "",
+      day_date: d.day_date, planned_qty: numOr(v, d.planned_qty), edited_by: who || null }, "PUT");
   };
   const saveActual = (r) => {
-    const kq = wkKey(r) + "|a", kn = wkKey(r) + "|n";
-    if(draft[kq] === undefined && draft[kn] === undefined) return;
+    const kq = wkKey(r) + "|a", kn = wkKey(r) + "|n", kc = wkKey(r) + "|c";
+    if(draft[kq] === undefined && draft[kn] === undefined && draft[kc] === undefined) return;
     const v = draft[kq] !== undefined ? draft[kq] : (r.actual_qty ?? "");
-    // an emptied box clears the actual back to "not reported", which is NOT zero
-    send("/forecast-weeks/actual",
-      { ...wkBody(r), actual_qty: (v === "" || v == null ? null : numOr(v, null)),
-        actual_note: draft[kn] !== undefined ? draft[kn] : (r.actual_note ?? null),
-        actual_by: who || null }, "PUT");
+    // an emptied box clears the actual back to "not reported", which is NOT zero. The
+    // confirmed cost is sent ONLY when it was touched — an absent field leaves it alone.
+    const body = { ...wkBody(r), actual_qty: (v === "" || v == null ? null : numOr(v, null)),
+      actual_note: draft[kn] !== undefined ? draft[kn] : (r.actual_note ?? null),
+      actual_by: who || null };
+    if(draft[kc] !== undefined) body.actual_cost_eur = (draft[kc] === "" ? null : numOr(draft[kc], null));
+    send("/forecast-weeks/actual", body, "PUT");
   };
-  const doConfirm = () => {
-    const r = confirming;
-    setConfirming(null);
-    send("/forecast-weeks/confirm", { ...wkBody(r), confirmed_by: who || null, ...flags });
+  const doConfirm = async () => {
+    // L6: ONE button, the whole week — every line in the bucket, the same four notes
+    setConfirming(false);
+    for(const l of lines){
+      if(l.week && l.week.status === "confirmed") continue;
+      const j = await send("/forecast-weeks/confirm", { ...wkBody(l.week), confirmed_by: who || null, ...flags });
+      if(!j) break;
+    }
   };
-  const doCalibrate = () => {
-    const { row, override } = calibrating;
-    setCalibrating(null);
-    send("/forecast-weeks/calibrate",
-      { ...wkBody(row), override_qty: (override === "" ? null : numOr(override, null)), by: who || null });
+  const doReopen = async () => {
+    if(!confirm("Re-open this week? Its plan becomes editable again and calibrate can reach it. Nothing is deleted.")) return;
+    for(const l of lines){
+      if(!(l.week && l.week.status === "confirmed")) continue;
+      const j = await send("/forecast-weeks/reopen", { ...wkBody(l.week), reopened_by: who || null });
+      if(!j) break;
+    }
   };
-
-  // the week AFTER this one, so the calibrate button can say whether it is confirmed
-  // BEFORE it is pressed rather than after the 400 comes back
-  const weekAfter = (line, r) => {
-    if(r.week_index < 4) return line.weeks[r.week_index + 1];
-    const nxt = lines.find(l => l.route_id === line.route_id && l.discipline === line.discipline
-      && l.section_id === line.section_id && l.month_index === line.month_index + 1);
-    return nxt && nxt.weeks[1];
+  // "spread on this week": the shortage of ONE account line, carried into the commit
+  // week and divided over its remaining weekdays. The only thing that writes next week.
+  const doSpread = (row) => send("/forecast-weeks/calibrate", { ...wkBody(row), spread: true, by: who || null });
+  const download = async (format) => {
+    setBusy("export");
+    try {
+      const r = await fetch(`${API}/forecast-weeks/export?format=${format}&bucket=${bucket}`);
+      if(!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 140)}`);
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `lookahead-${cw.from || "week"}.${format}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    } catch(e){ setErr("Export failed: " + e.message); }
+    setBusy("");
   };
 
   const fld = "w-full border border-slate-300 rounded px-1.5 py-1 text-xs text-right tabular-nums outline-none focus:ring-2 focus:ring-[color:var(--blue)]";
+  const pill = (id, label) => (
+    <button key={id} onClick={() => pick(id)}
+      className="px-4 py-2 rounded-lg text-sm font-semibold border"
+      style={view === id ? { background: "var(--navy)", color: "white", borderColor: "var(--navy)" }
+                         : { background: "white", color: "#475569", borderColor: "#cbd5e1" }}>{label}</button>
+  );
+  const subtitle = view === "account"
+    ? `Account is last week only · ${spanLabel(account.week && account.week.from, account.week && account.week.to)} · type what actually moved`
+    : view === "commit"
+    ? `Commit week is ${spanLabel(cw.from, cw.to)}${bucket === "next" ? " · next week, by the switch" : ""} · Mon–Fri carry the plan · Sat/Sun start at 0`
+    : `Horizon is weeks, not days · ${monthLabelAbs(horizon.from_month || cw.month_index || 1, months.start_year)} + ${monthLabelAbs((horizon.to_month || (cw.month_index || 1) + 1), months.start_year)} · make-ready only`;
 
   return (
-    <div className="max-w-[1400px] mx-auto p-5">
-      <PageHeader title="Look-ahead"
-        subtitle={`Four weeks on each approved month line: ${monthLabelAbs(win.from, months.start_year)} and ${monthLabelAbs(win.to, months.start_year)}. Weeks appear when a month is approved and start at a quarter of it. Typed only — there is no import.`} />
+    <div className="max-w-[1500px] mx-auto p-5">
+      <PageHeader title="Look-ahead" subtitle={page ? subtitle : "Loading the commit week…"} />
 
-      {win.outside && (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 mb-3">
-          Today is outside the forecast horizon, so this is showing the nearest month in range.
-        </div>
-      )}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        {pill("account", "Account")}
+        {pill("commit", bucket === "next" ? "Commit · next week" : "Commit · this week")}
+        {pill("horizon", "Horizon")}
+        {/* the Thursday switch: which bucket the Commit and Account views look at */}
+        <span className="ml-2 inline-flex rounded-lg border border-slate-300 overflow-hidden text-xs">
+          {[["commit", "this week"], ["next", "next week"]].map(([b, l]) => (
+            <button key={b} onClick={() => setBucket(b)} className="px-2.5 py-1.5 font-semibold"
+              title={b === "next" ? "Commit NEXT week's plan now (e.g. on a Thursday). Its days are created when you open it." : "The week that contains today"}
+              style={bucket === b ? { background: "#eff6ff", color: "var(--navy)" } : { color: "#64748b" }}>{l}</button>
+          ))}
+        </span>
+        {view === "commit" && (
+          <span className="ml-auto flex items-center gap-2">
+            <button onClick={() => download("xlsx")} disabled={!!busy || !lines.length}
+              className="px-4 py-2 rounded-lg text-sm font-semibold border disabled:opacity-40"
+              style={{ borderColor: "var(--navy)", color: "var(--navy)", background: "white" }}>Export XLSX</button>
+            <button onClick={() => download("pdf")} disabled={!!busy || !lines.length}
+              className="px-3 py-2 rounded-lg text-sm font-semibold border disabled:opacity-40"
+              title="The one-page commitment sheet, grouped by origin"
+              style={{ borderColor: "#cbd5e1", color: "#475569", background: "white" }}>PDF</button>
+            {allConfirmed ? (
+              <button onClick={doReopen} disabled={!!busy}
+                className="px-4 py-2 rounded-lg text-sm font-semibold border disabled:opacity-40"
+                style={{ borderColor: "var(--red)", color: "var(--red)", background: "white" }}>Re-open week</button>
+            ) : (
+              <button onClick={() => setConfirming(true)} disabled={!!busy || !lines.length}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-40"
+                title="Whole week, every line, one act. Planned cells lock; actuals stay typeable."
+                style={{ background: "var(--green)" }}>{anyConfirmed ? "Confirm remaining lines" : "Confirm week"}</button>
+            )}
+          </span>
+        )}
+      </div>
+
       {err && <div className="rounded-lg border p-3 text-sm mb-3"
         style={{ borderColor: "var(--red)", color: "var(--red)", background: "rgba(191,46,85,.06)" }}>{err}</div>}
 
-      {!payload ? <div className="p-8 text-center text-slate-400">Loading…</div>
-        : lines.length === 0 ? (
-        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-500">
-          No approved forecast lines in {monthLabelAbs(win.from, months.start_year)} or{" "}
-          {monthLabelAbs(win.to, months.start_year)}. Weeks are created when a month line is approved —
-          a Pending line has none by design.
-        </div>
-      ) : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div className="overflow-auto">
-            <table className="text-sm" style={{ minWidth: "1180px" }}>
-              <thead className="bg-slate-50 text-slate-500 text-xs">
-                <tr>
-                  <th rowSpan={2} className="px-3 py-2 text-left font-semibold border-r border-slate-200">Line</th>
-                  <th rowSpan={2} className="px-3 py-2 text-left font-semibold border-r border-slate-200">Month</th>
-                  {WEEK_NOS.map(w => (
-                    <th key={w} colSpan={3} className="px-2 py-1.5 text-center font-semibold border-r border-slate-200">
-                      Week {w} <span className="font-normal text-slate-400">· {WEEK_DAYS[w]}</span>
-                    </th>
-                  ))}
-                </tr>
-                <tr>
-                  {WEEK_NOS.map(w => (
-                    <React.Fragment key={w}>
-                      <th className="px-2 py-1 text-right font-medium text-[10px] uppercase tracking-wide">Planned</th>
-                      <th className="px-2 py-1 text-right font-medium text-[10px] uppercase tracking-wide">Actual</th>
-                      <th className="px-2 py-1 text-right font-medium text-[10px] uppercase tracking-wide border-r border-slate-200">Var</th>
-                    </React.Fragment>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map(line => {
-                  const rt = routeById[line.route_id] || {};
-                  return (
-                    <tr key={line.key} className="border-t border-slate-100 align-top">
-                      <td className="px-3 py-2 border-r border-slate-100 whitespace-nowrap">
-                        <div className="font-medium text-slate-800">{line.route_id}</div>
-                        <div className="text-[11px] text-slate-400">{rt.origin || "—"} → {rt.dest || "—"}</div>
-                        <div className="text-[11px] text-slate-500">
-                          {line.discipline || "unassigned"}{line.section_id ? ` · ${line.section_id}` : ""}
-                        </div>
-                        <div className="text-[10px] text-slate-400" title={line.vehicle_type}>{line.unit === "m3" ? "m³" : line.unit} · {line.vehicle_type ? vehLabel(line.vehicle_type) : "—"}</div>
-                        {/* Reopening a month does NOT delete its weeks — a confirmed week
-                            with an actual against it is a record of what happened. */}
-                        {line.parent_status && line.parent_status !== "Approved" && (
-                          <div className="text-[10px] mt-0.5" style={{ color: "var(--red)" }}
-                            title="These weeks were created while the month was approved. Reopening it does not delete them.">
-                            month is now {line.parent_status}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 border-r border-slate-100 whitespace-nowrap tabular-nums text-slate-600">
-                        {monthLabelAbs(line.month_index, months.start_year)}
-                      </td>
-                      {WEEK_NOS.map(w => {
-                        const r = line.weeks[w];
-                        if(!r) return <td key={w} colSpan={3} className="px-2 py-2 text-center text-slate-300 border-r border-slate-100">—</td>;
-                        const k = wkKey(r);
-                        const next = isNext(r);
-                        // ⭐ Editable only when it is the next-week cell, or when somebody
-                        // has already edited this one. A confirmed week is never editable.
-                        const canEdit = r.status !== "confirmed" && (next || r.status === "edited");
-                        const after = weekAfter(line, r);
-                        const canCal = r.actual_qty != null && !!after && after.status !== "confirmed";
+      {!page ? <div className="p-8 text-center text-slate-400">Loading…</div>
+      : view === "commit" ? (
+        <>
+          {/* KPI strip — six cards; only the shortage is coloured */}
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3 mb-3">
+            <Kpi value={`${grp(totals.planned_t)} t`} caption="planned this week" />
+            <Kpi value={grp(totals.trips)} caption="trips" />
+            <Kpi value={grp(totals.vehicles_peak)} caption={"vehicles / day peak" + (totals.excludes_unbaked ? " · unbaked lines excluded" : "")} />
+            <Kpi value={grp(totals.tonne_km)} caption="t·km · route basis" />
+            <Kpi value={totals.eur == null ? "—" : "€ " + grp(totals.eur)} caption={totals.eur == null ? "planned € · no rate typed" : `planned € · ${totals.eur_lines} of ${totals.lines} lines priced${totals.eur_partial ? " · partial" : ""}`} />
+            <Kpi value={account.shortfall > 0 ? `+${grp(account.shortfall)}` : "0"} tone={account.shortfall > 0 ? "red" : undefined} caption="last week shortage" />
+            <Kpi value={account.lines ? `${account.delivered} of ${account.lines} lines` : "—"} caption="last week delivered" />
+          </div>
+
+          {/* the clash rail — ONE row, flags run together, +N more */}
+          {rail.count > 0 && (
+            <div className="rounded-lg border px-3 py-2 mb-3 text-xs flex items-start gap-2"
+              style={{ borderColor: "rgba(191,46,85,.35)", background: "rgba(191,46,85,.06)", color: "var(--red)" }}>
+              <span className="mt-1 inline-block w-2 h-2 rounded-full shrink-0" style={{ background: "var(--red)" }} />
+              <span className="min-w-0 flex-1 leading-5">
+                {(railOpen ? rail.flags : rail.flags.slice(0, 3)).map((f, i) => (
+                  <span key={i}>{i > 0 && <span className="text-slate-400"> · </span>}<span className="font-semibold">{f.code}</span> {f.text}</span>
+                ))}
+              </span>
+              {rail.count > 3 && (
+                <button onClick={() => setRailOpen(o => !o)} className="shrink-0 font-semibold hover:underline">
+                  {railOpen ? "show fewer" : `+${rail.count - 3} more`}
+                </button>
+              )}
+            </div>
+          )}
+          {rail.sources && rail.sources.tark_tee === "unavailable" && (
+            <div className="text-[11px] text-amber-700 mb-3">Tark Tee could not be reached — road restrictions were NOT checked for this week. That is not the same as "no restrictions".</div>
+          )}
+
+          {lines.length === 0 ? (
+            <EmptyState title={`No approved forecast line in the commit week (${spanLabel(cw.from, cw.to)}).`}
+              body="Days exist only for Approved month lines. Approve a line for this month, or switch to next week." />
+          ) : (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="overflow-auto">
+                <table className="text-sm" style={{ minWidth: `${420 + dates.length * 118}px` }}>
+                  <thead className="bg-slate-50 text-slate-500 text-xs">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold border-r border-slate-200 sticky left-0 bg-slate-50 z-10" style={{ minWidth: 260 }}>Line</th>
+                      <th className="px-2 py-2 text-left font-semibold border-r border-slate-200"></th>
+                      {dates.map(iso => {
+                        const t = iso === today, we = isWeekend(iso);
                         return (
-                          <React.Fragment key={w}>
-                            <td className={"px-2 py-2 text-right " + (next ? "bg-blue-50/60" : "")}>
-                              {canEdit ? (
-                                <input className={fld} inputMode="decimal"
-                                  value={draft[k + "|p"] ?? (r.planned_qty ?? "")}
-                                  onChange={e => setDraft(d => ({ ...d, [k + "|p"]: e.target.value }))}
-                                  onBlur={() => savePlanned(r)} />
-                              ) : (
-                                <span className="tabular-nums text-slate-600"
-                                  title={r.status === "confirmed" ? "Confirmed — reopen it to change the plan"
-                                                                  : "Only next week is editable"}>
-                                  {fmt(r.planned_qty || 0, line.unit)}
-                                </span>
-                              )}
-                              <div className="mt-1 flex flex-col items-end gap-1">
-                                <StatusChip s={r.status} parentChanged={r.parent_changed} />
-                                {/* A SEPARATE act from editing: adjusting a number and
-                                    committing to it are different, and only the second
-                                    one blocks calibration into this week. */}
-                                {next && r.status !== "confirmed" && (
-                                  <button onClick={() => { setConfirming(r); setFlags({ weather: r.weather || "", wetness: r.wetness || "", traffic: r.traffic || "", other: r.other || "" }); }}
-                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded text-white"
-                                    style={{ background: "var(--green)" }}>Confirm next week</button>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-2 py-2 text-right">
-                              <input className={fld} inputMode="decimal" placeholder="—"
-                                value={draft[k + "|a"] ?? (r.actual_qty ?? "")}
-                                onChange={e => setDraft(d => ({ ...d, [k + "|a"]: e.target.value }))}
-                                onBlur={() => saveActual(r)} />
-                              <input className={fld + " mt-1 text-left"} placeholder="note"
-                                value={draft[k + "|n"] ?? (r.actual_note ?? "")}
-                                onChange={e => setDraft(d => ({ ...d, [k + "|n"]: e.target.value }))}
-                                onBlur={() => saveActual(r)} />
-                            </td>
-                            <td className="px-2 py-2 text-right border-r border-slate-100">
-                              <span className="tabular-nums font-medium"
-                                style={{ color: r.variance == null ? "#cbd5e1"
-                                  : r.variance > 0 ? "var(--red)" : "var(--green)" }}>
-                                {r.variance == null ? "—" : fmt(r.variance, line.unit)}
-                              </span>
-                              {/* ⭐ NEVER fires on save of the actual. A separate press,
-                                  writing next week and nothing else. */}
-                              <div className="mt-1">
-                                {r.actual_qty != null && (
-                                  <button disabled={!canCal}
-                                    onClick={() => setCalibrating({ row: r, unit: line.unit, override: "" })}
-                                    title={!after ? "Next week is outside this window"
-                                      : after.status === "confirmed" ? "Next week is already confirmed — reopen it first"
-                                      : "Add this variance to next week's plan"}
-                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded border disabled:opacity-40"
-                                    style={{ borderColor: "var(--navy)", color: "var(--navy)" }}>
-                                    → next week
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </React.Fragment>
+                          <th key={iso} className="px-2 py-1.5 text-right border-r border-slate-100"
+                            style={t ? { background: "#eff6ff" } : {}}>
+                            <div className={"font-semibold " + (we ? "text-slate-400" : (t ? "" : "text-slate-700"))}
+                              style={t ? { color: "var(--navy)" } : {}}>{dayName(iso)} {dayNum(iso)}{t ? " · today" : ""}</div>
+                            <div className="text-[9px] uppercase tracking-wide text-slate-400 font-medium">{we ? "0 default" : "qty · tr · veh"}</div>
+                          </th>
                         );
                       })}
                     </tr>
+                  </thead>
+                  <tbody>
+                    {lines.map(line => {
+                      const c = line.context || {};
+                      const lk = lineKeyOf(line);
+                      const lf = flagsByLine[lk] || [];
+                      const w = line.week || {};
+                      const locked = w.status === "confirmed";
+                      const wd = line.week_derived || {};
+                      const isOpen = !!open[lk];
+                      return (
+                        <React.Fragment key={lk}>
+                          <tr className="border-t border-slate-100 align-top">
+                            <td className="px-3 py-2 border-r border-slate-100 sticky left-0 bg-white z-10" style={{ minWidth: 260 }}>
+                              <div className="flex items-start gap-1.5">
+                                <button onClick={() => setOpen(o => ({ ...o, [lk]: !o[lk] }))}
+                                  className="text-slate-400 hover:text-slate-700 text-xs mt-0.5 w-4 shrink-0"
+                                  title={isOpen ? "Hide km, t·km, cycle and €" : "Show km, t·km, cycle and €"}>{isOpen ? "▼" : "▶"}</button>
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-[color:var(--navy-deep)] whitespace-nowrap">
+                                    {c.origin_name || line.route_id} <span className="text-slate-400 font-normal">→</span> {c.dest_name || "—"}
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-1 mt-0.5 text-[11px] text-slate-500">
+                                    <IptPill ipt={c.ipt} /><WsPill ws={c.section_id} />
+                                    <span>{c.material_type || "—"} · <span title={c.vehicle_type}>{c.vehicle_short || vehLabel(c.vehicle_type) || "—"}</span></span>
+                                    <StatusChip s={w.status} parentChanged={w.parent_changed} />
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 mt-0.5">{line.route_id} · {line.discipline || "unassigned"} · {unitLbl(line.unit)} · week {grp(w.planned_qty, 1)} {unitLbl(line.unit)}{line.days_ne_week ? <span style={{ color: "var(--red)" }}> · days sum {grp(line.days_sum, 1)} ≠ week</span> : null}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-2 py-2 border-r border-slate-100"><LineFlags flags={lf} /></td>
+                            {line.days.map(d => {
+                              const k = `${lk}|${d.day_date}|p`;
+                              const t = d.day_date === today, we = isWeekend(d.day_date);
+                              const f = d.derived || {};
+                              return (
+                                <td key={d.day_date} className="px-2 py-2 text-right border-r border-slate-100"
+                                  style={t ? { background: "#eff6ff" } : {}}>
+                                  {/* ⭐ Editable while the week is not confirmed — this week or next,
+                                      whichever bucket is open. A confirmed week's plan is read-only
+                                      (L6); re-open it to change it. Sat/Sun are typeable: 0 is a
+                                      default, not a rule. */}
+                                  {!locked ? (
+                                    <input className={fld + (we && !(draft[k] ?? d.planned_qty) ? " text-slate-300" : " font-semibold")} inputMode="decimal"
+                                      value={draft[k] ?? (d.planned_qty ?? "")}
+                                      onChange={e => setDraft(x => ({ ...x, [k]: e.target.value }))}
+                                      onBlur={() => saveDay(line, d)} />
+                                  ) : (
+                                    <span className={"tabular-nums " + (we ? "text-slate-300" : "font-semibold text-slate-700")}
+                                      title="Confirmed — reopen it to change the plan">{grp(d.planned_qty, 1)}{we ? "" : ` ${unitLbl(line.unit)}`}</span>
+                                  )}
+                                  <div className="text-[10px] text-slate-500 mt-0.5 tabular-nums whitespace-nowrap">
+                                    {we && !(+d.planned_qty) ? "" : c.baked
+                                      ? `${grp(f.trips)} tr · ${grp(f.vehicles)} veh`
+                                      : <span title="Vehicles need a baked route for this vehicle">{grp(f.trips)} tr · <span className="text-amber-700">veh —</span></span>}
+                                    {d.status === "edited" && <span className="ml-1 text-amber-700" title="typed — this day no longer follows the week ÷ 5">✎</span>}
+                                  </div>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                          {isOpen && (
+                            <tr className="bg-slate-50 border-t border-slate-100">
+                              <td colSpan={2 + dates.length} className="px-3 py-1.5 text-[11px] text-slate-600 tabular-nums">
+                                {c.baked ? (
+                                  <>
+                                    {grp(c.km_trip)} km/trip{c.return_baked ? "" : " (outbound only — return not baked)"} · {grp(wd.km)} km/week
+                                    · {grp(wd.vehicles_peak)} veh peak · {grp(wd.tonne_km)} t·km ({c.km_basis === "loaded" ? "loaded leg" : "round trip"})
+                                    · cycle {grp(c.cycle_min)} min {c.cycle_source === "here" ? "HERE" : "HERE‡ (return estimated)"}
+                                    · {c.cycles_per_vehicle_day} cycles/veh/day · {wd.eur == null ? "rate not set" : `€ ${grp(wd.eur)}${wd.eur_partial ? " (per-km term missing)" : ""} this week`}
+                                  </>
+                                ) : (
+                                  <span className="text-amber-700">km — until the route is baked · trips still from {grp(c.payload_t, 1)} t planning payload{c.payload_fallback ? ` (${c.payload_fallback} fallback)` : ""}{wd.eur != null ? ` · € ${grp(wd.eur)}${wd.eur_partial ? " without the per-km term" : ""}` : ""}</span>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100">
+                Editable cells = this week, while status is not confirmed. Confirm locks Mon–Sun as the haulier sheet. Weekend
+                columns start at 0. Figures are planning, not plated. ✎ = a typed day that no longer follows the week ÷ 5.
+                {busy && <span className="ml-2 text-slate-500">saving…</span>}
+              </div>
+            </div>
+          )}
+
+          {/* Stock held — the forecast balance at week end, planned inbound included */}
+          {stock.length > 0 && (
+            <div className="mt-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">Stock held</div>
+              <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+                {stock.map(s => {
+                  const cap = s.capacity_qty, over = !!s.over;
+                  const pct = cap ? Math.max(0, Math.min(100, (s.forecast / cap) * 100)) : 0;
+                  return (
+                    <div key={s.location_id}>
+                      <div className="font-semibold text-sm" style={{ color: over ? "var(--red)" : "var(--navy-deep)" }}>{s.name}</div>
+                      <div className="text-[11px] tabular-nums" style={{ color: over ? "var(--red)" : "#475569" }}>
+                        {cap == null ? "no capacity recorded" : `max ${grp(cap)} ${s.unit}`} · opening {grp(s.opening)} · inbound planned {grp(s.inbound_planned)} · consume {grp(s.consume)} · forecast {grp(s.forecast)}
+                        {cap == null ? "" : over ? ` · OVER by ${grp(s.over_by)} ${s.unit}` : ` · remaining ${grp(s.remaining)}`}
+                        {s.unconvertible_lines ? <span className="text-amber-700"> · {s.unconvertible_lines} line(s) not convertible to {s.unit}</span> : null}
+                      </div>
+                      {cap != null && (
+                        <div className="h-1.5 rounded-full bg-slate-200 mt-1 w-full max-w-md">
+                          <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: over ? "var(--red)" : "var(--green)" }} />
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+            </div>
+          )}
+        </>
+      ) : view === "account" ? (
+        <>
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-3">
+            <Kpi value={account.lines ? `${account.delivered} of ${account.lines} lines` : "—"} caption="last week delivered · 98% band" />
+            <Kpi value={`${grp(account.actual_t)} t`} caption={`actual moved · ${account.reported || 0} of ${account.lines || 0} reported`} />
+            <Kpi value={account.shortfall > 0 ? `+${grp(account.shortfall)}` : "0"} tone={account.shortfall > 0 ? "red" : undefined} caption="shortfall vs plan · not yet carried" />
+            <Kpi value={`${account.open_to_calibrate || 0} line${account.open_to_calibrate === 1 ? "" : "s"} open to calibrate`} caption="adds shortage onto this week · not auto" />
           </div>
-          <div className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100">
-            Editable cell = <span className="px-1 bg-blue-50">next week</span> ({monthLabelAbs(nextW.month_index, months.start_year)},
-            week {nextW.week_index}), chosen by the server. Variance = planned − actual. Typing an actual never
-            moves next week; the → button does, and only next week.
-            {busy && <span className="ml-2 text-slate-500">saving…</span>}
-          </div>
-        </div>
+          {!account.week || account.rows.length === 0 ? (
+            <EmptyState title="No approved line in last week." body="The Account view types what actually moved against last week's plan. There is nothing to account for yet." />
+          ) : (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="overflow-auto">
+                <table className="text-sm w-full" style={{ minWidth: 1100 }}>
+                  <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wide">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">Line</th>
+                      <th className="px-2 py-2 text-right font-semibold">Planned</th>
+                      <th className="px-2 py-2 text-right font-semibold">Actual</th>
+                      <th className="px-2 py-2 text-right font-semibold">Variance</th>
+                      <th className="px-2 py-2 text-right font-semibold">Planned €</th>
+                      <th className="px-2 py-2 text-right font-semibold">Actual €</th>
+                      <th className="px-2 py-2 text-right font-semibold">€ var</th>
+                      <th className="px-2 py-2 text-left font-semibold">Note</th>
+                      <th className="px-2 py-2 text-right font-semibold">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {account.rows.map(r => {
+                      const k = wkKey(r);
+                      const short = r.action === "spread";
+                      return (
+                        <tr key={k} className="border-t border-slate-100 align-middle" style={short ? { background: "rgba(191,46,85,.05)" } : {}}>
+                          <td className="px-3 py-2">
+                            <div className="font-semibold text-[color:var(--navy-deep)] whitespace-nowrap">{r.route_id}</div>
+                            <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-1">
+                              <IptPill ipt={r.ipt} /><WsPill ws={r.section_id} />
+                              <span>{r.material_type || "—"} · <span title={r.vehicle_type}>{vehShort(r.vehicle_type) || "—"}</span> · {r.status}</span>
+                            </div>
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums font-semibold">{grp(r.planned_qty, 1)} {unitLbl(r.unit)}</td>
+                          <td className="px-2 py-2 text-right">
+                            <input className={fld + " max-w-[110px] ml-auto"} inputMode="decimal" placeholder="—"
+                              style={short ? { borderColor: "var(--red)" } : {}}
+                              value={draft[k + "|a"] ?? (r.actual_qty ?? "")}
+                              onChange={e => setDraft(d => ({ ...d, [k + "|a"]: e.target.value }))}
+                              onBlur={() => saveActual(r)} />
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums font-medium"
+                            style={{ color: r.variance == null ? "#cbd5e1" : r.variance > 0 && !r.held ? "var(--red)" : "var(--green)" }}>
+                            {r.variance == null ? "—" : (r.variance > 0 ? "+" : "") + grp(r.variance, 1)}
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums text-slate-600">{r.planned_eur == null ? <span className="text-slate-300">rate not set</span> : "€ " + grp(r.planned_eur)}</td>
+                          <td className="px-2 py-2 text-right">
+                            <input className={fld + " max-w-[110px] ml-auto"} inputMode="decimal" placeholder="€ —"
+                              title="The confirmed cost of this week, as invoiced or agreed. Typed, never derived."
+                              value={draft[k + "|c"] ?? (r.actual_cost_eur ?? "")}
+                              onChange={e => setDraft(d => ({ ...d, [k + "|c"]: e.target.value }))}
+                              onBlur={() => saveActual(r)} />
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums font-medium"
+                            style={{ color: r.eur_variance == null ? "#cbd5e1" : r.eur_variance < 0 ? "var(--red)" : "var(--green)" }}>
+                            {r.eur_variance == null ? "—" : (r.eur_variance > 0 ? "+" : "") + grp(r.eur_variance)}
+                          </td>
+                          <td className="px-2 py-2">
+                            <input className={fld + " text-left"} placeholder="not typed"
+                              value={draft[k + "|n"] ?? (r.actual_note ?? "")}
+                              onChange={e => setDraft(d => ({ ...d, [k + "|n"]: e.target.value }))}
+                              onBlur={() => saveActual(r)} />
+                          </td>
+                          <td className="px-2 py-2 text-right whitespace-nowrap">
+                            {r.action === "held" && <span className="text-[11px] font-semibold px-2 py-1 rounded-full" style={{ color: "var(--green)", background: "rgba(3,158,134,.12)" }}>held</span>}
+                            {r.action === "waiting" && <span className="text-[11px] text-slate-400">waiting</span>}
+                            {r.action === "applied" && <span className="text-[11px] font-semibold px-2 py-1 rounded-full text-slate-600 bg-slate-100" title={`${grp(r.carried, 1)} carried into this week`}>applied · {grp(r.carried, 1)}</span>}
+                            {r.action === "spread" && (
+                              <button onClick={() => doSpread(r)} disabled={!!busy}
+                                className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg text-white disabled:opacity-40"
+                                title={`Carry +${grp(r.remaining_short, 1)} into the commit week, divided over its remaining weekdays. Refused if that week is confirmed.`}
+                                style={{ background: "var(--navy)" }}>spread on this week</button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100 space-y-0.5">
+                <div>Variance = planned − actual. Green = held (within the 98 % band) or over-delivered. Red = short. Empty actual is not zero — it is "not reported".
+                  Calibrate never fires on save; only the navy button writes the commit week, and only if that week is not already confirmed.</div>
+                <div>"Spread on this week" divides the shortage not yet carried across the remaining weekdays of the commit week (all of Mon–Fri when that week has not started). Sat/Sun stay 0 unless you type them. A second press carries only what the first did not.</div>
+                {busy && <span className="text-slate-500">saving…</span>}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {horizon.rows.length === 0 ? (
+            <EmptyState title={`No approved forecast lines in ${monthLabelAbs(cw.month_index || 1, months.start_year)} or the month after.`}
+              body="Weeks are created when a month line is approved — a Pending line has none by design." />
+          ) : (() => {
+            const g = {};
+            horizon.rows.forEach(r => {
+              const k = `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}`;
+              const e = (g[k] || (g[k] = { key: k, route_id: r.route_id, discipline: r.discipline || "", section_id: r.section_id || "",
+                                 unit: r.unit, material_type: r.material_type, vehicle_type: r.vehicle_type, ipt: r.ipt, weeks: {}, reopened: [] }));
+              e.weeks[`${r.month_index}|${r.week_index}`] = r;
+              // Reopening a month does NOT delete its weeks — a confirmed week with an
+              // actual against it is a record of what happened. Shown as a note.
+              if(r.parent_status && r.parent_status !== "Approved" && !e.reopened.includes(r.month_index)) e.reopened.push(r.month_index);
+            });
+            const hl = Object.values(g).sort((a, b) => a.route_id.localeCompare(b.route_id) || a.discipline.localeCompare(b.discipline));
+            const cols = [];
+            [horizon.from_month, horizon.to_month].forEach(m => WEEK_NOS.forEach(w => cols.push({ m, w })));
+            const roleOf = (m, w) => { const rr = horizon.roles || {}; return Object.keys(rr).find(k => rr[k][0] === m && rr[k][1] === w) || null; };
+            const roleLbl = { account: "ACCOUNT", commit: "COMMIT", "make-ready": "MAKE-READY", "early-warning": "EARLY WARNING" };
+            return (
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="overflow-auto">
+                  <table className="text-sm" style={{ minWidth: 1300 }}>
+                    <thead className="bg-slate-50 text-slate-500 text-xs">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold border-r border-slate-200 sticky left-0 bg-slate-50 z-10" style={{ minWidth: 240 }}>
+                          Line<div className="text-[10px] font-normal text-slate-400">{monthLabelAbs(horizon.from_month, months.start_year)} · {monthLabelAbs(horizon.to_month, months.start_year)}</div>
+                        </th>
+                        {cols.map(({ m, w }) => {
+                          const role = roleOf(m, w);
+                          return (
+                            <th key={`${m}|${w}`} className="px-2 py-1.5 text-left border-r border-slate-100"
+                              style={role === "commit" ? { background: "#eff6ff" } : {}}>
+                              <div className={"font-semibold " + (role === "commit" ? "" : "text-slate-600")} style={role === "commit" ? { color: "var(--navy)" } : {}}>
+                                W{w} · {WEEK_DAYS[w]}{w === 1 ? ` ${MONTHS[(m - 1) % 12]}` : ""}
+                              </div>
+                              <div className="text-[9px] uppercase tracking-wide text-slate-400">{roleLbl[role] || " "}</div>
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {hl.map(line => (
+                        <tr key={line.key} className="border-t border-slate-100 align-top">
+                          <td className="px-3 py-2 border-r border-slate-100 sticky left-0 bg-white z-10">
+                            <div className="font-semibold text-[color:var(--navy-deep)] whitespace-nowrap">{line.route_id}</div>
+                            <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-1"><IptPill ipt={line.ipt} /><WsPill ws={line.section_id} /><span>{line.material_type || "—"} · {vehShort(line.vehicle_type) || "—"}</span></div>
+                            {line.reopened.length > 0 && (
+                              <div className="text-[10px] mt-0.5" style={{ color: "var(--red)" }}
+                                title="These weeks were created while the month was approved. Reopening it does not delete them.">
+                                month is now {(line.weeks[Object.keys(line.weeks).find(k => +k.split("|")[0] === line.reopened[0])] || {}).parent_status || "reopened"} ({line.reopened.map(m => monthLabelAbs(m, months.start_year)).join(", ")})
+                              </div>
+                            )}
+                          </td>
+                          {cols.map(({ m, w }) => {
+                            const r = line.weeks[`${m}|${w}`];
+                            const role = roleOf(m, w);
+                            if(!r) return <td key={`${m}|${w}`} className="px-2 py-2 text-slate-300 border-r border-slate-100" style={role === "commit" ? { background: "#eff6ff" } : {}}>—</td>;
+                            const short = r.actual_qty != null && r.variance > 0 && !(r.actual_qty >= 0.98 * (r.planned_qty || 0));
+                            const status = r.actual_qty != null
+                              ? <span style={{ color: short ? "var(--red)" : "var(--green)" }}>actual {grp(r.actual_qty, 1)} · {short ? `+${grp(r.variance, 1)} short${r.calibrated_at ? " · carried" : ""}` : "held"}</span>
+                              : r.status === "confirmed" ? <span style={{ color: "var(--green)" }}>confirmed</span>
+                              : r.status === "edited" ? <span className="text-amber-700">edited{role === "commit" ? " · open days" : ""}</span>
+                              : <span className="text-slate-400">derived ÷4</span>;
+                            return (
+                              <td key={`${m}|${w}`} className="px-2 py-2 border-r border-slate-100 whitespace-nowrap" style={role === "commit" ? { background: "#eff6ff" } : {}}>
+                                <div className="font-semibold tabular-nums text-slate-800">{grp(r.planned_qty, 1)} {unitLbl(line.unit)}</div>
+                                <div className="text-[10px] tabular-nums">{status}{r.parent_changed && <span style={{ color: "var(--red)" }}> · month changed</span>}</div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100">
+                  No day columns here. Confirm lives on the Commit view. Weeks beyond the commit week stay week totals so hauliers are not sent a four-week daily spreadsheet.
+                  Blue column = the commit week{bucket === "next" ? " (next week, by the switch above)" : " — the week that contains today"}. That is the only week that materialises daily rows.
+                </div>
+              </div>
+            );
+          })()}
+          <Stockpiles meta={meta} who={who} from={horizon.from_month || cw.month_index || 1} to={horizon.to_month || (cw.month_index || 1) + 1} tick={tick} />
+        </>
       )}
 
       {confirming && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={() => setConfirming(null)}>
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={() => setConfirming(false)}>
           <div className="bg-white rounded-xl p-5 w-full max-w-md space-y-3" onClick={e => e.stopPropagation()}>
             <div className="font-semibold text-[color:var(--navy-deep)]">
-              Confirm {confirming.route_id} · {monthLabelAbs(confirming.month_index, months.start_year)} week {confirming.week_index}
+              Confirm the week of {spanLabel(cw.from, cw.to)} — {lines.filter(l => !(l.week && l.week.status === "confirmed")).length} line(s)
             </div>
             <p className="text-xs text-slate-500">
-              All four notes are optional and may be left blank. Free text — no scores, no lookups, no colour
-              used as logic.
+              Whole week, one act: every line's Mon–Sun is locked as the haulier sheet and calibrate into this week is
+              disabled until it is re-opened. Actuals stay typeable. All four notes are optional and may be left blank.
+              Free text — no scores, no lookups, no colour used as logic.
             </p>
             {["weather", "wetness", "traffic", "other"].map(f => (
               <label key={f} className="block">
@@ -2101,37 +2443,80 @@ function LookAhead({ meta, who }){
               </label>
             ))}
             <div className="flex gap-2 justify-end pt-1">
-              <button onClick={() => setConfirming(null)} className="px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+              <button onClick={() => setConfirming(false)} className="px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
               <button onClick={doConfirm} className="px-4 py-2 text-sm font-semibold text-white rounded-lg" style={{ background: "var(--green)" }}>Confirm week</button>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
 
-      {calibrating && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={() => setCalibrating(null)}>
-          <div className="bg-white rounded-xl p-5 w-full max-w-md space-y-3" onClick={e => e.stopPropagation()}>
-            <div className="font-semibold text-[color:var(--navy-deep)]">Apply variance to next week</div>
-            <p className="text-xs text-slate-600">
-              next.planned = next.planned + (planned − actual) ={" "}
-              <span className="tabular-nums font-medium">{fmt(calibrating.row.variance || 0, calibrating.unit)}</span>.
-              Only next week changes; weeks after it are untouched.
-            </p>
-            <label className="block">
-              <span className="text-[11px] uppercase tracking-wide text-slate-400">Or type next week's figure instead</span>
-              <input className={selCls} inputMode="decimal" placeholder="leave blank to use the formula"
-                value={calibrating.override}
-                onChange={e => setCalibrating(c => ({ ...c, override: e.target.value }))} />
-            </label>
-            <div className="flex gap-2 justify-end pt-1">
-              <button onClick={() => setCalibrating(null)} className="px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
-              <button onClick={doCalibrate} className="px-4 py-2 text-sm font-semibold text-white rounded-lg" style={{ background: "var(--navy)" }}>Apply</button>
-            </div>
-          </div>
-        </div>
-      )}
 
-      <Stockpiles meta={meta} who={who} from={win.from} to={win.to} tick={tick} />
+// ---- Look-ahead v2 slices 3-5: the typed planning cap and contract rates on ONE route --
+// Its own save, separate from the endpoint/vehicle form above: these are planning inputs
+// that touch no geometry. Nothing is seeded — an empty field means "no rate typed" and the
+// Look-ahead prints "rate not set" rather than €0. The cap is a FLAG on the Look-ahead,
+// never a block (brief L2). km basis decides what the per-km rate and t·km multiply.
+function RoutePlanning({ route, token, onSaved }){
+  const [v, setV] = useState({ max_vehicles_per_day: "", rate_eur_per_load: "", rate_eur_per_t: "", rate_eur_per_km: "", km_basis: "round_trip" });
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setV({ max_vehicles_per_day: route.max_vehicles_per_day ?? "", rate_eur_per_load: route.rate_eur_per_load ?? "",
+           rate_eur_per_t: route.rate_eur_per_t ?? "", rate_eur_per_km: route.rate_eur_per_km ?? "",
+           km_basis: route.km_basis || "round_trip" });
+    setMsg("");
+  }, [route.id]);
+  const save = async () => {
+    try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    setBusy(true);
+    try {
+      const body = {};
+      ["max_vehicles_per_day", "rate_eur_per_load", "rate_eur_per_t", "rate_eur_per_km"].forEach(k => {
+        body[k] = (v[k] === "" || v[k] == null) ? null : +v[k];
+      });
+      body.km_basis = v.km_basis;
+      const res = await fetch(`${API}/admin/routes/${encodeURIComponent(route.id)}/planning${qs}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if(!res.ok){ const t = await res.text(); throw new Error(`${res.status} ${t.slice(0, 140)}`); }
+      await res.json();
+      setMsg("Saved planning figures.");
+      if(onSaved) await onSaved();
+    } catch(e){ setMsg("Couldn't save: " + e.message); }
+    setBusy(false);
+  };
+  const inp = "mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--blue)]";
+  const F = ({ k, label, step }) => (
+    <label className="block">
+      <span className="text-[11px] uppercase tracking-wide text-slate-400">{label}</span>
+      <input className={inp} inputMode="decimal" placeholder="—" value={v[k]}
+        onChange={e => setV(x => ({ ...x, [k]: e.target.value }))} />
+    </label>
+  );
+  return (
+    <div className="border-t border-slate-200 pt-3 mt-3 space-y-2">
+      <div className="text-sm font-semibold text-slate-700">Planning · Look-ahead</div>
+      <p className="text-[11px] text-slate-400">Typed, never seeded. Rates are SUMMED where filled (a base per load plus a per-km rate is the usual Estonian quote). Blank = no rate, and the Look-ahead prints "rate not set".</p>
+      <div className="grid grid-cols-2 gap-2">
+        <F k="max_vehicles_per_day" label="Max vehicles / day (flag only)" />
+        <label className="block">
+          <span className="text-[11px] uppercase tracking-wide text-slate-400">km basis · €/km and t·km</span>
+          <select className={inp} value={v.km_basis} onChange={e => setV(x => ({ ...x, km_basis: e.target.value }))}>
+            <option value="round_trip">round trip (loaded + return)</option>
+            <option value="loaded">loaded leg only</option>
+          </select>
+        </label>
+        <F k="rate_eur_per_load" label="€ per load" />
+        <F k="rate_eur_per_t" label="€ per tonne" />
+        <F k="rate_eur_per_km" label="€ per km" />
+      </div>
+      <button onClick={save} disabled={busy}
+        className="w-full py-2 rounded-lg text-sm font-semibold border disabled:opacity-50"
+        style={{ borderColor: "var(--navy)", color: "var(--navy)", background: "white" }}>{busy ? "Saving…" : "Save planning figures"}</button>
+      {msg && <p className="text-xs text-slate-500">{msg}</p>}
     </div>
   );
 }
@@ -5194,6 +5579,7 @@ function DataManagement({ meta, who, subTab: propSubTab, onSubTab }){
               )}
               {routeMsg && <p className="text-xs text-slate-500">{routeMsg}</p>}
               <p className="text-[11px] text-slate-400">Destinations sharing no material with the origin are greyed out. Ticked vehicles are routed through HERE as soon as the route is created.</p>
+              {editingRoute && <RoutePlanning route={(status || []).find(r => r.id === editingRoute) || {}} token={token} onSaved={reloadNetwork} />}
             </div>
           </div>
           )}
