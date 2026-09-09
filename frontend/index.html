@@ -1866,7 +1866,7 @@ function WsPill({ ws }){
   return <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
     style={{ background: "rgba(0,55,135,.08)", color: "var(--navy)" }}>{ws}</span>;
 }
-function Kpi({ value, caption, tone }){
+function LaKpi({ value, caption, tone }){
   return (
     <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 min-w-0">
       <div className="text-2xl font-bold tabular-nums truncate"
@@ -2065,13 +2065,13 @@ function LookAhead({ meta, who, initialPage, initialView }){
         <>
           {/* KPI strip — six cards; only the shortage is coloured */}
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3 mb-3">
-            <Kpi value={`${grp(totals.planned_t)} t`} caption="planned this week" />
-            <Kpi value={grp(totals.trips)} caption="trips" />
-            <Kpi value={grp(totals.vehicles_peak)} caption={"vehicles / day peak" + (totals.excludes_unbaked ? " · unbaked lines excluded" : "")} />
-            <Kpi value={grp(totals.tonne_km)} caption="t·km · route basis" />
-            <Kpi value={totals.eur == null ? "—" : "€ " + grp(totals.eur)} caption={totals.eur == null ? "planned € · no rate typed" : `planned € · ${totals.eur_lines} of ${totals.lines} lines priced${totals.eur_partial ? " · partial" : ""}`} />
-            <Kpi value={account.shortfall > 0 ? `+${grp(account.shortfall)}` : "0"} tone={account.shortfall > 0 ? "red" : undefined} caption="last week shortage" />
-            <Kpi value={account.lines ? `${account.delivered} of ${account.lines} lines` : "—"} caption="last week delivered" />
+            <LaKpi value={`${grp(totals.planned_t)} t`} caption="planned this week" />
+            <LaKpi value={grp(totals.trips)} caption="trips" />
+            <LaKpi value={grp(totals.vehicles_peak)} caption={"vehicles / day peak" + (totals.excludes_unbaked ? " · unbaked lines excluded" : "")} />
+            <LaKpi value={grp(totals.tonne_km)} caption="t·km · route basis" />
+            <LaKpi value={totals.eur == null ? "—" : "€ " + grp(totals.eur)} caption={totals.eur == null ? "planned € · no rate typed" : `planned € · ${totals.eur_lines} of ${totals.lines} lines priced${totals.eur_partial ? " · partial" : ""}`} />
+            <LaKpi value={account.shortfall > 0 ? `+${grp(account.shortfall)}` : "0"} tone={account.shortfall > 0 ? "red" : undefined} caption="last week shortage" />
+            <LaKpi value={account.lines ? `${account.delivered} of ${account.lines} lines` : "—"} caption="last week delivered" />
           </div>
 
           {/* the clash rail — ONE row, flags run together, +N more */}
@@ -2241,10 +2241,10 @@ function LookAhead({ meta, who, initialPage, initialView }){
       ) : view === "account" ? (
         <>
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-3">
-            <Kpi value={account.lines ? `${account.delivered} of ${account.lines} lines` : "—"} caption="last week delivered · 98% band" />
-            <Kpi value={`${grp(account.actual_t)} t`} caption={`actual moved · ${account.reported || 0} of ${account.lines || 0} reported`} />
-            <Kpi value={account.shortfall > 0 ? `+${grp(account.shortfall)}` : "0"} tone={account.shortfall > 0 ? "red" : undefined} caption="shortfall vs plan · not yet carried" />
-            <Kpi value={`${account.open_to_calibrate || 0} line${account.open_to_calibrate === 1 ? "" : "s"} open to calibrate`} caption="adds shortage onto this week · not auto" />
+            <LaKpi value={account.lines ? `${account.delivered} of ${account.lines} lines` : "—"} caption="last week delivered · 98% band" />
+            <LaKpi value={`${grp(account.actual_t)} t`} caption={`actual moved · ${account.reported || 0} of ${account.lines || 0} reported`} />
+            <LaKpi value={account.shortfall > 0 ? `+${grp(account.shortfall)}` : "0"} tone={account.shortfall > 0 ? "red" : undefined} caption="shortfall vs plan · not yet carried" />
+            <LaKpi value={`${account.open_to_calibrate || 0} line${account.open_to_calibrate === 1 ? "" : "s"} open to calibrate`} caption="adds shortage onto this week · not auto" />
           </div>
           {!account.week || account.rows.length === 0 ? (
             <EmptyState title="No approved line in last week." body="The Account view types what actually moved against last week's plan. There is nothing to account for yet." />
