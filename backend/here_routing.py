@@ -134,7 +134,8 @@ def _query(params, via_values):
 
 
 def routes(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None,
-           alternatives=1, laden=True, via=None, pass_through=False):
+           alternatives=1, laden=True, via=None, pass_through=False,
+           departure_time=None):
     """
     Route origin -> destination for a vehicle profile, returning up to `alternatives`
     options ranked best-first.
@@ -154,6 +155,18 @@ def routes(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None,
     /api/admin/diagnostics/haul-roads?probe=true, which sends the same route with and
     without vias and reports how many routes came back each time, before believing
     either answer.
+
+    ⚠️ `departure_time` — NEW 2026-09-09, and it exists because of a measured problem, not
+    a feature request. R001's laden leg was baked at 06:29 as 16.15 km and re-requested at
+    ~08:00 as 15.11 km: same endpoints, same profile, same (empty) avoid set, one section,
+    no notices. **Nothing in this request pinned the time**, so whatever HERE does about
+    time-dependent conditions was free to change between the two calls, and every figure
+    derived from a baked route — cycle, trips/day, vehicles, tonnes, t·km, CO2 — moved
+    with it.
+
+    🔴 **Passing None keeps today's behaviour exactly.** Nothing in the bake path sets this
+    yet, deliberately: what pinning actually does to HERE's answer is a question for
+    departure_probe(), not an assumption to bake in. Decide from the probe, then pin.
     """
     key = api_key()
     if not key:
@@ -172,6 +185,8 @@ def routes(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None,
     params.update(_truck_params(profile, factors, laden=laden))
     if avoid_areas:  # list of "bbox:west,south,east,north" strings
         params["avoid[areas]"] = "|".join(avoid_areas)
+    if departure_time:
+        params["departureTime"] = str(departure_time)
     url = HERE_ENDPOINT + "?" + _query(params, _via_values(via, pass_through))
     try:
         with urllib.request.urlopen(url, timeout=30) as resp:
@@ -227,7 +242,8 @@ def route(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None,
 #  Diagnostics                                                                 #
 # --------------------------------------------------------------------------- #
 def probe(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None,
-          alternatives=ALTERNATIVES_DEFAULT, laden=True, via=None, pass_through=False):
+          alternatives=ALTERNATIVES_DEFAULT, laden=True, via=None, pass_through=False,
+          departure_time=None):
     """
     Make one real HERE call and report what went out and what came back.
 
@@ -259,6 +275,8 @@ def probe(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None,
     params.update(_truck_params(profile, factors, laden=laden))
     if avoid_areas:
         params["avoid[areas]"] = "|".join(avoid_areas)
+    if departure_time:
+        params["departureTime"] = str(departure_time)
     via_values = _via_values(via, pass_through)
 
     sent = {k: v for k, v in params.items() if k != "apiKey"}
@@ -321,4 +339,166 @@ def probe(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None,
     if len(summaries) > 1:
         d = [s["distance_km"] for s in summaries]
         out["alternatives_distinct"] = len(set(d)) > 1
+    return out
+
+
+# --------------------------------------------------------------------------- #
+#  The departure-time experiment                                              #
+# --------------------------------------------------------------------------- #
+#
+# 🔴 WHY THIS EXISTS. On 2026-09-09 R001's laden leg was measured against the live
+# deployment and did not reproduce:
+#
+#     cached, baked 06:29:59   16.15 km / 0.318 h
+#     re-requested ~08:00      15.11 km / 0.291 h
+#
+# Same endpoints, same profile, same (empty) avoid set, one HERE section, no notices --
+# and the return leg reproduced to the metre (16.64 both times). Three repeats within a
+# few minutes all gave 15.11, including for a different vehicle profile, so the answer is
+# stable NOW and was a different road THIS MORNING. Corroborating: at bake time HERE had
+# offered a 15.22 km alternative and ranked the 16.15 km road first; it ranks the short
+# one first now.
+#
+# The only input that changed is the clock, and nothing in the request pins it. That is a
+# hypothesis with a name, not a proven cause -- so this is the experiment, not a fix.
+#
+# ⚠️ WHAT THIS DOES NOT DO. It does not pin anything. Nothing in the bake path passes
+# departure_time. Deciding to pin bakes to a representative time is a product decision
+# that should follow the answer, not precede it.
+#
+# ⭐ THE CONTROL IS RUN TWICE, FIRST AND LAST. If HERE's unpinned answer changes DURING
+# the experiment, then nothing measured between the two controls can be attributed to the
+# departureTime values, and the report says so instead of quietly reporting a difference.
+
+import hashlib          # noqa: E402  (kept beside the code that uses it)
+from datetime import datetime, timedelta, timezone   # noqa: E402
+
+#: Times of day the default experiment brackets a working day with. Chosen to straddle
+#: the morning peak, mid-morning, and the evening peak -- NOT sourced from any traffic
+#: study, and deliberately few, because each one is a real HERE request.
+_DEFAULT_HOURS = ((6, 30), (8, 0), (11, 0), (17, 0))
+
+#: HERE accepts the literal `any` to mean "ignore time-dependent effects entirely".
+#: Included as its own row because it is the candidate value for pinning: if `any`
+#: reproduces and the unpinned control does not, `any` is the answer.
+TIME_ANY = "any"
+
+
+def _fingerprint(coords):
+    """
+    A short stable hash of a decoded polyline.
+
+    ⭐ Distance alone cannot answer this question. Two genuinely different roads can come
+    back within rounding of each other, and a route that changed shape but not length
+    would read as 'no change'. The fingerprint is what makes "same km" and "same road"
+    separable, which is the whole point of the experiment.
+    """
+    h = hashlib.sha1()
+    for pt in coords or ():
+        h.update(f"{pt[0]:.5f},{pt[1]:.5f};".encode())
+    return h.hexdigest()[:12] if coords else None
+
+
+def default_departure_times(now=None):
+    """
+    Four ISO timestamps on the next weekday, and the source of the timezone.
+
+    Returns (times, tz_note). ⚠️ A past departureTime is not a sensible request, so this
+    always lands on a FUTURE weekday rather than on the 06:29 the bake actually happened
+    at -- which means the experiment can show that the answer varies with time of day, but
+    can never reproduce that specific morning.
+    """
+    now = now or datetime.now(timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+        tz, note = ZoneInfo("Europe/Tallinn"), "Europe/Tallinn from the system tz database"
+    except Exception:
+        # ⚠️ A guess, and labelled as one: EEST is +03:00 but only for part of the year.
+        tz, note = timezone(timedelta(hours=3)), "fixed +03:00 -- no tz database available, EEST ASSUMED"
+    local = now.astimezone(tz)
+    day = local.date() + timedelta(days=1)
+    while day.weekday() > 4:            # Mon=0 .. Fri=4
+        day += timedelta(days=1)
+    return ([datetime(day.year, day.month, day.day, h, m, tzinfo=tz).isoformat()
+             for (h, m) in _DEFAULT_HOURS], note)
+
+
+def departure_probe(o_lat, o_lon, d_lat, d_lon, profile, factors=None, avoid_areas=None,
+                    laden=True, times=None, alternatives=1, now=None):
+    """
+    Does HERE's answer for one leg depend on the departure time we do not send?
+
+    Runs the SAME request several times and reports distance, duration, section count and
+    a geometry fingerprint for each:
+
+        control_before   no departureTime at all -- exactly what a bake sends today
+        any              departureTime=any
+        <each time>      departureTime pinned to that ISO timestamp
+        control_after    no departureTime again
+
+    Never raises; a failed run is a row with an error. Costs one HERE request per row.
+
+    The verdict block states only what was measured, plus one conditional reading. It
+    cannot prove WHY an answer moved -- only that it did, or did not, under these inputs.
+    """
+    times = list(times) if times else None
+    tz_note = None
+    if times is None:
+        times, tz_note = default_departure_times(now=now)
+
+    def one(label, dep):
+        row = {"label": label, "departure_time": dep}
+        try:
+            opts = routes(o_lat, o_lon, d_lat, d_lon, profile, factors,
+                          avoid_areas=avoid_areas, alternatives=alternatives,
+                          laden=laden, departure_time=dep)
+            best = opts[0]
+            row.update({"distance_km": best["distance_km"],
+                        "duration_hr": best["duration_hr"],
+                        "sections": len(best.get("sections") or []),
+                        "options": len(opts),
+                        "fingerprint": _fingerprint(best.get("geometry")),
+                        "error": None})
+        except Exception as e:
+            row.update({"distance_km": None, "duration_hr": None, "sections": None,
+                        "options": 0, "fingerprint": None, "error": str(e)[:300]})
+        return row
+
+    rows = [one("control_before", None), one(TIME_ANY, TIME_ANY)]
+    rows += [one(t, t) for t in times]
+    rows.append(one("control_after", None))
+
+    by = {r["label"]: r for r in rows}
+    cb, ca = by.get("control_before", {}), by.get("control_after", {})
+    pinned = [r for r in rows if r["label"] not in ("control_before", "control_after")
+              and r["fingerprint"]]
+    prints = {r["fingerprint"] for r in pinned}
+    control_stable = bool(cb.get("fingerprint")) and cb.get("fingerprint") == ca.get("fingerprint")
+
+    out = {
+        "profile": profile, "laden": laden,
+        "timezone_note": tz_note or "times supplied by the caller",
+        "times_tried": [r["label"] for r in rows],
+        "rows": rows,
+        "control_stable": control_stable,
+        "pinned_all_agree": len(prints) <= 1,
+        "distinct_geometries": len({r["fingerprint"] for r in rows if r["fingerprint"]}),
+    }
+    if not control_stable:
+        out["reads_as"] = ("🔴 the UNPINNED answer changed during the experiment itself, so "
+                           "nothing below is attributable to departureTime. Re-run.")
+    elif len(prints) > 1:
+        out["reads_as"] = ("HERE returns different roads for different departure times, so "
+                           "an unpinned bake is a snapshot of whenever it ran. Pinning is "
+                           "both necessary and sufficient to make a bake reproducible.")
+    elif pinned and cb.get("fingerprint") and cb["fingerprint"] not in prints:
+        out["reads_as"] = ("every pinned time agrees with the others but NOT with the "
+                           "unpinned control, so pinning changes the road while making it "
+                           "reproducible. Which road is wanted is a product decision.")
+    elif pinned:
+        out["reads_as"] = ("pinned and unpinned agree right now. That does NOT clear "
+                           "departureTime -- it means conditions are flat at this moment. "
+                           "Re-run at a peak hour before concluding anything.")
+    else:
+        out["reads_as"] = "no run produced geometry; read the per-row errors."
     return out

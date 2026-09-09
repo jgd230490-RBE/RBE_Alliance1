@@ -1844,6 +1844,75 @@ def route_diagnostics(route_id, profile=DEFAULT_PROFILE, probe=False):
     return out
 
 
+def departure_diagnostics(route_id, profile=DEFAULT_PROFILE, leg="loaded", times=None):
+    """
+    Is a baked route reproducible, or is it a snapshot of the minute it was baked?
+
+    2026-09-09. R001's laden leg was baked at 06:29 as 16.15 km and answered 15.11 km when
+    the identical request was replayed ~90 minutes later — while its return leg reproduced
+    to the metre. Nothing in the request pins a departure time, so this replays the SAME
+    leg, with the SAME gate-resolved endpoints, across several departureTime values and a
+    control with none at all.
+
+    ⚠️ The endpoints matter and are easy to get wrong. This resolves them exactly as
+    _bake_leg does: the loaded leg leaves the origin by its EXIT role and arrives at the
+    destination by its ENTRY role, and the return leg is d_exit -> o_entry, which is NOT
+    the loaded pair reversed. Probing the reversed pair would compare two routes no bake
+    will ever produce. The laden flag flips with the leg for the same reason — HERE picks
+    roads partly on gross weight.
+
+    Costs one HERE request per time tried, plus two controls. Writes nothing.
+    """
+    if leg not in LEGS:
+        return {"error": f"leg must be one of {LEGS}", "leg": leg}
+    r = db.query("SELECT * FROM routes WHERE tenant_id = ? AND id = ?",
+                 (db.current_tenant(), route_id))
+    if not r:
+        return {"error": "route not found", "route_id": route_id}
+    r = r[0]
+    locs = {l["id"]: l for l in db.query("SELECT * FROM locations WHERE tenant_id = ?",
+                                        (db.current_tenant(),))}
+    o, d = locs.get(r["origin_id"]), locs.get(r["dest_id"])
+    if not o or not d:
+        return {"error": "missing origin/destination", "route_id": route_id}
+    if leg == "loaded":
+        a = _waypoint_full(o, "exit", r.get("origin_gate_id"))
+        b = _waypoint_full(d, "entry", r.get("dest_gate_id"))
+    else:
+        a = _waypoint_full(d, "exit", r.get("dest_gate_id"))
+        b = _waypoint_full(o, "entry", r.get("origin_gate_id"))
+    avoid, zone_tag = active_avoid()
+    # what is on the row now, so the report can say whether the live answer still matches
+    # the geometry the product is currently doing arithmetic on
+    cached = db.query(
+        "SELECT distance_km, duration_hr, computed_at FROM route_geometry "
+        "WHERE tenant_id = ? AND route_id = ? AND vehicle_profile = ? AND leg = ? "
+        "AND alt_index = 0",
+        (db.current_tenant(), route_id, profile, leg))
+    out = {
+        "route_id": route_id, "profile": profile, "leg": leg,
+        "from": [a["lat"], a["lon"]], "to": [b["lat"], b["lon"]],
+        "gate_sources": {"from": a["source"], "to": b["source"]},
+        "zones_in_force": [z for z in zone_tag.split(",") if z],
+        "cached": (dict(cached[0]) if cached else None),
+        "here_configured": here_routing.configured(),
+    }
+    if not out["here_configured"]:
+        out["error"] = "HERE_API_KEY is not set on the server"
+        return out
+    out["experiment"] = here_routing.departure_probe(
+        a["lat"], a["lon"], b["lat"], b["lon"], profile,
+        conversions.load_factors(), avoid_areas=(avoid or None),
+        laden=(leg == "loaded"), times=times)
+    # the comparison the report exists for: does the live answer still match the row?
+    ctl = next((x for x in out["experiment"]["rows"] if x["label"] == "control_before"), {})
+    if cached and ctl.get("distance_km") is not None:
+        gap = round(ctl["distance_km"] - (cached[0]["distance_km"] or 0), 2)
+        out["cached_vs_live_km"] = gap
+        out["cached_reproduces"] = (abs(gap) < 0.01)
+    return out
+
+
 def compare_profiles(route_id, profiles=None, probe=False):
     """
     Route the same pair for several vehicles and show whether anything differs.

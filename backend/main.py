@@ -1424,6 +1424,31 @@ def diagnostics_route(route_id: str, profile: str = network.DEFAULT_PROFILE,
     return network.route_diagnostics(route_id, profile, probe=probe)
 
 
+@app.get("/api/admin/diagnostics/departure/{route_id}")
+def diagnostics_departure(route_id: str, profile: str = network.DEFAULT_PROFILE,
+                          leg: str = "loaded", times: Optional[str] = None,
+                          token: Optional[str] = None):
+    """
+    Does HERE's answer for this leg depend on a departure time we never send?
+
+    Replays the identical request across several `departureTime` values, bracketed by two
+    controls that send none at all, and reports distance, duration, section count and a
+    geometry FINGERPRINT for each — because two different roads can come back the same
+    length, and distance alone would read that as "no change".
+
+    `times` is an optional comma-separated list of ISO-8601 timestamps (or the literal
+    `any`). Omit it and four default times on the next weekday are used; the response says
+    which timezone source produced them.
+
+    ⚠️ Costs one HERE request per time plus two controls — six by default. Writes nothing,
+    and does NOT pin anything: no bake sends a departureTime. Read `experiment.reads_as`
+    last, not first.
+    """
+    _check_admin(token)
+    want = [t.strip() for t in times.split(",") if t.strip()] if times else None
+    return network.departure_diagnostics(route_id, profile=profile, leg=leg, times=want)
+
+
 @app.get("/api/admin/diagnostics/compare/{route_id}")
 def diagnostics_compare(route_id: str, probe: bool = False, token: Optional[str] = None):
     """
