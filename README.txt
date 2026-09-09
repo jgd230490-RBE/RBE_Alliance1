@@ -1,312 +1,213 @@
-rbe-map-slice-0908.zip — 2026-09-08
-The public map slice: A–E in full, plus ride-alongs F1 and F4.
-
-Extract over the repo root. Three files, all map-side:
+rbe-map-review-0908pm.zip — 2026-09-08 (afternoon)
+Your review of the morning's map slice. Three files. Extract over the repo root;
+paths mirror the repo. Nothing to delete, nothing to rename, nothing to merge.
 
     map/index.html
     backend/tests/parse_map.js
     backend/tests/map_browser_check.js
 
-Nothing to delete, nothing to merge by hand, no backend change, no data file changed.
+No backend file changed. No endpoint changed. No data file changed. The Rail
+Baltica alignment, the roads, Tark Tee, the zones and the staff app are untouched.
+
+⚠️ STILL OUTSTANDING AND STILL THE OLDEST ITEM: THE EIGHT ACCESS CODES ARE NOT SET
+ON RENDER. Until they are, submitter123 / planner123 / admin123 work on the live
+site and the per-IPT filtering does nothing. Render -> service -> Environment ->
+IPT1_CODE…IPT6_CODE, PLANNER_CODE, ADMIN_CODE -> Save. Set all eight in one go;
+the first one you set stops the demo codes for everybody. Six days now.
 
 
 ================================================================================
-0. FIRST — YOUR REPO IS CLEAN, AND THAT IS NEW
+1. THE THING YOU SPOTTED WAS A REGRESSION I INTRODUCED YESTERDAY MORNING
 ================================================================================
 
-I ran the whole suite against plain HEAD (`529416e`) before starting, which is the
-check that caught the missing 2.5b backend files on 04 September. This time everything
-landed: fourteen test files present, twelve runnable suites green, `backend/config.py`
-there, `map/index.html` carrying the 0907 work. So the map slice was built on top of
-0907 rather than around it, and nothing in this zip is a re-delivery.
+"I would like all icons to sit on top of the alignments and routes."
 
-⚠️ Still outstanding and nothing to do with this slice: THE EIGHT ACCESS CODES ARE
-STILL NOT SET ON RENDER. `submitter123` / `planner123` / `admin123` still work on the
-live site and the per-IPT filtering built on 02 September does nothing until they are.
+You were right, and it is worse than it looks from the sidebar. I measured the
+layer stack in Chromium. NINE layers were drawing over the location marks:
 
+    rail-alignment-survey, rail-alignment-underlay, rail-alignment,
+    chainage-global, sel-glow, sel-core,
+    forecast-casing, forecast-layer, forecast-flow
 
-================================================================================
-A. LOCATION ICONS — one type, one map-layer symbol
-================================================================================
+A railhead with two routes converging on it was about 70% covered by the 6 px
+forecast casing — the mark was a sliver of teal above a blue line. The routes
+converge exactly ON the nodes, so the marks were most hidden precisely where they
+matter most.
 
-All three bugs were the same bug in three costumes: a location's mark was decided in
-more than one place.
+WHY IT HAPPENED, because it is the interesting part. Until yesterday the sites
+were DOM mapboxgl.Markers. A DOM marker is an HTML sibling of the WebGL canvas,
+so it is above every layer unconditionally and for free — nobody ever had to
+think about it. Moving them into the canvas as a symbol layer bought the seven-
+type taxonomy and unblocked PNG export, and silently cost that guarantee. Layer
+order in Mapbox is ADD order, and several of the layers above are added LAZILY
+(the forecast layers when you tick the box, the zone and restriction layers when
+you open them), so there is no single place to insert before.
 
-  1. A railhead was drawn by the `railheads` SYMBOL LAYER, which `toggleRail()` switched
-     off with the corridor — so unchecking "Rail network" hid the site.
-  2. It was ALSO drawn by the DOM marker loop, which knew nothing about railheads and
-     fell through to the cyan default — two marks on one point, wrong one on top.
-  3. `Port` was never tested for at all (only the legacy `Hub`), so every port drew as
-     that same cyan default and read as a compound.
+Fixed with raiseMarks(), called from every lazy adder and from applyFilters(),
+which runs after every user action. It is guarded: if the mark layers are already
+last, in order, it returns without touching the style, because moveLayer forces a
+style recalculation and applyFilters runs on every keystroke in the filter row.
 
-Fixed structurally, not with three patches. `loc_type` resolves to exactly ONE icon key,
-stamped on the feature as the data loads, and exactly ONE `locations` symbol layer draws
-it. There is no second layer and no DOM marker anywhere on the map.
-
-  Quarry     diamond      — the EXISTING material map, unchanged: Sand gold, Limestone
-                            white, everything else the sienna default. Not flattened.
-  Port       anchor       #0369A1
-  Compound   rounded sq   see the warning below
-  Site       circle       #6D28D9
-  Railhead   twin-rail sq #0F766E
-  Stockpile  hexagon      #78350F
-  Other      small dot    #94a3b8
-
-Shape discriminates, not colour — a colour-blind reader, a greyscale print and a
-satellite basemap all lose colour before they lose shape.
-
-⚠️ ONE COLOUR I HAD TO CHOOSE. The brief says Compound is "existing compound sand".
-There is no compound sand in this codebase. The existing compound colour is `#00ffff` —
-the cyan DEFAULT that ports were also falling through to, i.e. the bug itself. So I
-picked `#CA8A04`, an ochre, and I am telling you rather than calling it the colour that
-was already there. Say the word and it is one constant.
-
-⚠️ A RAILHEAD LOOKS DIFFERENT NOW. The 02 September mark was a WHITE rounded square
-edged in teal. Your table says Railhead fill `#0F766E`, so it is a solid teal square
-with the rail and sleepers reversed to white. Deliberate, and it follows the signed
-table; flag it if the mockup meant the white one.
-
-⭐ THE LEGEND IS THE FILTER. Seven checkboxes, each hiding its own type and nothing
-else, with the swatch drawn from the same colour table and the same geometry as the
-mark on the map — a hand-written swatch is how the sidebar's alignment gradient ended
-up two palettes out of date. "Sites & assets" is still the master switch. "Rail network"
-no longer touches any location.
-
-⭐ A SIDE EFFECT WORTH KNOWING: the site marks are inside the WebGL canvas for the first
-time. That is the thing that has always blocked PNG export — see the roadmap's export
-note. Export is not built, but the blocker is gone.
-
-🔴 A LATENT CRASH FIXED IN PASSING. `quarryFill()` read `props.material.toLowerCase()`
-unguarded. ONE quarry with no material would have thrown inside the marker loop and
-taken every remaining marker on the map with it. Guarded, and a quarry with no material
-now gets the default fill and is still a diamond, as you asked.
+⚠️ The assertion that would have caught this did not exist. Draw order has no
+textual signature, so parse_map.js cannot see it — it is in the browser harness
+now, and it names the specific layers, so a future reorder says which one moved.
 
 
 ================================================================================
-B. EVR LINE
+2. THE MARKS
 ================================================================================
 
-`RAIL_BOLD` is deleted. It painted the corridor in the reserved rail colour whenever a
-railhead was in play, which made the least trustworthy line on the map — provisional
-Natural Earth, ~6.4 km out at Lelle — the loudest. Never green, never bold, never teal,
-as instructed.
+QUARRY — BACK TO A CIRCLE. The pick is drawn as vector rather than the old 9 px
+  emoji character, so it is identical on every machine and sharp at every zoom.
+  The three material fills are unchanged: sand gold, limestone white, everything
+  else sienna.
 
-One style: thin mid-grey `#64748B`, dash `[2, 18]`, dark slate casing `#334155` at 35%.
+  ⚠️ THIS REVERSES A RULE I WROTE YESTERDAY, deliberately and at your request.
+  The morning slice said "shape discriminates, not colour — two types never share
+  a mark", because a colour-blind reader, a greyscale print and a satellite
+  basemap all lose colour before shape. Five of the seven types are circles now
+  and the INNER SYMBOL discriminates instead: a pick, a dot, a pile, an anchor,
+  nothing. Railhead and Compound stay squares, so the two types that sit ON the
+  corridor are still separable by silhouette alone. Your call, recorded as yours.
 
-⚠️ THE TICKING RULE, AND ONE PLACE I READ YOU NARROWLY. It is now (Play is running) AND
-(the EVR checkbox is on) AND (a movement in the month on the playhead starts or ends at
-a Railhead). Your line was "dash-offset animates only in months where an Approved route
-uses a Railhead"; I kept Play as a condition too. An animation on a map nobody is
-scrubbing is a requestAnimationFrame wakeup every frame for as long as the tab is open,
-which is why the march was tied to playback in the first place. "Months where a railhead
-is used" narrows WHICH months tick; it does not turn a static map into a moving one. If
-you want it ticking while paused, that is one condition to remove.
+  ⚠️ It took three attempts and the two failures are worth knowing about, because
+  both rendered without error and both were wrong at a glance: v1 (handle
+  overshooting a shallow arc) read as a figure 2; v2 (a near-flat arc over a
+  near-vertical handle) read as a letter T. The head is now built FROM the handle
+  vector so the two cannot drift apart again.
 
-The geometry is untouched, the popup caveat is untouched, and the sidebar note now says
-which state the corridor is in, since the colour no longer does.
+STOCKPILE — A GAUGE, as you asked: a circle, and the pile inside it in a creamy
+  grey, filled to its recorded stock level.
 
+  The level comes from stock_balance / capacity_qty — the same two numbers the
+  popup already states in words, so the picture and the text can never disagree
+  about one pile. Over capacity, the pile goes the same red the Clash warning
+  uses. No new endpoint, no new data, nothing stored.
 
-================================================================================
-C. ORIGIN / DESTINATION ON FORECAST PLAY
-================================================================================
+  Two decisions inside it you should know about:
 
-The 07 September name plates are deleted — the plates, the cap of six, the rectangle
-collision skip and the moveend re-placement. That collision skip was already saying in
-code what you said in review: six name plates is a list lying on top of a map.
+  - The level is QUANTISED into six steps (0/20/40/60/80/100) plus over plus
+    "unmeasured". Each distinct mark is a separate image in the map's atlas, and
+    an image per exact percentage is an unbounded set.
 
-The ends of Approved routes carrying volume in the month on screen get `is_end` stamped,
-and the same ONE layer swaps to a bigger image: same mark, 2 px larger, 1 px halo, baked
-into the image. No second layer, no second component, no callout. The name is one click
-away in the popup that was always there.
+  - ⚠️ A PILE WITH NO RECORDED CAPACITY IS DRAWN WITH A DASHED OUTLINE. Without
+    that, an unmeasured pile and a 90-100% full pile are the same picture — both
+    solid to the top — and the map would be claiming a reading it does not have.
+    A dashed pile means "nobody has told this system how big this pile is",
+    which is a real state, not a zero.
 
+  ⚠️ ONE THING I HAD TO GET WRONG FIRST: the boundary between the filled and empty
+  parts is an INK RULE, not just a change of tone. Creamy grey on cream is a few
+  percent of luminance apart, and at map size the first version had no visible
+  fill line at all. The rule is what makes the level readable.
 
-================================================================================
-D. KPI PANEL
-================================================================================
+COMPOUND — a solid site cabin instead of the thin outline square with a gap for
+  the gate. That outline vanished below about 22 px, so at corridor zoom a
+  compound was an empty amber square. Solid white shapes survive small sizes;
+  thin white lines do not.
 
-One compact card, top-left, month title, Approved only, 22 working days (read from the
-server's factors, which already says 22 — not hardcoded, so the Config page still owns
-it). Four always-visible figures, then ONE chip row with a switcher:
+  ⚠️ The compound's amber (#CA8A04) is still a colour I CHOSE, not one I inherited
+  — there is no "compound sand" anywhere in this codebase, and the colour that was
+  there before was the cyan default that ports were also falling through to, i.e.
+  the bug itself. Say the word and it changes in one place.
 
-    Discipline | IPT | Work section          (Discipline by default)
-
-Each chip carries THREE numbers: `Earthworks 5 veh/d · 16.9 trips/d · 406 t/d`.
-
-⚠️ The third figure is TONNES, not the map unit. The map unit is "vehicles" by default,
-and in that unit "material / day" and "movements / day" are the SAME NUMBER — printing
-both would put the 04 September correction back on screen in a new place.
-
-⚠️ Vehicles in a chip are summed as ceil() PER LINE, exactly as the headline figure is.
-A vehicle working one route cannot also be working another. Ceiling the group total
-would under-count, and the chips would then not add up to the card above them — the
-browser check asserts that they do.
-
-A group is divided by the months it actually appeared in, not by the window length: a
-discipline that ran in one of three months is not doing a third of its rate every month.
-
-IPT comes from the ROUTE, discipline and work section from the LINE. The endpoint
-already sends all three, so this needed no backend change. Empty month hides the chips
-AND the switcher, and shows "No approved forecast in this month." No warning text
-anywhere in the card.
+PORT and SITE are untouched, as you asked. RAILHEAD and OTHER are untouched.
 
 
 ================================================================================
-E. WARNINGS — and one source that does not exist
+3. "CAN WE GET THE ICONS TO HIGHLIGHT WHEN IN USE ON THE FORECAST TIMELINE?"
 ================================================================================
 
-Three named levels, the word on the row, not just a stripe:
+They already did, and you could not see it. That is the finding, not the feature.
 
-    CLASH    a stockpile past its capacity
-    WARNING  a Tark Tee mass / height / width exceed on a visible baked route
-    CAUTION  a seasonal window from Config matching that month and vehicle
+Yesterday's treatment was "+2 px with a 1 px halo". Measured in the browser, that
+is 26 -> 34 CSS px across, and it only reads if an UNUSED mark happens to sit
+right beside a used one. In a busy month almost every mark is in use, so there is
+nothing to compare against and the emphasis is invisible. I built exactly what
+the brief asked for and it did not do the job.
 
-⚠️ A Tark Tee 'breach' is a WARNING, not a Clash. It is a vehicle-versus-limit verdict
-on a drivable road, not an impossibility — and it cannot judge a weak-bridge class at
-all (§A2 is still open), so it must never be the loudest thing on screen.
+Replaced with two things:
 
-🔴 THE SECOND CLASH SOURCE YOU NAME DOES NOT EXIST AND I HAVE NOT INVENTED IT.
-"Two Approved movements the product already flags as conflicting on a shared gate/head"
-— nothing in this product flags that. There is no conflict, contention or booking
-concept anywhere in the backend; grepping for conflict/clash/contention finds two
-unrelated comments. It needs a TIME model, which is Phase 7. `gate_blockers` is a
-deactivated gate refusing to bake, not two movements colliding. Building it would mean
-inventing what "conflicting" means — how close in time, same gate or same head, whether
-two IPTs on one railhead is a clash or just a Tuesday — and that is your decision.
+  1. A WHITE RING with a dark rim, drawn OUTSIDE the mark. It reads on the Light
+     basemap and on satellite, and it lives in the image's margin so the mark
+     itself does not change size — nothing jumps when a month is scrubbed.
 
-Tell me the rule and it is a small amount of work. Until then, Clash has one source.
+  2. EVERYTHING NOT IN USE DROPS TO 34% while a month is on screen. This is the
+     half that actually works in a busy month: contrast, not size. It goes back to
+     solid the moment the timeline is closed.
 
-🔴 A REAL DEFECT FOUND WHILE TESTING THIS. On 07 September I fixed the phone overlap
-between the KPI bar and the warning stack with a fixed `bottom:190px`. That cannot work:
-the stack is as tall as its contents, so a month with three warnings landed straight
-back on the bar. It only showed up when the browser check was finally given a month that
-HAS warnings. It measures the bar now, and re-measures when the card changes height or
-the window resizes.
+The dimming is an icon-opacity expression on the layer rather than a second set
+of images, because "is this month on screen" is a property of the SCREEN, not of
+the mark — baking it in would double the atlas for every type.
+
+⚠️ Both halves are driven by the same flag the ring is, so they cannot disagree
+about whether a month is being shown.
 
 
 ================================================================================
-F. RIDE-ALONGS — two done, two NOT, and one needs your decision
+4. TESTS
 ================================================================================
 
-DONE:
+    backend/tests/parse_map.js          484   (was 465)
+    backend/tests/map_browser_check.js   58   (was 47)   NOT in the default suite
+    backend/tests/test_week1.py         303
+    backend/tests/test_phase5a.py       215
+    backend/tests/test_phase4.py        202
+    backend/tests/test_phase2.py        160
+    backend/tests/test_phase3.py        154
+    backend/tests/test_phase45.py       140
+    backend/tests/test_ipt_overlay.js   140
+    backend/tests/test_phase25a.py      104
+    backend/tests/parse_frontend.js     259
+    backend/tests/render_frontend.js     28
+    backend/tests/test_tenant_audit.py   26
 
-F1. The forecast route label read "412 vehicles". That is the same confusion the
-    04 September correction was about — 412 is not 412 lorries, it is 412 loads carried
-    out and brought back. It says "Two-way" now. The FIGURE is unchanged; only the words
-    on the line moved.
+THREE ASSERTIONS REVERSED RATHER THAN DELETED, all three pinning behaviour that
+turned out to be the thing you were objecting to:
+  - "+2 px with a halo, baked into the -on image" now pins the ring AND the
+    dimming, and REFUSES the size-only treatment coming back;
+  - the quarry diamond now asserts the circle and refuses the diamond path;
+  - the compound outline now asserts the solid cabin and refuses strokeRect.
 
-F4. Mapbox `fill-extrusion` buildings, from zoom 14, DEFAULT OFF. Not an ortho mesh.
-    ⚠️ Guarded on the `composite` source: the Maa-amet orthophoto basemap is raster and
-    has no composite source at all, and `addLayer` would fire an error and return having
-    added nothing — the exact silent failure that dropped four route layers on
-    2026-09-01. The sidebar says "not available on this basemap" instead.
+⚠️ TWO OF MY OWN NEW ASSERTIONS WERE MIS-TARGETED, and one of them could never
+have failed. parse_map.js strips // comments out of `code` before matching, so
+`!/\/\/ diamond/.test(code)` was vacuously true no matter what the file said. It
+tests the PATH now, and the comment marker is grepped in `src`. Worth recording
+because a green assertion that cannot fail is worse than no assertion.
 
-NOT DONE, and I am not going to half-do them:
+FOURTEEN DELIBERATE REGRESSIONS RUN (each broke the build, then was reverted).
+The split is the point:
 
-F2. Sorting on the five staff tables. This is `frontend/index.html`, not map work — a
-    different file, a different test harness, and five tables with different cell shapes
-    (the Forecasts table alone has grouped rows with a status chip and a year span). It
-    is a straightforward slice, roughly the size of §D on its own, and it belongs in a
-    frontend zip where `parse_frontend.js`, `render_frontend.js` and `browser_check.js`
-    can all be extended together. Say the word and it is the next thing.
+  TWELVE were caught by the source assertions — the marks back under the routes,
+  the no-op guard inverted, the +2 px treatment restored, the dimming applied
+  always, an unmeasured pile drawn as a measured one, the stock rule removed, the
+  backend's `over` ignored, the level dropped from the image key, the quarry back
+  to a diamond, the pick's head angle hard-coded, the compound back to an outline,
+  and the ring's radius changed.
 
-F3. 🔴 VEHICLE PICKERS RESTRICTED TO THE SIX LEGACY PROFILES — THIS NEEDS A DECISION,
-    AND IT REVERSES ONE YOU ALREADY MADE.
+  🔴 TWO WERE CAUGHT ONLY BY THE BROWSER, and neither has any textual signature:
+    - the image canvas shrunk from 72 to 62 px, so the ring runs off the edge and
+      renders as a broken arc. Every source regex still passed;
+    - the bucket arithmetic wrong by a factor of ten, so a 42%-full pile draws as
+      empty. Every source regex still passed.
 
-    On 01 September you chose "add four, keep six", and C9 in open-questions has been
-    sitting on "should the six be hidden" ever since. This is the opposite: hide the
-    FOUR. That is fine — but three consequences you should see first.
-
-    a) It does not touch existing lines. A forecast already saved on V07/V10/V11/V12
-       keeps that vehicle, and the picker will still show it (a currently-selected
-       vehicle is never disabled), so nothing becomes unsavable. Good.
-
-    b) "Public vehicle-count" is a BACKEND change. `/api/public/month-kpis` falls back to
-       `planning[0]` — V07, 18 t — for a vehicle `factors.json` does not know. If the
-       four EU ids stop being selectable, that fallback should stop being one of them,
-       which is `main.py`, not the map. Small, but it is backend, and your brief said
-       don't rebuild 2.5b/0907, so I have left it alone rather than guess how far you
-       meant this to reach.
-
-    c) "Stops the double-fleet count" — I want to make sure I understand what you are
-       seeing before I act on it. Nothing in the code counts a vehicle twice: the fleet
-       is summed per LINE, and a line names exactly one vehicle. If the double count is
-       that two people forecast the SAME physical trucks, one on V07 and one on
-       "Rigid 8-wheeler (32t)", then hiding the four stops it happening AGAIN but does
-       not fix the lines already written that way. Those need re-saving. If that is what
-       you are seeing, say so and I will add a diagnostic that lists which routes carry
-       both an EU and a legacy profile in the same month — that is a probe, not a guess.
-
-
-================================================================================
-TESTS
-================================================================================
-
-All green:
-
-    backend/tests/parse_map.js           465   (was 443)
-    backend/tests/map_browser_check.js    47   (was 31)
-    backend/tests/test_week1.py          303
-    backend/tests/test_phase5a.py        215
-    backend/tests/test_phase4.py         202
-    backend/tests/test_phase2.py         160
-    backend/tests/test_phase3.py         154
-    backend/tests/test_phase45.py        140
-    backend/tests/test_ipt_overlay.js    140
-    backend/tests/test_phase25a.py       104
-    backend/tests/parse_frontend.js      259
-    backend/tests/render_frontend.js      28
-    backend/tests/test_tenant_audit.py    26
-
-EVERY TEST YOU LISTED IS IN THERE, and two of them only a browser can answer:
-
-  ✅ loc_type=Railhead still visible when the rail layer is off
-  ✅ one symbol at a point that is both a former compound paint and a Railhead
-  ✅ Port does not use the compound image              ← browser only, see below
-  ✅ Quarry diamonds keep distinct fills when two materials exist
-  ✅ EVR paint is grey; no #0F766E / #039E86 on the rail layer   ← read off the LIVE layer
-  ✅ animation only when the playhead month has a Railhead movement
-  ✅ KPI card contains no Warning / Caution / Clash string
-  ✅ warning-stack month matches #tl-range
-
-TWELVE DELIBERATE REGRESSIONS, each reverted after. Seven at source level, and the
-split is the interesting part:
-
-  caught by parse_map.js  — railheads back on the rail toggle; the bold rail state back;
-                            the flow ticking on Play alone; a Tark Tee exceed promoted to
-                            Clash; the phone stack back to a fixed offset; the flow layer
-                            rejoining the toggle list.
-  caught ONLY in Chromium — 🔴 PORT FALLING BACK TO THE COMPOUND MARK, which is your own
-                            test and has NO textual signature at all; the chips no longer
-                            adding up to the card; the phone stack overlapping the bar.
-
-`map_browser_check.js` is still NOT in the default suite and cannot be — `map/index.html`
-loads Mapbox GL JS from a CDN the sandbox blocks, so it substitutes a local copy and
-needs `npm i mapbox-gl@2.14.1` first. The header of the file has the commands.
+⚠️ AND A PROCESS FAILURE ON MY SIDE, because it nearly put a wrong number in this
+file. My regression harness held the original file in memory and restored it at
+the end. Two runs were killed by a timeout between applying a regression and
+reverting it, and both left the working tree broken — so the NEXT run measured
+every case against an already-regressed baseline and reported plausible-looking
+numbers. Caught it by grepping the tree afterwards. The harness restores with
+`git checkout` now and refuses to start on a dirty tree.
 
 ⚠️ WHAT IS STILL NOT TESTED
-  - No real basemap. The harness answers the style URL with a blank offline style, so
-    nothing about legibility over map tiles — or over satellite — has been checked, and
-    that matters more now that seven marks have to be told apart on top of one.
-  - No glyphs offline, so no map label has ever been drawn in a test.
-  - `buildings-3d` has never been ADDED, only refused: the offline style has no
-    `composite` source, which is exactly why that guard exists. The layer itself is
-    unexercised.
-  - The API is fixtures. The route geometry is four invented lines, not 107.
-  - Nothing has been near Postgres, HERE, Tark Tee or Google.
-
-
-================================================================================
-WHAT I WOULD LOOK AT FIRST ON THE DEPLOYMENT
-================================================================================
-
-1. Add a Railhead in Data Management, then uncheck "Rail network". The pin stays.
-2. A port and a compound side by side — anchor and rounded square, never the same mark.
-3. Two quarries with different materials — two fills, both diamonds.
-4. Press Play on a month that uses a railhead, then one that does not. Ticks, then none.
-   The corridor stays grey in both.
-5. Switch the KPI chips through Discipline / IPT / Work section and check the vehicle
-   numbers still add up to the card above them.
-6. A month with a stockpile over capacity: CLASH in the stack under the map, nothing in
-   the KPI card.
-7. The seven marks over the SATELLITE basemap, which is the one thing the tests cannot
-   see at all.
+  - THE BASEMAP IS BLANK. The harness answers the style URL with an offline stub,
+    so nothing here has been seen over real satellite or real Light tiles. That
+    matters more than it did yesterday: the stockpile's cream, the quarry's
+    limestone white and the ring's white all have to hold against real imagery,
+    and I cannot see that from here. Please look at the deployment.
+  - The API is fixtures. The stock gauge has been exercised against three invented
+    piles (over / part-full / unmeasured), never against your real capacities.
+  - The geometry is four invented routes, not the 107-route network. I have not
+    seen what the ring and the dimming look like when 40 marks are on screen.
+  - buildings-3d has still only ever been REFUSED, never added: the offline style
+    has no `composite` source, which is exactly what its guard checks.
