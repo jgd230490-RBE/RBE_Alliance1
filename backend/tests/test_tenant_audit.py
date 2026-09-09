@@ -81,6 +81,9 @@ TENANTED = {
     "forecast_weeks", "stockpile_weeks",
     # 2.5b, 2026-09-03. The audit caught this one too, before it was registered here.
     "config",
+    # Look-ahead v2 slice 1, 2026-09-09. And this one — the fourth registration, tripped
+    # before it was made, exactly as the comment above predicts. Four for four.
+    "forecast_days",
 }
 
 # Tables that are deliberately NOT tenanted, with the reason. Anything here is

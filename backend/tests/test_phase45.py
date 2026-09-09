@@ -219,7 +219,8 @@ reset_db()
 # present and the isolation absent. Both Week 1 tables tripped this line and the audit
 # before they were registered.
 # ...and 15 from 2.5b's config table, which tripped this line too before it was registered.
-ok("db.py names the tenanted tables in one place", len(db.TENANTED_TABLES) == 15,
+# ...and 16 from Look-ahead v2's forecast_days (2026-09-09). Tripped again. The pin works.
+ok("db.py names the tenanted tables in one place", len(db.TENANTED_TABLES) == 16,
    f"got {len(db.TENANTED_TABLES)}")
 
 for t in sorted(db.TENANTED_TABLES):
