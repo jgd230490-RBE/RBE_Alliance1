@@ -56,6 +56,29 @@ try {
 } catch (e) {
   ok("JSX transpiles to runnable JS", false, e.message);
 }
+// 🔴 09 Sep night: the page shipped with TWO `function Kpi` declarations. TypeScript's
+// transpile and `new Function()` (sloppy mode) both accept a redeclared function; the
+// browser's Babel does not, and the app rendered a blank white page. Every top-level
+// name must be declared exactly once.
+const _decls = [...src.matchAll(/^(?:function|const|let|class)\s+([A-Za-z_$][\w$]*)/gm)].map(m => m[1]);
+const _dups = _decls.filter((n, i) => _decls.indexOf(n) !== i);
+ok("🔴 no top-level name is declared twice (Babel refuses it; the harness alone did not)",
+  _dups.length === 0, "duplicates: " + [...new Set(_dups)].join(", "));
+// and, when @babel/standalone is on this machine, compile exactly as the browser does
+const _babelPaths = ["/tmp/babelcheck/node_modules/@babel/standalone/babel.min.js",
+                     "/tmp/shot/node_modules/@babel/standalone/babel.min.js"];
+const _babel = _babelPaths.find(p => fs.existsSync(p));
+if (_babel) {
+  try {
+    const Babel = require(_babel);
+    const out = Babel.transform(src, { presets: ["react"], filename: "index.html" });
+    ok("⭐ @babel/standalone compiles the page the way the browser does", out.code.length > 1000);
+  } catch (e) {
+    ok("⭐ @babel/standalone compiles the page the way the browser does", false, e.message.split("\n")[0]);
+  }
+} else {
+  ok("(@babel/standalone not installed here — the browser-compile check did not run; `npm i @babel/standalone@7.24.7` in /tmp/babelcheck to enable it)", true);
+}
 try {
   new Function(emitted.replace(/^import .*$/gm, ""));
   ok("transpiled output is syntactically valid JS", true);
