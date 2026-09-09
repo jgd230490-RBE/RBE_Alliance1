@@ -1,194 +1,138 @@
-rbe-lookahead-slice1-0909.zip
-=============================
-Delivered 2026-09-09. Extract over the repo root; the paths already match.
+rbe-lookahead-slices3-6-0909.zip
+================================
+Delivered 2026-09-09 (late evening). Extract over the repo root; the paths
+already match. Nothing is deleted. factors.json is not included and nothing
+touches it.
 
-THIS ZIP SUPERSEDES rbe-departure-probe-0909.zip
-------------------------------------------------
-It contains every file that zip contained, at the same or a later state, plus
-the Look-ahead slice. So:
+REQUIRES slice 2 applied (it is — the live /api/forecast-days returned
+`totals` at 14:xx). SUPERSEDES nothing; sits on top.
 
-  * if you have NOT applied the departure-probe zip: don't. Apply this one.
-  * if you HAVE applied it: extract this over the top. Same result.
-  * either way, rbe-route-vehicles-0909.zip is already on the repo (verified
-    at HEAD earlier today) and nothing here undoes it.
-
-There is no ordering trap this time -- that is why the departure files are
-carried again rather than left to a second zip.
+⚠️ SCHEMA CHANGE: eight new COLUMNS, no new table.
+⚠️ TWO NEW PYTHON DEPENDENCIES: openpyxl, reportlab (requirements.txt).
+   Render installs them on the next deploy from requirements.txt. If the
+   build log does not show them, the export endpoints return 503 with the
+   import error and everything else still works.
 
 FILES
 -----
-  backend/days.py                 NEW. The commit week, day by day.
-  backend/db.py                   forecast_days registered (four places);
-                                  forecast_weeks.actual_source added.
-  backend/main.py                 GET/PUT /api/forecast-days, PUT .../actual;
-                                  confirm and calibrate routed via days.py;
-                                  calibrate takes spread + spread_from;
-                                  weeks GET also returns commit_week.
-                                  (Also carries the departure endpoint.)
-  backend/weeks.py                set_actual stamps actual_source='typed'.
-                                  The ONE touch to Task C/D code.
-  backend/here_routing.py         carried from the departure zip, unchanged.
-  backend/network.py              carried from the departure zip, unchanged.
-  backend/tests/test_lookahead.py NEW. 72 assertions.
-  backend/tests/test_phase4.py    carried from the departure zip, unchanged.
-  backend/tests/test_phase45.py   tenanted-table count pin 15 -> 16.
-  backend/tests/test_tenant_audit.py  forecast_days added to its registry.
-  env.example                     the ADMIN_TOKEN comment no longer reads as
-                                  if "openssl rand -hex 24" were the value.
+  backend/clashes.py              NEW. The clash rail (brief §6), flag only.
+  backend/lookahead.py            NEW. GET /api/lookahead — the page in one read.
+  backend/export.py               NEW. XLSX (openpyxl) + PDF one-pager (reportlab).
+  backend/days.py                 bucket=next (the Thursday process); reopen.
+  backend/weeks.py                actual_cost_eur; calibrate carries the DELTA;
+                                  reopen_week.
+  backend/derived.py              €, km_basis, rates in context.
+  backend/db.py                   the eight columns + init_lookahead_db().
+  backend/network.py              set_route_planning(); routes_status carries
+                                  the planning fields.
+  backend/main.py                 endpoints below; init_lookahead_db() in lifespan.
+  backend/requirements.txt        + openpyxl==3.1.5, reportlab==4.4.10
+  backend/tests/test_lookahead.py 125 -> 186
+  backend/tests/parse_frontend.js 270 -> 299
+  backend/tests/render_frontend.js 28 -> 49
+  backend/tests/fixtures/lookahead_page.json  NEW. Written by test_lookahead.py,
+                                  read by render_frontend.js. Regenerated every run.
+  frontend/index.html             LookAhead rewritten (three views); RoutePlanning
+                                  block on the route edit form.
+  README.txt                      this file
 
-Nothing is deleted. factors.json is not included and nothing touches it.
-There IS a schema change: one new table and one new column. See DEPLOY.
+DEPLOY — what to watch
+----------------------
+1. Build log: openpyxl and reportlab install.
+2. First boot: init_lookahead_db() ALTERs routes (+5) and forecast_weeks (+3).
+   On Postgres these are ADD COLUMN IF NOT EXISTS — silent when already there.
+   Nothing to migrate; every new column is nullable and starts empty.
+3. Open Look-ahead. It lands on Commit · this week. With no Approved September
+   line it shows the empty state — approve one on a baked route to see it work.
 
-DEPLOY
-------
-Boot creates forecast_days and ALTERs actual_source onto forecast_weeks in
-init_weeks_db(), both idempotent. On Postgres the ALTER is ADD COLUMN IF NOT
-EXISTS. On SQLite it is a plain ADD COLUMN inside try/except, same pattern as
-the locations capacity columns from Week 1.
+NEW ENDPOINTS
+-------------
+  GET  /api/lookahead?bucket=commit|next&tark_tee=1   the page's read model
+  GET  /api/forecast-weeks/clashes?bucket=            the rail alone
+  GET  /api/forecast-weeks/export?format=xlsx|pdf&bucket=   browser download
+  POST /api/forecast-weeks/reopen                     confirmed -> edited, days follow
+  PUT  /api/admin/routes/{id}/planning                cap + rates + km basis (token)
+  PUT  /api/forecast-weeks/actual                     gains actual_cost_eur
+  GET  /api/forecast-days                             gains ?bucket=next
 
-I have NOT run this against Postgres. The tenant migration path for a new
-table is the same one that ran for forecast_weeks on 2026-09-02 and has not
-changed since. Check the Render deploy log for the line
-"Phase 4.5: tenant key added to 1 table(s): forecast_days" on first boot, or
-its absence with no error, which means the CREATE already carried the key.
+DECISIONS YOU MADE THIS SESSION, AS BUILT
+-----------------------------------------
+* Everything in one pass: page + rail + rates + export.
+* Cost model: target €/t, €/km (and €/load) typed on the ROUTE (route edit form,
+  "Planning · Look-ahead" block). Actual confirmed € typed per LINE per WEEK on
+  the Account view beside the actual tonnes. € variance = planned € − actual €.
+  The three rates are SUMMED where filled (Estonian quotes are "base per load
+  + €/km"); the brief's "first non-null" could not hold that.
+* km basis (C20): per route, default round trip — €/km and t·km both use it.
+* Spread (C19): remaining weekdays from today. When the target week has not
+  started (the Thursday case), that is all of Mon–Fri.
+* Thursday process: a "this week / next week" switch on the page. bucket=next
+  creates next week's days on demand; the default read is unchanged. Account
+  is then THIS week (partial). And calibrate now carries only the DELTA of the
+  variance — a Thursday spread with a partial actual followed by Friday's real
+  figure adds only the difference, never the whole variance twice
+  (forecast_weeks.calibrated_qty records what was carried).
+* C18: the mock's button bar (Export XLSX + green Confirm week; PDF as a small
+  second button), the per-line "spread on this week" button (no dialog), ONE
+  clash rail with "+N more". Pills sit under PageHeader; the left rail stays.
+* Re-open week: exists now (the mocks' footer promised it). Confirmed -> edited,
+  days follow, nothing deleted.
+* Approval is NOT gated on baking (your process rule, not enforced in code —
+  say if you want a refusal at approval).
 
-WHAT IT DOES
-------------
-Sits ON forecast_weeks exactly as forecast_weeks sits on the forecasts line.
-Tasks C/D/D2 are not rebuilt. Rules, each one locked in your brief:
+WHAT THE UI DOES
+----------------
+Commit: KPI strip (planned t, trips, veh/day peak, t·km, planned €, last-week
+shortage, last-week delivered), the rail, the day grid (qty typeable while the
+week is not confirmed; "17 tr · 3 veh" under each; unbaked lines show trips and
+"veh —" with a NOT BAKED chip), ▶ expands km/trip · km/week · veh peak · t·km ·
+cycle · €, Stock held with the forecast balance. Confirm week = every line, one
+dialog, four notes. Re-open when all confirmed.
+Account: 4 KPI cards, table with actual qty / actual € inputs, variance, € var,
+note, and the action state (held / spread on this week / applied · n / waiting).
+Horizon: 8 week columns (commit month + next) with ACCOUNT / COMMIT / MAKE-READY /
+EARLY WARNING labels, commit column washed, status line per cell, no Confirm
+button; the Stockpiles panel (capacity + consumption) sits under it.
+Route form: "Planning · Look-ahead" block — cap, km basis, €/load, €/t, €/km.
 
-  L1   Days exist only for the COMMIT week (the bucket that contains today,
-       weeks.editable_week) and only for Approved lines. Mon-Fri each get
-       week / n_weekdays. Sat and Sun get 0. Week 4 of a 31-day month is ten
-       days long and still weekday-weighted.
+WHAT WAS NOT TESTED
+-------------------
+* HTTP layer stubbed (endpoint bodies run; the export endpoint's Response
+  object is only exercised on Render). No Postgres branch. HERE never called.
+* Tark Tee: unreachable from the sandbox, so the rail's TARK_TEE path only ran
+  its "unavailable" branch. The page SAYS when Tark Tee could not be reached.
+* The page was rendered with react-dom/server from a fixture the backend
+  wrote (49 render assertions, three views + empty states). It has never been
+  opened in a browser. Column widths, the sticky Line column and the day grid
+  at week 4 (ten columns) are unseen.
+* The XLSX was re-opened with openpyxl and checked (sheets, rows, €). The PDF's
+  bytes were grepped for its text. Neither has been looked at.
+* The XLSX/PDF download uses fetch + blob so the access-code header rides
+  along; a plain link would 401. Untested in a browser.
 
-  L6   Confirm is whole-week, one act. POST /api/forecast-weeks/confirm now
-       confirms the week and stamps every day in its bucket confirmed. After
-       that, planned days are read-only (a PUT returns blocked_by: confirmed)
-       and actuals are still typeable. No per-day confirm exists.
-
-  derived / edited / confirmed on the day, same three as the week, same
-       meaning. A derived day follows the week's figure; an edited one holds.
-       parent_week_qty stamps the week-as-at-last-write, so "week changed" on
-       a day is an exact test -- the argument weeks.py makes for parent_qty,
-       one level down.
-
-  Sum rule is a FLAG. sum(day planned) should equal the week. When it does not,
-       the read says days_ne_week: true. Confirm is still allowed.
-
-  Actuals, two paths, and the second is the one that needed a column:
-         a) clerk types a week actual  -> actual_source = 'typed'. Day sums
-            never touch it.
-         b) clerk types day actuals    -> week actual = running sum of them,
-            actual_source = 'days', updated on every day save.
-       Without actual_source the FIRST partial day sum would have been
-       indistinguishable from a typed figure and would have frozen the week
-       there. Clearing a typed week actual lets the day sums take over again.
-       Clearing every day actual clears the week to None, not 0.
-
-  Calibrate spread is OPT-IN, default off. spread=true divides the delta that
-       was just applied to the target week over that week's WEEKDAYS on or
-       after spread_from (today if omitted), and stamps every day in the
-       bucket edited. Only the commit week has days, so calibrating into any
-       other week writes the week total only and says so. Saving an actual
-       still never calibrates.
-
-ONE THING I HAD TO DECIDE, AND WHERE YOU CAN OVERRULE IT
---------------------------------------------------------
-"Spread across remaining commit-week days" (your brief) and "splits across
-Mon-Fri of the commit week (36 t/day)" (the Account mock's footer) are the
-same thing on a Monday and different things on a Thursday. I followed the
-brief's word: from today onward. spread_from is an explicit parameter so the
-UI can send Monday if you want the mock's behaviour. Tell me which.
-
-THE THING THE FIRST TEST RUN CAUGHT
------------------------------------
-The spread refreshed derived days to the NEW week total and then added the
-delta on top -- double counted. The fix is an ordering: freeze the as-was
-distribution BEFORE the week moves, then calibrate, then spread, then stamp
-every day edited (because a planner has just chosen a non-uniform split and
-the only thing that stops a derived day re-uniforming it on the next read is
-not being derived any more). It is the whole function; the docstring says so.
-
-API
----
-  GET  /api/forecast-days?from=&to=&route_id=
-       -> { commit_week: {month_index, week_index, from, to, weekdays, days},
-            lines: [ {route_id, month_index, discipline, section_id, week_index,
-                      ipt, unit, material_type, vehicle_type,
-                      week: {...the forecast_weeks row...},
-                      days: [ {day_date, planned_qty, actual_qty, status,
-                               variance, week_changed, ...} ],
-                      days_sum, days_ne_week} ],
-            statuses, summary }
-       Reading materialises, like the week endpoint. from/to clip; they never
-       widen. Filtered by the parent line's IPT exactly as weeks are.
-  PUT  /api/forecast-days          { line key..., day_date, planned_qty }
-  PUT  /api/forecast-days/actual   { line key..., day_date, actual_qty, actual_note }
-  POST /api/forecast-weeks/calibrate  now also accepts { spread: bool, spread_from: "YYYY-MM-DD" }
-  GET  /api/forecast-weeks            now also returns commit_week (same value as next_week)
-
-No CSV import. No file body. No upload endpoint -- asserted at source level.
-
-NOT IN THIS SLICE
------------------
-No frontend. The Commit view, the day grid, the KPI strip, the clash rail, the
-XLSX/PDF export and the derived km/trips/vehicles columns are slices 2-6.
-Nothing you see in the app changes until those land. What changes is that the
-data and the rules now exist and are tested.
-
-TESTS
+SUITE
 -----
-Full suite: 2,333 passed, 0 failed (2,256 -> 2,333, +77).
+Thirteen runnable files, 2,499 passed / 0 failed, every count watched print,
+and verified again on a fresh clone with this zip extracted over it:
+  test_lookahead.py 186 (was 125)   parse_frontend.js 299 (was 270)
+  render_frontend.js 49 (was 28)    test_tenant_audit.py 29 (was 28 — clashes.py)
+  unchanged: parse_map 484, test_week1 315, test_phase4 220, test_phase5a 215,
+  test_phase2 160, test_phase3 154, test_phase45 144, test_ipt_overlay 140,
+  test_phase25a 104.
 
-  test_lookahead.py   72  NEW
-  test_phase45.py    140 -> 144   its per-table loop picked the new table up
-  test_tenant_audit   26 ->  27   likewise -- and it read every query in days.py
-                                  and found a tenant predicate on all of them
-  test_phase4.py     220          (carried, unchanged)
+Seventeen deliberate regressions, seventeen caught — four only after fixing the
+test: a cap fixture that was already exceeded (≥ vs > indistinguishable), no
+line without an IPT, a cost mutant equivalent for the "absent field" case (an
+explicit null was the case that told them apart), and one sheet assertion that
+CRASHED instead of failing (lesson 13, again). Plus one frontend: a `break`
+after the first confirm still contained the loop the assertion looked for.
 
-Twenty-six regressions applied on purpose across today's three deliveries;
-all twenty-six caught by the assertion meant to catch them. Two of the nine
-new ones needed a second pass, and both were defects in MY tests:
-
-  * the PK-registration assertion subscripted a dict directly, so removing
-    the registration raised KeyError and killed the report. Lesson 13, again.
-  * "no days for the Pending line" stayed green with days.py's own Approved
-    guard DELETED -- because weeks.py never creates a week row for a
-    never-approved line, so there was nothing to hang a day on either way.
-    The case that guard actually protects is a line approved, then reopened:
-    its week rows survive (weeks.py's rule) and it must still get no days.
-    Added. Now caught.
-
-Both are the same lesson as this morning: the regression that does not fail
-is the informative one.
-
-WHAT IS NOT TESTED
-------------------
-  * The HTTP layer is stubbed. Endpoint bodies run; nothing proves ?from= and
-    ?to= are parsed off a query string or that the routes are mounted.
-  * No Postgres branch ran. See DEPLOY.
-  * No browser. There is no UI in this slice.
-  * "Today" is the real clock for the endpoint-level assertions (as in
-    test_week1.py) and an explicit date for the bucket arithmetic. The seed
-    spans 24 months so the commit month is always Approved.
-
-PLEASE CHECK ON THE LIVE SITE
------------------------------
-  1. The Render deploy log on first boot -- see DEPLOY.
-  2. GET /api/forecast-days with a valid access code. You should see one entry
-     per Approved line for this week, days_ne_week false on every line, and
-     Sat/Sun at 0. If lines is empty, that is E16's blocker again: no Approved
-     lines this month.
-  3. The existing Look-ahead tab still works exactly as before. It does not
-     read the new endpoint yet.
-
-STILL OPEN
-----------
-  * Rotate ADMIN_TOKEN. It is still the literal string "openssl rand -hex 24"
-    until you change it on Render.
-  * Confirm one of your REAL access codes signs in. The demo codes are dead
-    (all 401 -- E10's success criterion) but I cannot prove a real one works.
-  * Run the departure probe once this is deployed:
-    /api/admin/diagnostics/departure/R001?profile=Artic%20Tipper%20(44t)&token=...
-  * Push still blocked. Ninth delivery.
+LANDING GREPS (each run, not reasoned)
+--------------------------------------
+  backend/clashes.py backend/lookahead.py backend/export.py exist
+  grep -c "def init_lookahead_db" backend/db.py        -> 1
+  grep -c "calibrated_qty" backend/weeks.py            -> 4
+  grep -c "/api/lookahead" backend/main.py             -> 1
+  grep -c "function RoutePlanning" frontend/index.html -> 1
+  grep -c '"rbe_la_view"' frontend/index.html          -> 2
+  grep -c "openpyxl" backend/requirements.txt          -> 1
