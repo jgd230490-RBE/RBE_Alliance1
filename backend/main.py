@@ -34,6 +34,7 @@ import streetview    # Phase 2.5a — Google Street View proxy (key stays server
 import gates         # Phase 5a — multiple gates per location, with a direction on each
 import weeks         # Week 1 — the 4-week look-ahead and typed actuals (Tasks C, D)
 import days         # Look-ahead v2 slice 1 (2026-09-09) — the commit week by day
+import derived      # Look-ahead v2 slice 2 (2026-09-09) — trips / vehicles / km / t·km on read
 import stockpiles    # Week 1 — stockpile capacity and typed consumption (Task D2)
 import access        # 2026-09-02 — IPT access codes (Task F)
 import config        # 2.5b — the editable copy of factors.json
@@ -775,10 +776,20 @@ def list_forecast_days(from_date: Optional[str] = Query(None, alias="from"),
     `from` / `to` (ISO dates) clip what is returned; the default is the whole bucket.
     They never widen it — there are no days outside the commit week. Reading
     materialises, as the week endpoint does.
+
+    Slice 2: every line also carries `context` (origin→dest, IPT, WS, material,
+    vehicle, payload, baked state, cycle, flags) and `week_derived`; every day carries
+    `derived` (tonnes, trips, vehicles, km_day, km_per_vehicle, tonne_km); the response
+    carries `totals` for the KPI strip. See derived.py for the formulas (brief §4).
     """
     acc = _require_access()
     res = days.list_days(from_date, to_date, route_id=route_id)
     res["lines"] = access.filter_lines(res["lines"], acc)
+    # Look-ahead v2 slice 2: context chips and the derived columns, computed on read
+    # from the SAME route_analysis() path analysis-batch and month-kpis use. After the
+    # access filter, so `totals` is for the lines this caller can see. Unbaked lines
+    # get trips and tonnes only, and the UNBAKED flag — no distance is invented.
+    derived.decorate(res)
     res["statuses"] = list(days.DAY_STATUSES)
     res["summary"] = days.summary()
     return res
