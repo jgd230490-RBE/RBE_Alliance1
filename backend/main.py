@@ -827,21 +827,38 @@ def list_forecast_days(from_date: Optional[str] = Query(None, alias="from"),
 
 @app.get("/api/lookahead")
 def lookahead_page(bucket: str = "commit", route_id: Optional[str] = None,
-                   tark_tee: int = 1):
+                   tark_tee: int = 0):
     """
     Look-ahead v2 slices 3-6: everything the page's three views need in one read —
     commit (days + derived + totals), account (last week), horizon (roles), stock and
-    the clash rail. `bucket=next` is the Thursday process. `tark_tee=0` skips the live
-    restriction check (the rail then says the source was not consulted).
+    the clash rail. `bucket=next` is the Thursday process.
+
+    🔴 Tark Tee is OFF this read by default (09 Sep night: the live fetch + geometry loop
+    froze the page on its first Approved line). The page fetches
+    /api/forecast-weeks/tark-tee separately once it has rendered; `tark_tee=1` here is
+    for diagnostics only.
     """
     acc = _require_access()
     return lookahead.page(bucket=("next" if bucket == "next" else "commit"),
                           route_id=route_id, acc=acc, with_tark_tee=bool(tark_tee))
 
 
+@app.get("/api/forecast-weeks/tark-tee")
+def forecast_week_tark_tee(bucket: str = "commit", route_id: Optional[str] = None):
+    """
+    The TARK_TEE flags alone — live Tark Tee data checked against the baked geometry of
+    the routes on the page, and ONLY those routes. Slow by nature (external fetch on a
+    cold cache, then a geometry loop), so the page calls it after rendering and shows
+    "checking…" meanwhile. `status` is ok · unavailable · skipped — never a silent clean.
+    """
+    acc = _require_access()
+    return lookahead.tark_tee_flags(bucket=("next" if bucket == "next" else "commit"),
+                                    route_id=route_id, acc=acc)
+
+
 @app.get("/api/forecast-weeks/clashes")
 def forecast_week_clashes(bucket: str = "commit", route_id: Optional[str] = None,
-                          tark_tee: int = 1):
+                          tark_tee: int = 0):
     """The rail alone (brief §6), for a caller that already has the grid."""
     acc = _require_access()
     pg = lookahead.page(bucket=("next" if bucket == "next" else "commit"),
@@ -855,6 +872,8 @@ def forecast_week_clashes(bucket: str = "commit", route_id: Optional[str] = None
 @app.get("/api/forecast-weeks/export")
 def forecast_week_export(format: str = "xlsx", bucket: str = "commit",
                          route_id: Optional[str] = None, tark_tee: int = 1):
+    # tark_tee defaults ON for the export: a sheet handed to a haulier should carry the
+    # restriction flags, and a download can afford to wait where the page cannot
     """
     Browser download of the commit week — xlsx (day × line, stock, clashes) or the PDF
     one-pager. No email, no upload. Built from the same read the page shows.

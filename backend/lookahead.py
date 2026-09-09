@@ -111,7 +111,24 @@ def horizon_rows(commit_mi, commit_wi, route_id=None):
                       "make-ready": list(following), "early-warning": list(after)}}
 
 
-def page(bucket="commit", route_id=None, acc=None, with_tark_tee=True, today=None):
+def tark_tee_flags(bucket="commit", route_id=None, acc=None, today=None):
+    """
+    The TARK_TEE flags alone, for the caller's lines — fetched by the page AFTER it has
+    rendered, because this is live data and a geometry loop (see clashes.tark_tee).
+    """
+    acc = acc if acc is not None else access.current()
+    full = days.list_days(route_id=route_id, bucket=bucket, today=today)
+    derived.decorate(full)
+    visible = access.filter_lines(list(full["lines"]), acc)
+    vis_keys = {clashes.line_key(l) for l in visible}
+    flags, status, routes = clashes.tark_tee(full["lines"])
+    vis = [f for f in flags
+           if (f["route_id"], int(f["month_index"]), f["discipline"], f["section_id"]) in vis_keys]
+    return {"flags": vis, "count": len(vis), "status": status, "routes_checked": routes,
+            "commit_week": full.get("commit_week")}
+
+
+def page(bucket="commit", route_id=None, acc=None, with_tark_tee=False, today=None):
     acc = acc if acc is not None else access.current()
     factors = None
     # the commit bucket's days, for EVERY line (clash sums), then filtered

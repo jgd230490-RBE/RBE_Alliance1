@@ -27,6 +27,9 @@ Rules that are the module, not details:
 * **A source that cannot be reached says so.** Tark Tee is live data; when it is down
   the rail must not read "no restrictions" — `sources.tark_tee` is 'unavailable' and no
   TARK_TEE flag is raised or suppressed. Never cache a failure (warning-stack lesson).
+  🔴 **And it is NEVER on the page's critical path**: compute() defaults to
+  `with_tark_tee=False` and reports 'pending'; the page fetches the TARK_TEE flags from
+  their own endpoint after it has rendered.
 * **Nothing invents a 40-trip constant.** ROUTE_CAP fires only on a typed cap.
 """
 import datetime
@@ -243,25 +246,35 @@ def pile_over(lines, stock):
     return out
 
 
-def tark_tee(lines):
+def tark_tee(lines, fc=None):
     """
-    TARK_TEE from restrictions.check_all(). Returns (flags, status). status is 'ok',
-    'unavailable' (the live source could not be fetched — say so, never pretend clean)
-    or 'skipped' (no baked line to check).
+    TARK_TEE for the routes on the page ONLY. Returns (flags, status, checked_routes).
+    status: 'ok' · 'unavailable' (the live source could not be fetched — say so, never
+    pretend clean) · 'skipped' (no baked line to check).
+
+    🔴 09 Sep night: this is LIVE data and a pure-Python geometry loop, and it was on the
+    page's critical path — the first Approved line on a baked route froze the Look-ahead
+    on "Loading…". It now (a) checks only the routes that carry lines, never all 107,
+    and (b) is called from its own endpoint, after the page has rendered. Never cache a
+    failure (warning-stack lesson) — restrictions.py's cache holds successes only.
     """
-    routes = {l["route_id"] for l in lines if (l.get("context") or {}).get("baked")}
+    routes = sorted({l["route_id"] for l in lines if (l.get("context") or {}).get("baked")})
     if not routes:
-        return [], "skipped"
+        return [], "skipped", []
     try:
-        res = restrictions.check_all()
+        fc = fc if fc is not None else restrictions.fetch_all()
     except Exception:
-        return [], "unavailable"
-    if not isinstance(res, dict) or res.get("error"):
-        return [], "unavailable"
+        return [], "unavailable", routes
+    if not isinstance(fc, dict) or (not fc.get("features") and fc.get("errors")):
+        return [], "unavailable", routes
     hit_by = {}
-    for r in res.get("routes", []) or []:
-        if r.get("hits"):
-            hit_by[r.get("route_id")] = r["hits"]
+    for rid in routes:
+        try:
+            res = restrictions.check_route(rid, _fc=fc)
+        except Exception:
+            continue
+        if res.get("hits"):
+            hit_by[rid] = res["hits"]
     out = []
     for l in lines:
         hits = hit_by.get(l["route_id"])
@@ -271,14 +284,14 @@ def tark_tee(lines):
             out.append(_flag("TARK_TEE", l,
                              f"{_label(l)} crosses {what}" + (f" (+{len(hits) - 1} more)" if len(hits) > 1 else ""),
                              hits=len(hits)))
-    return out, "ok"
+    return out, "ok", routes
 
 
 # --------------------------------------------------------------------------- #
 #  The rail                                                                    #
 # --------------------------------------------------------------------------- #
 def compute(all_lines, visible_keys, account_rows, month_index, week_index,
-            with_tark_tee=True):
+            with_tark_tee=False):
     """
     Every flag for the visible lines. `all_lines` is the WHOLE tenant's decorated lines
     (cross-IPT sums need them); `visible_keys` is the set of line_key() the caller may
@@ -290,9 +303,11 @@ def compute(all_lines, visible_keys, account_rows, month_index, week_index,
     flags += route_cap(all_lines)
     flags += ipt_share(all_lines)
     flags += pile_over(all_lines, stock)
-    tt_status = "off"
+    # 'pending' = not consulted on this read; the page fetches it separately, after
+    # rendering, from /api/forecast-weeks/tark-tee — see tark_tee() above
+    tt_status = "pending"
     if with_tark_tee:
-        tt, tt_status = tark_tee(all_lines)
+        tt, tt_status, _ = tark_tee(all_lines)
         flags += tt
     vis = [f for f in flags
            if (f["route_id"], int(f["month_index"]), f["discipline"], f["section_id"]) in visible_keys]
