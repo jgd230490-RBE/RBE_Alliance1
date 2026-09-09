@@ -1,213 +1,152 @@
-rbe-map-review-0908pm.zip — 2026-09-08 (afternoon)
-Your review of the morning's map slice. Three files. Extract over the repo root;
-paths mirror the repo. Nothing to delete, nothing to rename, nothing to merge.
+rbe-route-vehicles-0909.zip
+===========================
+Delivered 2026-09-09. Extract over the repo root; the paths already match.
 
-    map/index.html
-    backend/tests/parse_map.js
-    backend/tests/map_browser_check.js
+WHAT THIS IS
+------------
+"When selecting edit route I am unable to change vehicle."
 
-No backend file changed. No endpoint changed. No data file changed. The Rail
-Baltica alignment, the roads, Tark Tee, the zones and the staff app are untouched.
+You were right about the symptom. The cause was deliberate -- the panel hid the
+vehicle tick-boxes whenever a route was being edited, and the label said so
+("Vehicle(s) - baked on create"). But the capability was missing from the WHOLE
+page, not just the edit form, and that is the part worth knowing:
 
-⚠️ STILL OUTSTANDING AND STILL THE OLDEST ITEM: THE EIGHT ACCESS CODES ARE NOT SET
-ON RENDER. Until they are, submitter123 / planner123 / admin123 work on the live
-site and the per-IPT filtering does nothing. Render -> service -> Environment ->
-IPT1_CODE…IPT6_CODE, PLANNER_CODE, ADMIN_CODE -> Save. Set all eight in one go;
-the first one you set stops the demo codes for everybody. Six days now.
+  * A route has no vehicle field. Its vehicles are simply whichever profiles
+    have a row in route_geometry.
+  * The per-row "Bake" button re-bakes ONLY the profiles a route already has.
+    It falls back to the "Show" selector's vehicle only when the route has none
+    at all. So adding an 11th profile to a route that already has 7 was not
+    possible except by baking the whole network.
+  * clear_geometry() had no route filter -- it was network-wide by
+    construction. So removing a profile from ONE route was not possible at all,
+    from the UI or the API.
 
+Both gaps are closed.
 
-================================================================================
-1. THE THING YOU SPOTTED WAS A REGRESSION I INTRODUCED YESTERDAY MORNING
-================================================================================
+FILES IN THIS ZIP
+-----------------
+  backend/main.py                  clear-geometry endpoint takes route_id
+  backend/network.py               clear_geometry(route_id=...), and
+                                   route_edit_impact() reports forecast use by vehicle
+  backend/tests/test_week1.py      +12 assertions (303 -> 315)
+  backend/tests/parse_frontend.js  +11 assertions (259 -> 270)
+  frontend/index.html              the vehicle tick-boxes while editing
 
-"I would like all icons to sit on top of the alignments and routes."
+Nothing is deleted by this delivery, so there is no manual removal step.
+factors.json is NOT included -- nothing here touches it.
 
-You were right, and it is worse than it looks from the sidebar. I measured the
-layer stack in Chromium. NINE layers were drawing over the location marks:
+WHAT YOU WILL SEE
+-----------------
+Press Edit on a route. The vehicle list is now there, pre-ticked with whatever
+that route is actually baked for, and every row says which way it is going:
 
-    rail-alignment-survey, rail-alignment-underlay, rail-alignment,
-    chainage-global, sel-glow, sel-core,
-    forecast-casing, forecast-layer, forecast-flow
+    Artic Tipper (44t)        . baked          (green - nothing happens)
+    Rigid 8-wheeler (32t)     . will be baked  (navy  - costs HERE calls)
+    Artic Flatbed (44t)       . will be removed(red   - geometry is deleted)
 
-A railhead with two routes converging on it was about 70% covered by the 6 px
-forecast casing — the mark was a sliver of teal above a blue line. The routes
-converge exactly ON the nodes, so the marks were most hidden precisely where they
-matter most.
+The Save button counts it before you press it -- "Save changes . +1 -1
+vehicle(s)" -- and the confirm dialog names the consequences:
 
-WHY IT HAPPENED, because it is the interesting part. Until yesterday the sites
-were DOM mapboxgl.Markers. A DOM marker is an HTML sibling of the WebGL canvas,
-so it is above every layer unconditionally and for free — nobody ever had to
-think about it. Moving them into the canvas as a symbol layer bought the seven-
-type taxonomy and unblocked PNG export, and silently cost that guarantee. Layer
-order in Mapbox is ADD order, and several of the layers above are added LAZILY
-(the forecast layers when you tick the box, the zone and restriction layers when
-you open them), so there is no single place to insert before.
+  * removing a vehicle deletes BOTH legs and EVERY alternative for it on that
+    route, so restoring it later is real HERE calls;
+  * how many forecast lines on that route name the vehicle you are removing,
+    and how many of those are Approved. forecasts.vehicle_type is the key the
+    Forecasts page looks route analysis up by, so those lines will read
+    "not baked" where their km, cycle time and vehicle count were;
+  * a separate warning if you are removing the LAST vehicle, because the route
+    then reads "not baked" everywhere including on the map.
 
-Fixed with raiseMarks(), called from every lazy adder and from applyFilters(),
-which runs after every user action. It is guarded: if the mark layers are already
-last, in order, it returns without touching the style, because moveLayer forces a
-style recalculation and applyFilters runs on every keystroke in the filter row.
+Adding a vehicle is not gated by a dialog -- it only spends HERE calls -- but
+it is reported in the status line afterwards.
 
-⚠️ The assertion that would have caught this did not exist. Draw order has no
-textual signature, so parse_map.js cannot see it — it is in the browser harness
-now, and it names the specific layers, so a future reorder says which one moved.
+TWO THINGS THAT COULD HAVE GONE WRONG QUIETLY, AND DID NOT
+----------------------------------------------------------
+1. The edit list is its OWN state, not the Create panel's. Sharing it would
+   have been one line shorter and would have silently re-pointed the
+   network-wide "Bake all . N vehicle(s)" button at whatever route you happened
+   to have open -- while its own tooltip still said the list came from the
+   Create panel. There is an assertion that bulk bake never reads the edit set.
 
+2. Moving a route's endpoints already clears every profile server-side. The old
+   code then re-baked "the profiles it had". If you move the endpoints AND
+   untick a vehicle in the same save, that would have brought the unticked one
+   straight back, and the route list would have shown it as though you had
+   never touched it. A move now re-bakes the NEWLY TICKED set.
 
-================================================================================
-2. THE MARKS
-================================================================================
+TESTS
+-----
+Full suite: 2,238 passed, 0 failed (was 2,215 -- +23).
 
-QUARRY — BACK TO A CIRCLE. The pick is drawn as vector rather than the old 9 px
-  emoji character, so it is identical on every machine and sharp at every zoom.
-  The three material fills are unchanged: sand gold, limestone white, everything
-  else sienna.
+  test_week1.py     303 -> 315   parse_frontend.js  259 -> 270
+  test_phase5a 215 . test_phase4 202 . test_phase2 160 . test_phase3 154
+  test_phase45 140 . test_ipt_overlay 140 . test_phase25a 104
+  parse_map 484 . render_frontend 28 . test_tenant_audit 26   (all unchanged)
 
-  ⚠️ THIS REVERSES A RULE I WROTE YESTERDAY, deliberately and at your request.
-  The morning slice said "shape discriminates, not colour — two types never share
-  a mark", because a colour-blind reader, a greyscale print and a satellite
-  basemap all lose colour before shape. Five of the seven types are circles now
-  and the INNER SYMBOL discriminates instead: a pick, a dot, a pile, an anchor,
-  nothing. Railhead and Compound stay squares, so the two types that sit ON the
-  corridor are still separable by silhouette alone. Your call, recorded as yours.
+Ten regressions were applied on purpose and all ten were caught by the
+assertion meant to catch them -- including that another TENANT's identical row
+survives a route-scoped delete, and that the no-filter branch still means
+"everything for this tenant", which is what "Clear all routes" depends on.
 
-  ⚠️ It took three attempts and the two failures are worth knowing about, because
-  both rendered without error and both were wrong at a glance: v1 (handle
-  overshooting a shallow arc) read as a figure 2; v2 (a near-flat arc over a
-  near-vertical handle) read as a letter T. The head is now built FROM the handle
-  vector so the two cannot drift apart again.
+Two of the ten did not fail cleanly on the first pass, and both were defects in
+MY test code rather than gaps in coverage:
 
-STOCKPILE — A GAUGE, as you asked: a circle, and the pile inside it in a creamy
-  grey, filled to its recorded stock level.
+  * one assertion subscripted a dict key directly instead of using .get(), so
+    breaking that key raised KeyError and killed the run before the report
+    printed. A caught regression read as an uncaught one. An assertion that can
+    CRASH is worse than one that can fail: it hides every assertion after it.
+    Fixed, and committed separately so the reason is in the history.
+  * the first regression harness counted "FAIL:" lines and nothing else, so a
+    run that died before reaching the new assertions reported zero failures --
+    indistinguishable from a regression nobody caught. It now checks the run
+    finished at all.
 
-  The level comes from stock_balance / capacity_qty — the same two numbers the
-  popup already states in words, so the picture and the text can never disagree
-  about one pile. Over capacity, the pile goes the same red the Clash warning
-  uses. No new endpoint, no new data, nothing stored.
+WHAT IS NOT TESTED
+------------------
+  * HERE is never called from the build sandbox. Nothing here proves a bake
+    actually succeeds -- only that the right profile is asked for.
+  * No browser ran. The tick-boxes, the labels and the confirm dialog are
+    asserted at SOURCE level only. Nothing has rendered them.
+  * The HTTP layer is stubbed, so clear-geometry's new route_id parameter is
+    proved to reach network.clear_geometry() by calling the endpoint function
+    directly. Nothing proves FastAPI parses it off the query string.
+  * No Postgres branch ran. The delete is a plain DELETE with one more WHERE
+    term, but it has only been executed against SQLite.
 
-  Two decisions inside it you should know about:
+PLEASE CHECK ON THE LIVE SITE
+-----------------------------
+  1. Edit a route, tick a vehicle it does not have, save. The Vehicles column
+     should gain a chip. Watch for the chip being HOLLOW -- that means the
+     laden leg baked and the return did not, which is not enough for a cycle
+     time.
+  2. Edit it again, untick that vehicle, save. The chip should go, and only
+     that route should lose it. Check a second route that also has that
+     vehicle still has it.
+  3. Move a route's endpoints and change its vehicles in the SAME save. The
+     result should be exactly what you ticked -- nothing you unticked should
+     come back.
 
-  - The level is QUANTISED into six steps (0/20/40/60/80/100) plus over plus
-    "unmeasured". Each distinct mark is a separate image in the map's atlas, and
-    an image per exact percentage is an unbounded set.
+STILL OPEN, AND UNCHANGED BY THIS DELIVERY
+------------------------------------------
+  * THE DETOUR ON R001. Diagnosed but NOT fixed -- see claude/route-management-0909.md.
+    It is the laden leg into gate G001 at Soodevahe, and it is not the haul
+    road (no route has one attached). The stored geometry has a 147 m jump
+    between two consecutive vertices where its neighbours are 6-38 m apart.
+    Settling whether that came from HERE or from our own section-joining code
+    needs ONE call, and it needs your ADMIN_TOKEN:
 
-  - ⚠️ A PILE WITH NO RECORDED CAPACITY IS DRAWN WITH A DASHED OUTLINE. Without
-    that, an unmeasured pile and a 90-100% full pile are the same picture — both
-    solid to the top — and the map would be claiming a reading it does not have.
-    A dashed pile means "nobody has told this system how big this pile is",
-    which is a real state, not a zero.
+      /api/admin/diagnostics/route/R001?profile=Artic%20Tipper%20(44t)&probe=true
 
-  ⚠️ ONE THING I HAD TO GET WRONG FIRST: the boundary between the filled and empty
-  parts is an INK RULE, not just a change of tone. Creamy grey on cream is a few
-  percent of luminance apart, and at map size the first version had no visible
-  fill line at all. The rule is what makes the level readable.
+    Send me that JSON. If it comes back with more than one section, every baked
+    route in the network is suspect at its section joins.
 
-COMPOUND — a solid site cabin instead of the thin outline square with a gap for
-  the gate. That outline vanished below about 22 px, so at corridor zoom a
-  compound was an empty amber square. Solid white shapes survive small sizes;
-  thin white lines do not.
+  * The eight IPT access codes are STILL not set on Render. Oldest open item.
 
-  ⚠️ The compound's amber (#CA8A04) is still a colour I CHOSE, not one I inherited
-  — there is no "compound sand" anywhere in this codebase, and the colour that was
-  there before was the cyan default that ports were also falling through to, i.e.
-  the bug itself. Say the word and it changes in one place.
+  * The push is still blocked: "jgd230490-RBE/RBE_Alliance1 is not in this
+    session's authorized repository set." Seventh delivery. Adding the repo to
+    the session's sources would end the zip chain and the partial-upload
+    failure mode with it.
 
-PORT and SITE are untouched, as you asked. RAILHEAD and OTHER are untouched.
-
-
-================================================================================
-3. "CAN WE GET THE ICONS TO HIGHLIGHT WHEN IN USE ON THE FORECAST TIMELINE?"
-================================================================================
-
-They already did, and you could not see it. That is the finding, not the feature.
-
-Yesterday's treatment was "+2 px with a 1 px halo". Measured in the browser, that
-is 26 -> 34 CSS px across, and it only reads if an UNUSED mark happens to sit
-right beside a used one. In a busy month almost every mark is in use, so there is
-nothing to compare against and the emphasis is invisible. I built exactly what
-the brief asked for and it did not do the job.
-
-Replaced with two things:
-
-  1. A WHITE RING with a dark rim, drawn OUTSIDE the mark. It reads on the Light
-     basemap and on satellite, and it lives in the image's margin so the mark
-     itself does not change size — nothing jumps when a month is scrubbed.
-
-  2. EVERYTHING NOT IN USE DROPS TO 34% while a month is on screen. This is the
-     half that actually works in a busy month: contrast, not size. It goes back to
-     solid the moment the timeline is closed.
-
-The dimming is an icon-opacity expression on the layer rather than a second set
-of images, because "is this month on screen" is a property of the SCREEN, not of
-the mark — baking it in would double the atlas for every type.
-
-⚠️ Both halves are driven by the same flag the ring is, so they cannot disagree
-about whether a month is being shown.
-
-
-================================================================================
-4. TESTS
-================================================================================
-
-    backend/tests/parse_map.js          484   (was 465)
-    backend/tests/map_browser_check.js   58   (was 47)   NOT in the default suite
-    backend/tests/test_week1.py         303
-    backend/tests/test_phase5a.py       215
-    backend/tests/test_phase4.py        202
-    backend/tests/test_phase2.py        160
-    backend/tests/test_phase3.py        154
-    backend/tests/test_phase45.py       140
-    backend/tests/test_ipt_overlay.js   140
-    backend/tests/test_phase25a.py      104
-    backend/tests/parse_frontend.js     259
-    backend/tests/render_frontend.js     28
-    backend/tests/test_tenant_audit.py   26
-
-THREE ASSERTIONS REVERSED RATHER THAN DELETED, all three pinning behaviour that
-turned out to be the thing you were objecting to:
-  - "+2 px with a halo, baked into the -on image" now pins the ring AND the
-    dimming, and REFUSES the size-only treatment coming back;
-  - the quarry diamond now asserts the circle and refuses the diamond path;
-  - the compound outline now asserts the solid cabin and refuses strokeRect.
-
-⚠️ TWO OF MY OWN NEW ASSERTIONS WERE MIS-TARGETED, and one of them could never
-have failed. parse_map.js strips // comments out of `code` before matching, so
-`!/\/\/ diamond/.test(code)` was vacuously true no matter what the file said. It
-tests the PATH now, and the comment marker is grepped in `src`. Worth recording
-because a green assertion that cannot fail is worse than no assertion.
-
-FOURTEEN DELIBERATE REGRESSIONS RUN (each broke the build, then was reverted).
-The split is the point:
-
-  TWELVE were caught by the source assertions — the marks back under the routes,
-  the no-op guard inverted, the +2 px treatment restored, the dimming applied
-  always, an unmeasured pile drawn as a measured one, the stock rule removed, the
-  backend's `over` ignored, the level dropped from the image key, the quarry back
-  to a diamond, the pick's head angle hard-coded, the compound back to an outline,
-  and the ring's radius changed.
-
-  🔴 TWO WERE CAUGHT ONLY BY THE BROWSER, and neither has any textual signature:
-    - the image canvas shrunk from 72 to 62 px, so the ring runs off the edge and
-      renders as a broken arc. Every source regex still passed;
-    - the bucket arithmetic wrong by a factor of ten, so a 42%-full pile draws as
-      empty. Every source regex still passed.
-
-⚠️ AND A PROCESS FAILURE ON MY SIDE, because it nearly put a wrong number in this
-file. My regression harness held the original file in memory and restored it at
-the end. Two runs were killed by a timeout between applying a regression and
-reverting it, and both left the working tree broken — so the NEXT run measured
-every case against an already-regressed baseline and reported plausible-looking
-numbers. Caught it by grepping the tree afterwards. The harness restores with
-`git checkout` now and refuses to start on a dirty tree.
-
-⚠️ WHAT IS STILL NOT TESTED
-  - THE BASEMAP IS BLANK. The harness answers the style URL with an offline stub,
-    so nothing here has been seen over real satellite or real Light tiles. That
-    matters more than it did yesterday: the stockpile's cream, the quarry's
-    limestone white and the ring's white all have to hold against real imagery,
-    and I cannot see that from here. Please look at the deployment.
-  - The API is fixtures. The stock gauge has been exercised against three invented
-    piles (over / part-full / unmeasured), never against your real capacities.
-  - The geometry is four invented routes, not the 107-route network. I have not
-    seen what the ring and the dimming look like when 40 marks are on screen.
-  - buildings-3d has still only ever been REFUSED, never added: the offline style
-    has no `composite` source, which is exactly what its guard checks.
+  * code-snapshot.md says the suite total should be 2,222. Its own twelve
+    per-file counts sum to 2,215, which is what actually printed at HEAD before
+    this delivery. The per-file numbers are right; the total is wrong. Check by
+    the counts, not the total. Corrected in the notes, not in this zip.
