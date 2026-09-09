@@ -3217,6 +3217,12 @@ function DataManagement({ meta, who, subTab: propSubTab, onSubTab }){
   const [rIpt, setRIpt] = useState("");
   // 2.5b: the same panel edits an existing route. null = creating.
   const [editingRoute, setEditingRoute] = useState(null);
+  // 2026-09-09: the vehicle set being edited, held SEPARATELY from rVehicles on purpose.
+  // rVehicles drives two things -- what a new route is baked for, and what "Bake all"
+  // sweeps the whole network with -- so reusing it for the edit form would silently
+  // re-point the bulk-bake button at whatever the route being edited happens to carry,
+  // and the button's own tooltip would then be lying about where its list came from.
+  const [eVehicles, setEVehicles] = useState([]);
   const [rMaterial, setRMaterial] = useState("");
   const [routeBusy, setRouteBusy] = useState(false);
   const [routeMsg, setRouteMsg] = useState("");
@@ -3920,6 +3926,17 @@ function DataManagement({ meta, who, subTab: propSubTab, onSubTab }){
 
   const toggleRVehicle = (v) =>
     setRVehicles(vs => vs.includes(v) ? vs.filter(x => x !== v) : [...vs, v]);
+  const toggleEVehicle = (v) =>
+    setEVehicles(vs => vs.includes(v) ? vs.filter(x => x !== v) : [...vs, v]);
+  // What the route being edited is baked for RIGHT NOW, so each tick-box can say whether
+  // leaving it as it is costs nothing, spends HERE calls, or deletes geometry. Read from
+  // `status` rather than remembered at startEditRoute, so a bake finishing underneath the
+  // open form does not leave the labels describing a state that has gone.
+  const editHad = React.useMemo(() => {
+    if(!editingRoute) return [];
+    const r = (status || []).find(x => x.id === editingRoute);
+    return Object.keys((r && r.profiles) || {});
+  }, [editingRoute, status]);
 
   // how many routes touch each location — for the Locations table's "Routes" column
   const routeCounts = useMemo(() => {
@@ -3983,10 +4000,16 @@ function DataManagement({ meta, who, subTab: propSubTab, onSubTab }){
     setEditingRoute(r.id);
     setROrigin(r.origin_id || ""); setRDest(r.dest_id || "");
     setRId(r.id); setRIdTouched(true); setRIpt(r.ipt || ""); setRMaterial(r.material_category || "");
+    // A route has no vehicle FIELD: its vehicles are whichever profiles have a
+    // route_geometry row, which is what r.profiles is. So the tick-boxes open showing
+    // what is actually cached -- including a profile whose bake errored, because that
+    // row exists and dropping it is a legitimate thing to want to do here.
+    setEVehicles(Object.keys(r.profiles || {}).sort());
     setSubTab("routes"); setRouteMsg("");
   };
   const cancelEditRoute = () => {
-    setEditingRoute(null); setRDest(""); setRIpt(""); setRMaterial(""); setRIdTouched(false); setRouteMsg("");
+    setEditingRoute(null); setRDest(""); setRIpt(""); setRMaterial(""); setRIdTouched(false);
+    setEVehicles([]); setRouteMsg("");
   };
   const saveRouteEdit = async () => {
     if(!editingRoute) return;
@@ -3994,36 +4017,81 @@ function DataManagement({ meta, who, subTab: propSubTab, onSubTab }){
     if(!destValid(rDest)){ setRouteMsg("That origin and destination share no material."); return; }
     const cur = (status || []).find(r => r.id === editingRoute) || {};
     const moved = cur.origin_id !== rOrigin || cur.dest_id !== rDest;
+    // The vehicle diff. `had` is what has a route_geometry row today; `eVehicles` is what
+    // the tick-boxes now say. Neither is a field on the route, so this is the whole of
+    // "change the vehicles on a route" -- there is nothing else to write.
+    const had = Object.keys(cur.profiles || {}).sort();
+    const add = eVehicles.filter(v => !had.includes(v));
+    const drop = had.filter(v => !eVehicles.includes(v));
     try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
     const qs = token ? `?token=${encodeURIComponent(token)}` : "";
     setRouteBusy(true);
     try {
-      if(moved){
-        // say what the edit touches before touching it
+      // Say what the edit touches before touching it. Asked for whenever something is
+      // DESTROYED -- an endpoint move (which clears every profile) or a dropped profile.
+      // Adding a profile only spends HERE calls, so it is reported afterwards, not gated.
+      if(moved || drop.length){
         const ir = await fetch(`${API}/admin/routes/${encodeURIComponent(editingRoute)}/impact${qs}`);
         const imp = ir.ok ? await ir.json() : {};
+        const fv = imp.forecast_vehicles || {};
         const bits = [];
-        if(imp.forecast_lines) bits.push(`${imp.forecast_lines} forecast line(s) (${imp.forecast_rows} month rows) stay on this id and will now describe the NEW haul`);
-        if(imp.week_rows) bits.push(`${imp.week_rows} look-ahead week row(s) likewise`);
-        if((imp.baked_profiles || []).length) bits.push(`baked geometry for ${imp.baked_profiles.map(vehShort).join(", ")} is cleared and re-baked (HERE calls)`);
-        if((imp.haul_roads || []).length) bits.push(`${imp.haul_roads.length} haul road link(s) stay attached — check they still lie on the new route`);
-        bits.push("the gate selection at the moved end is cleared");
-        if(!confirm(`Move ${editingRoute}'s endpoints?\n\n• ${bits.join("\n• ")}\n\nContinue?`)){ setRouteBusy(false); return; }
+        if(moved){
+          if(imp.forecast_lines) bits.push(`${imp.forecast_lines} forecast line(s) (${imp.forecast_rows} month rows) stay on this id and will now describe the NEW haul`);
+          if(imp.week_rows) bits.push(`${imp.week_rows} look-ahead week row(s) likewise`);
+          if((imp.baked_profiles || []).length) bits.push(`baked geometry for ${imp.baked_profiles.map(vehShort).join(", ")} is cleared and re-baked (HERE calls)`);
+          if((imp.haul_roads || []).length) bits.push(`${imp.haul_roads.length} haul road link(s) stay attached — check they still lie on the new route`);
+          bits.push("the gate selection at the moved end is cleared");
+        }
+        // Dropping a profile is only free if nothing reads it. forecasts.vehicle_type is
+        // the key the Forecasts page looks route analysis up by, so a line naming a
+        // vehicle with no geometry left reads "not baked" where its km and cycle were.
+        drop.forEach(v => {
+          const use = fv[v];
+          const who = use ? ` — ${use.lines} forecast line(s) on this route name it${use.approved ? `, ${use.approved} of them Approved` : ""}, and will read “not baked”` : "";
+          bits.push(`${vehShort(v)}: both legs and every alternative are deleted${who}`);
+        });
+        if(drop.length && !eVehicles.length)
+          bits.push("this route will have NO baked vehicle at all — its km, cycle time and vehicle count read “not baked” everywhere, including on the map");
+        if(!confirm(`${moved ? `Move ${editingRoute}'s endpoints` : `Change ${editingRoute}'s vehicles`}?\n\n• ${bits.join("\n• ")}\n\nContinue?`)){ setRouteBusy(false); return; }
       }
       const res = await fetch(`${API}/admin/routes/${encodeURIComponent(editingRoute)}${qs}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ origin_id: rOrigin, dest_id: rDest,
           material_category: rMaterial || null, ipt: (rIpt || "").trim() || null }) });
       if(!res.ok){ const t = await res.text(); throw new Error(`${res.status} ${t.slice(0,140)}`); }
-      const j = await res.json();
-      const affected = j.affected_routes || [];
+      await res.json();
       await reloadNetwork();
-      if(affected.length){
-        const { rebaked, skipped } = await rebakeAffected(affected);
-        await reloadNetwork();
-        setRouteMsg(`Saved ${editingRoute}. ${rebaked ? `Re-baked ${rebaked} profile(s).` : "No geometry to restore."}${skipped ? ` ${skipped} skipped.` : ""}`);
-      } else setRouteMsg(`Saved ${editingRoute}.`);
+
+      // ⚠️ A move has ALREADY cleared every profile server-side, so there is nothing to
+      // drop and the re-bake must use the NEW ticked set, not the old one. Restoring
+      // `affected.profiles` here -- which is what this did before the vehicle diff
+      // existed -- would silently bring back a profile the user had just unticked.
+      const notes = [];
+      const toBake = moved ? eVehicles : add;
+      if(!moved && drop.length){
+        for(const prof of drop){
+          const p = new URLSearchParams({ route_id: editingRoute, profile: prof });
+          if(tokenRef.current) p.set("token", tokenRef.current);
+          const dr = await fetch(`${API}/admin/clear-geometry?${p}`, { method: "POST" });
+          if(!dr.ok) notes.push(`${vehShort(prof)} not removed (${dr.status})`);
+        }
+        if(drop.length) notes.push(`removed ${drop.length} vehicle(s)`);
+      }
+      if(toBake.length){
+        let n = 0;
+        for(const prof of toBake){
+          setRouteMsg(`${editingRoute} — routing ${vehShort(prof)} (${++n}/${toBake.length})…`);
+          const failed = await bakeOneRoute(editingRoute, [prof]);
+          if(failed.length) notes.push(failed.join(" · "));
+        }
+        notes.push(`${moved ? "re-baked" : "baked"} ${toBake.length} vehicle(s)`);
+      } else if(moved){
+        notes.push("no vehicles ticked — geometry left cleared");
+      }
+      await reloadNetwork();
+      setRouteMsg(`Saved ${editingRoute}${notes.length ? " — " + notes.join("; ") : "."}`);
       setEditingRoute(null); setRDest(""); setRIpt(""); setRMaterial(""); setRIdTouched(false);
+      setEVehicles([]);
     } catch(e){ setRouteMsg("Couldn't save: " + e.message); }
     setRouteBusy(false);
   };
@@ -5055,19 +5123,40 @@ function DataManagement({ meta, who, subTab: propSubTab, onSubTab }){
                   </select>
                 </label>
               )}
-              {!editingRoute && (
+              {/* Vehicles. Shown when EDITING as well as when creating: a route's
+                  vehicles are just the profiles that have cached geometry, and until
+                  2026-09-09 there was no way to add one to a single route (the row Bake
+                  button re-bakes only what a route already has) or to remove one at all
+                  (clear-geometry had no route filter). Both gaps are closed here. */}
               <div>
-                <span className="text-[11px] uppercase tracking-wide text-slate-400">Vehicle(s) · baked on create</span>
+                <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                  {editingRoute ? "Vehicle(s) · tick to bake, untick to remove" : "Vehicle(s) · baked on create"}
+                </span>
                 <div className="mt-1 space-y-1">
-                  {vehicles.map(v => (
-                    <label key={v} className="flex items-center gap-2 text-xs text-slate-700">
-                      <input type="checkbox" checked={rVehicles.includes(v)} onChange={() => toggleRVehicle(v)} style={{ accentColor: "#003787" }} />
-                      {v}
-                    </label>
-                  ))}
+                  {vehicles.map(v => {
+                    const on = editingRoute ? eVehicles.includes(v) : rVehicles.includes(v);
+                    const has = editingRoute && editHad.includes(v);
+                    const tag = !editingRoute ? null
+                      : (on && !has) ? ["will be baked", "var(--navy)"]
+                      : (!on && has) ? ["will be removed", "var(--red)"]
+                      : has ? ["baked", "var(--green)"] : null;
+                    return (
+                      <label key={v} className="flex items-center gap-2 text-xs text-slate-700">
+                        <input type="checkbox" checked={on}
+                          onChange={() => (editingRoute ? toggleEVehicle(v) : toggleRVehicle(v))}
+                          style={{ accentColor: "#003787" }} />
+                        {v}
+                        {tag && <span className="text-[10px] font-semibold" style={{ color: tag[1] }}>· {tag[0]}</span>}
+                      </label>
+                    );
+                  })}
                 </div>
+                {editingRoute && (
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Removing a vehicle deletes both legs and every alternative for it on this route. Adding one costs HERE calls.
+                  </p>
+                )}
               </div>
-              )}
 
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
@@ -5084,7 +5173,18 @@ function DataManagement({ meta, who, subTab: propSubTab, onSubTab }){
               {editingRoute ? (
                 <button onClick={saveRouteEdit} disabled={routeBusy || !rOrigin || !rDest || !destValid(rDest)}
                   className="w-full py-2 rounded-lg text-white font-semibold text-sm disabled:opacity-50" style={{ background: "var(--navy)" }}>
-                  {routeBusy ? "Working…" : "Save changes"}
+                  {routeBusy ? "Working…" : (() => {
+                    // The button says what pressing it will DO to the vehicles, because
+                    // the destructive half of this form is a tick-box that looks like a
+                    // filter. The confirm still names the consequences; this is so the
+                    // count is visible before the dialog, not only inside it.
+                    const nAdd = eVehicles.filter(v => !editHad.includes(v)).length;
+                    const nDrop = editHad.filter(v => !eVehicles.includes(v)).length;
+                    const bits = [];
+                    if(nAdd) bits.push(`+${nAdd}`);
+                    if(nDrop) bits.push(`−${nDrop}`);
+                    return bits.length ? `Save changes · ${bits.join(" ")} vehicle(s)` : "Save changes";
+                  })()}
                 </button>
               ) : (
               <button onClick={createRoute} disabled={routeBusy || !rOrigin || !rDest || !destValid(rDest)}
