@@ -287,6 +287,14 @@ def materialise_week_days(route_id, month_index, discipline, section_id, week_in
                         week_index, wq)
             created += 1
         elif cur["status"] == "derived":
+            # 09 Sep night: write ONLY when the figure moved. On Render every statement
+            # is a network round trip, and a read that rewrote every derived row it
+            # had just read cost 45 writes per page for nothing. Same figures ⇒ kept.
+            if (abs(float(cur.get("planned_qty") or 0) - float(shares[d])) < 1e-9
+                    and cur.get("parent_week_qty") is not None
+                    and abs(float(cur["parent_week_qty"]) - wq) < 1e-9):
+                kept += 1
+                continue
             db.execute(
                 "UPDATE forecast_days SET planned_qty = ?, parent_week_qty = ?, "
                 "updated_at = ? WHERE tenant_id = ? AND route_id = ? AND month_index = ? "

@@ -246,7 +246,7 @@ def materialise_line(route_id, discipline, section_id, month_index=None):
     for p in rows:
         share = float(p["quantity"] or 0) / WEEKS_PER_MONTH
         have = {r["week_index"]: r for r in db.query(
-            "SELECT week_index, status FROM forecast_weeks WHERE tenant_id = ? "
+            "SELECT week_index, status, planned_qty, unit, parent_qty FROM forecast_weeks WHERE tenant_id = ? "
             "AND route_id = ? AND month_index = ? AND discipline = ? "
             "AND section_id = ?",
             (db.current_tenant(), p["route_id"], p["month_index"],
@@ -258,6 +258,15 @@ def materialise_line(route_id, discipline, section_id, month_index=None):
                              p["section_id"], w, share, p["unit"], p["quantity"])
                 created += 1
             elif cur["status"] == "derived":
+                # 09 Sep night: write ONLY when something moved — on Render every
+                # statement is a network round trip, and a read that rewrote every
+                # derived week it had just read paid for nothing. Unchanged ⇒ kept.
+                if (abs(float(cur.get("planned_qty") or 0) - float(share)) < 1e-9
+                        and (cur.get("unit") or "") == (p["unit"] or "")
+                        and cur.get("parent_qty") is not None
+                        and abs(float(cur["parent_qty"]) - float(p["quantity"] or 0)) < 1e-9):
+                    kept += 1
+                    continue
                 # ⭐ parent_qty is re-stamped HERE and nowhere else in this branch:
                 # a derived row is by definition in step with its parent again.
                 db.execute(

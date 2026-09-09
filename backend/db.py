@@ -91,8 +91,111 @@ else:
     _SQLITE_PATH = os.path.join(os.path.dirname(__file__), "forecasts_local.db")
 
 
+# --------------------------------------------------------------------------- #
+#  Connections                                                                 #
+# --------------------------------------------------------------------------- #
+# 🔴 2026-09-09 night, MEASURED ON THE DEPLOYMENT: every query()/execute() opened a
+# brand-new Postgres connection (TLS handshake + auth) and closed it. One Look-ahead
+# read issues ~90 statements; at ~190 ms per connect that is 17 s, which is exactly
+# what /api/forecast-days took live with ONE approved line, and /api/lookahead never
+# came back. SQLite in the sandbox does the same read in 85 ms, so no test saw it.
+#
+# Postgres connections are now borrowed from a small pool and returned on close();
+# the call sites are unchanged. A connection that comes back mid-transaction is rolled
+# back before it is reused; one the server dropped while idle is discarded and the
+# statement retried once on a fresh one. DB_POOL=0 restores one-connection-per-
+# statement; DB_POOL_MAX sets the pool size (default 6 — Render's smallest Postgres
+# allows ~97, uvicorn runs one process).
+_PG_POOL = None          # None = not built yet · False = unavailable · else the pool
+_TX_IDLE = 0             # psycopg2.extensions.TRANSACTION_STATUS_IDLE
+
+
+def _pg_pool():
+    global _PG_POOL
+    if _PG_POOL is None:
+        if os.getenv("DB_POOL", "1").strip() == "0":
+            _PG_POOL = False
+        else:
+            try:
+                from psycopg2 import pool as _pgpool
+                _PG_POOL = _pgpool.ThreadedConnectionPool(
+                    1, max(2, int(os.getenv("DB_POOL_MAX", "6") or 6)), DATABASE_URL)
+                print("db: Postgres connection pool ready")
+            except Exception as e:
+                print("⚠️  db: connection pool unavailable, one connection per statement:", e)
+                _PG_POOL = False
+    return _PG_POOL or None
+
+
+class _PooledConn:
+    """
+    A connection borrowed from the pool. Quacks like the psycopg2 connection (cursor,
+    commit, rollback, …); close() RETURNS it to the pool instead of closing it, so
+    every existing `conn = get_conn() … conn.close()` site works unchanged.
+    """
+    __slots__ = ("_pool", "_conn")
+
+    def __init__(self, pool, conn):
+        self._pool, self._conn = pool, conn
+
+    def __getattr__(self, name):
+        conn = object.__getattribute__(self, "_conn")
+        if conn is None:
+            raise RuntimeError("connection already returned to the pool")
+        return getattr(conn, name)
+
+    def discard(self):
+        """Drop this connection for good (it failed mid-statement)."""
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        try:
+            self._pool.putconn(conn, close=True)
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def close(self):
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        dead = False
+        try:
+            if conn.closed:
+                dead = True
+            elif conn.get_transaction_status() != _TX_IDLE:
+                conn.rollback()             # never hand a half-open transaction to the next caller
+        except Exception:
+            dead = True
+        try:
+            self._pool.putconn(conn, close=dead)
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _is_conn_error(e):
+    """A dropped/dead connection, as opposed to a bad statement. Name-based so the
+    sandbox (no psycopg2) can exercise the retry with a stand-in exception."""
+    return type(e).__name__ in ("OperationalError", "InterfaceError")
+
+
 def get_conn():
     if IS_PG:
+        pool = _pg_pool()
+        if pool is not None:
+            try:
+                conn = pool.getconn()
+                if conn.closed:               # died while idle in the pool — replace it
+                    pool.putconn(conn, close=True)
+                    conn = pool.getconn()
+                return _PooledConn(pool, conn)
+            except Exception as e:
+                print("⚠️  db: pool getconn failed, opening a fresh connection:", e)
         return psycopg2.connect(DATABASE_URL)
     conn = sqlite3.connect(_SQLITE_PATH)
     conn.row_factory = sqlite3.Row
@@ -104,30 +207,41 @@ def _adapt(sql):
     return sql.replace("?", "%s") if IS_PG else sql
 
 
+def _run(sql, params, fetch):
+    """
+    One statement on a borrowed connection. If the connection turns out to be dead
+    (the server dropped it while it sat in the pool), discard it and retry ONCE on a
+    fresh one. A statement error is raised as before — a retry would not fix it.
+    """
+    for attempt in (0, 1):
+        conn = get_conn()
+        try:
+            if IS_PG and fetch:
+                cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            else:
+                cur = conn.cursor()
+            cur.execute(_adapt(sql), params)
+            if fetch:
+                return [dict(r) for r in cur.fetchall()]
+            conn.commit()
+            return None
+        except Exception as e:
+            if attempt == 0 and _is_conn_error(e) and isinstance(conn, _PooledConn):
+                conn.discard()
+                continue
+            raise
+        finally:
+            conn.close()
+
+
 def query(sql, params=()):
     """Run a SELECT and return a list of plain dicts."""
-    conn = get_conn()
-    try:
-        if IS_PG:
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        else:
-            cur = conn.cursor()
-        cur.execute(_adapt(sql), params)
-        rows = cur.fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
+    return _run(sql, params, fetch=True)
 
 
 def execute(sql, params=()):
     """Run an INSERT/UPDATE/DELETE and commit."""
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(_adapt(sql), params)
-        conn.commit()
-    finally:
-        conn.close()
+    _run(sql, params, fetch=False)
 
 
 # FORECASTS_DDL was here. Phase 4.5 made _TENANT_DDL["forecasts"] the single source
