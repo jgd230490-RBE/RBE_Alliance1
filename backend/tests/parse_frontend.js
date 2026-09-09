@@ -647,6 +647,60 @@ ok("the write is a PATCH of the changed fields, not a delete and re-create",
 ok("the route id itself is not editable while editing",
   code.includes("disabled={!!editingRoute}"));
 
+// 8e-ter. 2026-09-09: changing which VEHICLES a route is baked for.
+//
+// The reported bug was "edit route cannot change vehicle", and the guard that caused it
+// was deliberate -- the panel hid the tick-boxes whenever editingRoute was set. Removing
+// a guard is exactly the kind of change that leaves no textual trace if it regresses, so
+// the retired guard is asserted ABSENT rather than the new behaviour merely asserted
+// present. Reversed from what it said before this shipped; never delete an assertion.
+ok("🔴 the vehicle tick-boxes are no longer hidden while editing a route",
+  !code.includes("{!editingRoute && ("));
+ok("...and the panel says what ticking and unticking now MEAN while editing",
+  src.includes("tick to bake, untick to remove"));
+
+// The edit set is separate state. Sharing rVehicles would have been one line shorter and
+// would have silently re-pointed the network-wide Bake all button at whatever the route
+// under edit happens to carry -- while its own tooltip still said the list came from the
+// Create panel.
+ok("⭐ the edited vehicle set is its OWN state, not rVehicles",
+  code.includes("const [eVehicles, setEVehicles]") && code.includes("const toggleEVehicle"));
+{
+  const i = code.indexOf("const bulkBake = async");
+  const j = code.indexOf("const clearRoutes", i);
+  const body = i >= 0 && j > i ? code.slice(i, j) : "";
+  ok("🔴 bulk bake still reads rVehicles and never the edit set",
+    body.includes("rVehicles.length ? rVehicles") && !body.includes("eVehicles"));
+}
+
+{
+  const i = code.indexOf("const saveRouteEdit = async");
+  const j = code.indexOf("const deleteRoute = async", i);
+  const body = i >= 0 && j > i ? code.slice(i, j) : "";
+  ok("the save computes BOTH directions of the vehicle diff against what is cached",
+    body.includes("Object.keys(cur.profiles || {})")
+    && /const add = eVehicles\.filter/.test(body)
+    && /const drop = had\.filter/.test(body));
+  // A move clears every profile server-side. Restoring affected.profiles afterwards --
+  // which is what this did before the diff existed -- would bring back a profile the
+  // user had just unticked, and the route list would show it as though nothing happened.
+  ok("🔴 a moved route re-bakes the NEWLY TICKED set, not the profiles it used to have",
+    body.includes("const toBake = moved ? eVehicles : add") && !body.includes("rebakeAffected"));
+  // Without route_id this call clears the profile from EVERY route in the network. The
+  // parameter is the whole point of the backend half of this change.
+  ok("🔴 dropping a vehicle clears geometry for THIS ROUTE only",
+    /clear-geometry/.test(body)
+    && /route_id: editingRoute, profile: prof/.test(body));
+  ok("the confirm names the forecast lines a dropped vehicle leaves reading 'not baked'",
+    body.includes("forecast_vehicles") && body.includes("not baked"));
+  ok("...and warns when the last vehicle is being removed",
+    body.includes("NO baked vehicle at all"));
+}
+ok("each tick-box says whether it will be baked, removed, or is already baked",
+  code.includes('"will be baked"') && code.includes('"will be removed"'));
+ok("the Save button shows the vehicle change before the confirm dialog does",
+  code.includes("Save changes · "));
+
 // 8e-bis. the names the UI calls things
 // Renaming a page and leaving its old name in a hint is exactly the dangling-text
 // failure that source-level assertions exist to catch; it has bitten twice already.

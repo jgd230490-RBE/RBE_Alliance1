@@ -1069,6 +1069,97 @@ ok("2.5b: PATCH writes only the fields sent", row["ipt"] == "IPT 6" and row["ori
 
 
 # =========================================================================== #
+#  2026-09-09 — changing which VEHICLES one route is baked for                 #
+#                                                                             #
+#  A route has no vehicle field: its vehicles ARE the profiles that have a     #
+#  route_geometry row. Adding one to a single route was already possible from  #
+#  the API (bake_route takes an arbitrary profile) and impossible from the UI; #
+#  removing one from a single route was impossible from BOTH, because          #
+#  clear_geometry() had no route filter and was network-wide by construction.  #
+#                                                                             #
+#  ⚠️ The delete is the dangerous half, so every assertion below is about what #
+#  SURVIVES it, not only about what goes.                                      #
+# =========================================================================== #
+db.execute("INSERT INTO routes (id, origin_id, dest_id) VALUES (?, ?, ?)", ("R2", "L2", "L3"))
+
+
+def _geom(rid, prof, leg="loaded", tenant="default"):
+    db.execute("INSERT INTO route_geometry (tenant_id, route_id, vehicle_profile, leg, alt_index, "
+               "geometry, distance_km, duration_hr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+               (tenant, rid, prof, leg, 0, "[[24,58.5],[24.4,58.6]]", 30.0, 0.7))
+
+
+def _rows(rid, tenant="default"):
+    return sorted((g["vehicle_profile"], g["leg"]) for g in db.query(
+        "SELECT vehicle_profile, leg FROM route_geometry WHERE tenant_id = ? AND route_id = ?",
+        (tenant, rid)))
+
+
+P8, P6 = "Rigid 8-wheeler (32t)", "Rigid 6-wheeler (26t)"
+for rid in ("R1", "R2"):
+    for prof in (P8, P6):
+        for leg in ("loaded", "return"):
+            _geom(rid, prof, leg)
+# a second tenant holding the same route id and the same profile: the whole point of the
+# 4.5 key is that this row is invisible to every delete below. Written and read with the
+# tenant named explicitly, so the assertion cannot pass merely because the contextvar
+# happened to be pointing somewhere else.
+_geom("R1", P8, "loaded", tenant="other")
+
+ok("09-09: one route, one profile — BOTH legs go",
+   (network.clear_geometry(profile=P8, route_id="R1") is True)
+   and _rows("R1") == [(P6, "loaded"), (P6, "return")])
+ok("09-09: ⭐ ...and the same profile on ANOTHER route is untouched",
+   _rows("R2") == [(P6, "loaded"), (P6, "return"), (P8, "loaded"), (P8, "return")])
+ok("09-09: 🔴 ...and another tenant's identical row survives it",
+   _rows("R1", tenant="other") == [(P8, "loaded")])
+
+network.clear_geometry(route_id="R1")
+ok("09-09: a route_id on its own strips that route of every vehicle",
+   _rows("R1") == [] and len(_rows("R2")) == 4)
+ok("09-09: ...which is exactly 'not baked' again", network.profiles_for_route("R1") == [])
+
+# The branch with no filter at all still means ALL geometry for this tenant, because
+# "Clear all routes" depends on it. Asserted so that adding route_id cannot quietly turn
+# the no-argument call into a no-op — which would break that button silently.
+network.clear_geometry()
+ok("09-09: 🔴 no filter still means everything, for THIS tenant only", _rows("R2") == [])
+ok("09-09: 🔴 ...and still not the other tenant's", _rows("R1", tenant="other") == [(P8, "loaded")])
+
+# the endpoint, not just the function: route_id has to survive the signature
+_geom("R1", P8)
+main.clear_geometry(profile=P8, route_id="R1", token=None)
+ok("09-09: the endpoint passes route_id through", _rows("R1") == [])
+
+# --- what a drop COSTS, so the UI can say it before doing it ----------------- #
+# forecasts.vehicle_type holds the same string as route_geometry.vehicle_profile — the
+# Forecasts page indexes route analysis by it — so a line naming a vehicle with no
+# geometry left reads "not baked" where its km and cycle time were.
+imp = network.route_edit_impact("R1")
+ok("09-09: the impact report breaks the forecast lines down BY VEHICLE",
+   isinstance(imp.get("forecast_vehicles"), dict))
+seeded = imp["forecast_vehicles"]
+ok("09-09: ...counting rows and Approved rows separately",
+   sum(v["lines"] for v in seeded.values()) == imp["forecast_rows"] == 2
+   and sum(v["approved"] for v in seeded.values()) == 2)
+db.execute("INSERT INTO forecasts (id, route_id, month_index, discipline, section_id, quantity, "
+           "unit, vehicle_type, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+           ("F-novehicle", "R1", 11, "earthworks", "WS9", 5.0, "t", None, "Pending"))
+imp = network.route_edit_impact("R1")
+ok("09-09: ⭐ a line naming NO vehicle is keyed apart, not blamed on a profile",
+   imp["forecast_vehicles"].get("", {}).get("lines") == 1
+   and "" not in {k for k in imp["forecast_vehicles"] if k})
+# and it is Pending, so it discriminates the two counters. Without this the approved
+# column could be a copy of `lines` and every assertion above would still pass.
+# ⚠️ .get(), not [""]. Written with a subscript first, and breaking the key on purpose
+# then raised KeyError and took the REPORT down with it -- so the assertion above, which
+# had correctly failed, printed nothing and read as uncaught. An assertion that can crash
+# the run is worse than one that can fail: it hides every assertion after it.
+ok("09-09: 🔴 ...and a Pending line counts as a line but NOT as Approved",
+   imp["forecast_vehicles"].get("", {}).get("approved") == 0)
+
+
+# =========================================================================== #
 #  2.5b — the config table: factors.json becomes the seed                       #
 # =========================================================================== #
 import config as cfg  # noqa: E402
