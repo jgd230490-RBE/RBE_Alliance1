@@ -58,6 +58,12 @@ const NODES = [
   ["N2", "Rapla railhead", "Railhead", 24.79, 59.01, "Aggregate"],
   ["N3", "Tootsi cut", "Site", 24.81, 58.58, "Fill"],
   ["N4", "Pärnu stockpile", "Stockpile", 24.50, 58.39, "Fill"],
+  // 2026-09-08 (pm): the stockpile mark is a GAUGE, so a fixture with no capacity would
+  // exercise only the 'na' branch. Three piles: one OVER, one part full, one with no
+  // recorded capacity at all. The third is the important one — an unknown pile must not
+  // be drawn as an empty one.
+  ["N10", "Kohila stockpile", "Stockpile", 24.58, 59.12, "Fill"],
+  ["N11", "Sauga stockpile", "Stockpile", 24.44, 58.44, "Fill"],
   ["N5", "Lelle compound", "Compound", 24.82, 58.77, "Fill"],
   // 2026-09-08: two locations NO route touches. They are the control for §C (never
   // emphasised) and the only way §A's Port and Other glyphs get exercised at all.
@@ -70,12 +76,19 @@ const ROUTES = [
   ["R-003", "Kuusiku quarry", "Tootsi cut", "N1", "N3", "IPT3", ["Earthworks"]],
   ["R-004", "Rapla railhead", "Lelle compound", "N2", "N5", "IPT6", ["Track"]],
 ];
+// capacity / balance, exactly as /api/public/map-data stamps them onto a Node.
+// N4 is over (5 206 of 4 000), N10 is a bit under half, N11 has NO capacity recorded.
+const STOCK = {
+  N4:  { capacity_qty: 4000, capacity_unit: "t", stock_balance: 5206, stock_over: true },
+  N10: { capacity_qty: 6000, capacity_unit: "t", stock_balance: 2500, stock_over: false },
+  N11: {},
+};
 const byName = Object.fromEntries(NODES.map(n => [n[1], n]));
 function mapData() {
   const features = [];
   NODES.forEach(([id, name, node_type, lon, lat, material]) => features.push({
     type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] },
-    properties: { type: "Node", id, name, node_type, material, ipt: "IPT3" },
+    properties: { type: "Node", id, name, node_type, material, ipt: "IPT3", ...STOCK[id] },
   }));
   ROUTES.forEach(([route_id, origin, dest, origin_id, dest_id, ipt, disciplines]) => {
     const a = byName[origin], b = byName[dest];
@@ -305,7 +318,10 @@ function ok(label, cond, extra) { if (cond) pass++; else fail.push(label + (extr
     return d.features.filter(f => f.properties.loc_kind === "Quarry")
       .map(f => f.properties.loc_icon).sort();
   });
-  ok("⭐ quarry diamonds keep distinct fills when materials differ",
+  // ⚠️ RETITLED 2026-09-08 (pm): the quarry is a CIRCLE again at the human's request.
+  // The guarantee is unchanged and is the one that matters — three materials, three
+  // distinct images, no flattening to one terracotta.
+  ok("⭐ quarry marks keep distinct fills when materials differ",
     new Set(quarryIcons).size === 3 && quarryIcons.every(k => k.indexOf("loc-quarry-") === 0),
     JSON.stringify(quarryIcons));
   const kindIcons = await page.evaluate(() => {
@@ -338,6 +354,98 @@ function ok(label, cond, extra) { if (cond) pass++; else fail.push(label + (extr
   await shot("03-filtered");
   await page.evaluate(() => { document.getElementById("filter-origin").value = "ALL"; applyFilters(); });
   await page.waitForTimeout(500);
+
+  // ---- 2026-09-08 (pm) — THE HUMAN'S REVIEW ---------------------------------------
+  //
+  // 1. THE MARKS ARE ON TOP. This is the assertion the morning slice did not have, and
+  // its absence is why a regression shipped: greps cannot see draw order, and the marks
+  // being UNDER the routes is not a textual property of anything.
+  const stack = await page.evaluate(() => map.getStyle().layers.map(l => l.id));
+  const iLoc = stack.indexOf("locations");
+  const over = stack.slice(iLoc + 1);
+  ok("⭐ NOTHING is drawn over the location marks",
+    iLoc >= 0 && over.length === 0, "above locations: " + JSON.stringify(over));
+  // the specific layers that DID cover them, named, so a future reorder says which
+  ok("⭐ ...in particular the three forecast layers are all below them",
+    ["forecast-casing", "forecast-layer", "forecast-flow"].every(id => {
+      const i = stack.indexOf(id); return i >= 0 && i < iLoc; }),
+    JSON.stringify(stack));
+  ok("⭐ ...and so is the whole rail-alignment stack",
+    ["rail-alignment", "rail-alignment-underlay", "rail-alignment-survey"]
+      .filter(id => stack.indexOf(id) >= 0)
+      .every(id => stack.indexOf(id) < iLoc), JSON.stringify(stack));
+  // the marks must STAY on top after a lazy adder runs
+  await page.evaluate(() => { ensureSelectionLayers(); ensureZoneLayers(); });
+  await page.waitForTimeout(500);
+  const stack2 = await page.evaluate(() => map.getStyle().layers.map(l => l.id));
+  ok("⭐ ...and they are still on top after another layer is added later",
+    stack2.indexOf("locations") === stack2.length - 1,
+    JSON.stringify(stack2.slice(-4)));
+
+  // 2. THE IN-USE HIGHLIGHT IS ACTUALLY VISIBLE. Measured, not asserted from the source:
+  // the -on image must be materially wider than the off image (the ring), and the layer
+  // must be dimming what is not in use.
+  const ringPx = await page.evaluate(() => {
+    const w = (n) => { const im = map.style.getImage(n); if (!im) return null;
+      const d = im.data.data, W = im.data.width, cy = W >> 1; let lo = -1, hi = -1;
+      for (let x = 0; x < W; x++) if (d[(cy * W + x) * 4 + 3] > 20) { if (lo < 0) lo = x; hi = x; }
+      return hi - lo + 1; };
+    return { off: w("loc-site"), on: w("loc-site-on"), img: 72 };
+  });
+  ok("⭐ the -on mark is at least 12 device px wider than the off mark",
+    ringPx.on - ringPx.off >= 12, JSON.stringify(ringPx));
+  // ⚠️ and it must not be CLIPPED: an outermost stroke that runs off the canvas reads as
+  // a broken mark. The first ring did exactly this and only the pixels showed it.
+  ok("⭐ ...and the ring is not clipped by the edge of the image",
+    ringPx.on <= ringPx.img - 2, JSON.stringify(ringPx));
+  const dim = await page.evaluate(() => map.getPaintProperty("locations", "icon-opacity"));
+  ok("⭐ what is NOT in use is dimmed while a month is on screen",
+    Array.isArray(dim) && dim[0] === "case" && dim[dim.length - 1] === 0.34, JSON.stringify(dim));
+  // ...and goes back to solid when the timeline closes
+  await page.evaluate(() => { closeTimeline(); const t = document.getElementById("toggle-forecast");
+    if (t && t.checked) { t.checked = false; t.dispatchEvent(new Event("change")); } applyFilters(); });
+  await page.waitForTimeout(700);
+  ok("⭐ ...and nothing is dimmed once the timeline is shut",
+    await page.evaluate(() => map.getPaintProperty("locations", "icon-opacity")) === 1);
+  await page.evaluate(() => { const t = document.getElementById("toggle-forecast");
+    if (t && !t.checked) { t.checked = true; t.dispatchEvent(new Event("change")); }
+    openTimeline(); });
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => setTimelineMonth(7));
+  await page.waitForTimeout(1200);
+
+  // 3. THE STOCKPILE GAUGE. Three piles in the fixtures: over, part full, and one with no
+  // recorded capacity — the third is the important one.
+  const piles = await page.evaluate(() => {
+    const d = map.getSource("routes-source")._data;
+    return Object.fromEntries(d.features
+      .filter(f => f.properties.loc_kind === "Stockpile")
+      .map(f => [f.properties.name, f.properties.loc_icon]));
+  });
+  ok("⭐ an over-capacity pile, a part-full pile and an unmeasured pile are three images",
+    piles["Pärnu stockpile"] === "loc-stockpile-over"
+    && piles["Kohila stockpile"] === "loc-stockpile-40"
+    && piles["Sauga stockpile"] === "loc-stockpile-na",
+    JSON.stringify(piles));
+  // ⚠️ the mark and the popup read the SAME fact. If these ever disagree the map is
+  // saying one thing in a picture and another in words about one pile.
+  const pileSaysOver = await page.evaluate(() => {
+    const d = map.getSource("routes-source")._data;
+    const f = d.features.find(x => x.properties.name === "Pärnu stockpile");
+    return /over capacity/.test(locationPopupHTML(f.properties, "x"));
+  });
+  ok("⭐ ...and the red pile is the same pile the popup calls over capacity", pileSaysOver);
+  // the over pile must actually be RED, and the unmeasured one must not be
+  const pileInk = await page.evaluate(() => {
+    const centre = (n) => { const im = map.style.getImage(n); if (!im) return null;
+      const d = im.data.data, W = im.data.width;
+      const i = ((W >> 1) * W + (W >> 1)) * 4;
+      return [d[i], d[i + 1], d[i + 2]]; };
+    return { over: centre("loc-stockpile-over"), na: centre("loc-stockpile-na") };
+  });
+  ok("⭐ ...and it is painted the Clash red, while the unmeasured pile is not",
+    pileInk.over && pileInk.over[0] > 150 && pileInk.over[1] < 90
+    && pileInk.na && !(pileInk.na[0] > 150 && pileInk.na[1] < 90), JSON.stringify(pileInk));
 
   // ---- §E: the warning stack ------------------------------------------------------
   const warns = await page.evaluate(() => Array.from(document.querySelectorAll("#tl-warnings .tl-warn"))

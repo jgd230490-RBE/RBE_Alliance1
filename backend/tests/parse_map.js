@@ -1013,9 +1013,14 @@ ok("filterByNode treats a Railhead as an origin",
 ok("§A: locations are a real SYMBOL layer, not a circle and not a DOM marker",
   /id: 'locations', type: 'symbol'/.test(code)
   && !/id: 'railheads'/.test(code) && !/new mapboxgl\.Marker/.test(code));
+// 2026-09-08 (pm): locGlyph gained a fourth argument. A stockpile's image depends on
+// its STOCK LEVEL, not only on its type, so the level has to reach the painter.
 ok("§A: the marks are generated on a canvas, one image per type",
-  /function locGlyph\(kind, fill, active\)/.test(code)
+  /function locGlyph\(kind, fill, active, stock\)/.test(code)
   && /function addLocationImages\(m\)/.test(code));
+ok("§A: ...and the stock bucket is passed through to BOTH variants of the image",
+  /m\.addImage\(key, locGlyph\(spec\.kind, spec\.fill, false, spec\.stock\)/.test(code)
+  && /m\.addImage\(key \+ '-on', locGlyph\(spec\.kind, spec\.fill, true, spec\.stock\)/.test(code));
 ok("§A: a railhead still carries a rail over two sleepers",
   /kind === 'Railhead'/.test(code) && (code.match(/g\.fillRect\(/g) || []).length >= 3);
 ok("§A: the images are re-added on style.load, guarded by hasImage",
@@ -1030,6 +1035,87 @@ ok("§A: the legend lists all seven types", /id="loc-legend"/.test(html)
   && /const LOC_KINDS = \['Quarry', 'Port', 'Compound', 'Site', 'Railhead', 'Stockpile', 'Other'\]/.test(code));
 ok("§A: the layer is filtered to Node features, by canonical kind",
   /\['in', \['get', 'loc_kind'\], \['literal', visibleLocKinds\(\)\]\]/.test(code));
+
+// ===== 2026-09-08 (pm) — THE HUMAN'S REVIEW OF THE MORNING SLICE =================
+//
+// ---- 1. THE MARKS SIT ON TOP OF THE ALIGNMENT AND THE ROUTES -------------------
+// ⚠️ A REGRESSION THE MORNING SLICE INTRODUCED. DOM markers are siblings of the canvas
+// and are unconditionally above every layer; a symbol layer is not. Measured in
+// Chromium before the fix: NINE layers drew over the marks — all three forecast layers,
+// the whole rail-alignment stack, the chainage labels and the selection glow. A railhead
+// with two routes converging on it was about 70% covered by the 6 px forecast casing.
+ok("⭐ the location and gate layers are re-raised to the top of the stack",
+  /const MARK_LAYERS = \['site-gates', 'locations', 'site-gates-label'\];/.test(code)
+  && /function raiseMarks\(\)/.test(code)
+  && /present\.forEach\(id => \{ try \{ map\.moveLayer\(id\); \} catch \(e\) \{\} \}\);/.test(code));
+// moveLayer forces a style recalculation and applyFilters() runs on every keystroke in
+// the filter row, so the no-op case has to be free.
+ok("⭐ ...and does nothing when they are already last, in order",
+  /const tail = ids\.slice\(ids\.length - present\.length\);/.test(code)
+  && /if \(tail\.join\('\|'\) === present\.join\('\|'\)\) return;/.test(code));
+// Layer order in Mapbox is ADD order and several of the layers above are added lazily,
+// so there is no single add site to insert before. Every lazy adder has to re-raise, and
+// applyFilters() is the belt to that braces.
+ok("⭐ every lazy layer adder re-raises the marks afterwards",
+  /raiseMarks\(\);\n    \}/.test(code)
+  && (code.match(/raiseMarks\(\);/g) || []).length >= 8);
+ok("⭐ ...including the three forecast layers, which are the ones that actually covered them",
+  /'text-halo-width':2\}\}\);\s*\n\s*raiseMarks\(\);/.test(code)
+  && /'line-dasharray':\[0,4,3\]\}\}\);\s*\n\s*raiseMarks\(\);/.test(code));
+ok("⭐ ...and applyFilters, which runs after every user action",
+  /markRouteEnds\(\);\s*\n\s*raiseMarks\(\);/.test(code));
+
+// ---- 2. QUARRY IS A CIRCLE AGAIN ------------------------------------------------
+// ⚠️ REVERSES the morning's "shape discriminates, not colour" for five of the seven
+// types. The human's call: the pre-08 Sep map was circles-with-symbols and they preferred
+// it. Railhead and Compound stay squares.
+// ⚠️ the first version of this assertion tested !/\/\/ diamond/ against `code`, which
+// strips // comments — it could never have failed. Assert the PATH, not the label.
+ok("⭐ the quarry is a circle with a pick, not a diamond",
+  !/g\.moveTo\(cx, cy - r\); g\.lineTo\(cx \+ r, cy\)/.test(code)
+  && !/\/\/ diamond/.test(src)
+  && /kind === 'Quarry'/.test(code)
+  // locShapePath now branches on ONE thing: square for the two corridor types, circle
+  // for everything else. No hexagon, no diamond.
+  && /\} else \{ {14}\/\/ Quarry, Stockpile, Port, Site, Other: circle/.test(src));
+ok("⭐ ...and the pick's head is built FROM the handle vector, so the two cannot drift",
+  /const dx = bx - ax, dy = by - ay, dl = Math\.hypot\(dx, dy\) \|\| 1;/.test(code)
+  && /const a0 = Math\.atan2\(uy, ux\), sw = Math\.PI \* 0\.29;/.test(code));
+ok("the three material fills survive the reshape",
+  /if \(m\.indexOf\('sand'\) >= 0\) return '#ffd700';/.test(code)
+  && /if \(m\.indexOf\('limestone'\) >= 0\) return '#ffffff';/.test(code)
+  && /const QUARRY_DEFAULT_FILL = '#a0522d';/.test(code));
+
+// ---- 3. THE STOCKPILE IS A GAUGE ------------------------------------------------
+ok("⭐ a stockpile fills to its recorded stock level",
+  /const STOCK_STEPS = \[0, 20, 40, 60, 80, 100\];/.test(code)
+  && /function stockBucket\(props\)/.test(code)
+  && /function stockPilePath\(g, cx, cy, r\)/.test(code));
+// the mark and the popup read the same fact, so they cannot disagree about one pile
+ok("⭐ ...taking `over` from the backend, and only falling back to the ratio if it is absent",
+  /props\.stock_over == null \? \(bal > cap\)/.test(code)
+  && /!\(props\.stock_over === false \|\| props\.stock_over === 'false'\)/.test(code));
+ok("⭐ ...and a pile with NO recorded capacity is dashed, never drawn as a measured one",
+  /return 'na';/.test(code)
+  && /if \(stock === 'na'\) g\.setLineDash\(\[5, 4\]\);/.test(code));
+// cream on cream is a few percent of luminance apart; the boundary has to be a LINE
+ok("⭐ ...with an ink rule at the fill height, which is the readable part",
+  /if \(stock !== 'over' && pct < 1 && pct > 0\)/.test(code)
+  && /g\.strokeStyle = '#0A1446'; g\.lineWidth = 2\.2;/.test(code));
+ok("the level reaches the image key, so one bucket is one image",
+  /else if \(kind === 'Stockpile'\) suffix = '-' \+ stockBucket\(props\);/.test(code));
+ok("over capacity uses the same red as the Clash level",
+  /const STOCK_OVER = '#BF2E55';/.test(code));
+
+// ---- 4. THE COMPOUND IS A SOLID MARK --------------------------------------------
+// ⚠️ REVERSED, not deleted: the morning's compound was a thin white outline square with
+// a gap for the gate, and below about 22 CSS px it was an empty amber square.
+ok("⭐ the compound is a solid site cabin, not an outline",
+  !/g\.strokeRect\(cx - s \/ 2, cy - s \/ 2, s, s\);/.test(code)
+  // ⚠️ `code` has // comments stripped — a comment marker has to be grepped in `src`
+  && /\/\/ the door/.test(src)
+  && /g\.fillRect\(cx - w \/ 2, top, w, h \* 1\.18\);/.test(code));
+
 
 // ⭐ the honesty channel. The picture reads as authoritative; the popup is where the
 // caveat lives, exactly as the alignment's gap bridges do.
@@ -1227,13 +1313,27 @@ ok("⭐ ...which the ONE locations layer reads as a bigger image, not a second l
   && /\['concat', \['get', 'loc_icon'\], '-on'\]/.test(code)
   // exactly one symbol layer draws a location, in either state
   && (code.match(/id: 'locations', type: 'symbol'/g) || []).length === 1);
-// §C asks for "+2 px with a 1 px halo". Device pixels are 2x, so +4 and a 4-wide stroke
-// straddling the edge — 2 px outside — is that, baked into the image rather than added
-// as a second layer.
-ok("§C: +2 px with a halo, baked into the -on image",
-  /if \(active\) r \+= 4;/.test(code)
-  && /locShapePath\(g, kind, cx, cy, r \+ 4\);/.test(code)
-  && /g\.lineWidth = 4; g\.strokeStyle = 'rgba\(10,20,70,0\.55\)'/.test(code));
+// ⚠️ REVERSED 2026-09-08 (pm), not deleted. This pinned "+2 px with a 1 px halo", which
+// is what §C asked for in the morning and what shipped. It is the wrong treatment: it was
+// measured in Chromium at 26 -> 34 CSS px, which is only legible next to an UNUSED mark,
+// and in a busy month almost every mark is in use. The human could not see it at all and
+// asked for the feature as though it had never been built. So the assertion now pins the
+// ring AND the dimming, and REFUSES the size-only treatment coming back.
+ok("§C: the in-use mark is a WHITE RING, not a size change",
+  /locShapePath\(g, kind, cx, cy, r \+ 6\);/.test(code)
+  && /g\.lineWidth = 5; g\.strokeStyle = '#ffffff'; g\.stroke\(\);/.test(code)
+  && /g\.lineWidth = 2; g\.strokeStyle = 'rgba\(10,20,70,0\.75\)'/.test(code));
+ok("⭐ §C: ...and the mark itself is the SAME SIZE in both states",
+  !/if \(active\) r \+= 4;/.test(code)
+  && !/g\.strokeStyle = 'rgba\(10,20,70,0\.55\)'/.test(code));
+// the half that cannot live in an image: what is NOT in use goes translucent
+ok("⭐ §C: everything not in use is dimmed with icon-opacity while a month is on screen",
+  /const LOC_DIM_OPACITY = 0\.34;/.test(code)
+  && /function applyLocationDim\(dimming\)/.test(code)
+  && /setPaintProperty\('locations', 'icon-opacity', dimming/.test(code)
+  && /\['case', \['coalesce', \['get', 'is_end'\], false\], 1, LOC_DIM_OPACITY\]/.test(code));
+ok("⭐ §C: ...driven by the SAME `live` flag the ends themselves use",
+  /if \(changed\) src\.setData\(a1_data\);\s*\n[^\n]*\n[^\n]*\n[^\n]*\n\s*applyLocationDim\(live\);/.test(code));
 ok("only the lines carrying volume this month, inside the filter",
   /if \(!p\.is_forecast \|\| !routePassesFilters\(p\)\) return;/.test(code));
 ok("...one carriageway only", /if \(p\.type !== 'Inbound Highway'\) return;/.test(code));
