@@ -1,210 +1,194 @@
-rbe-departure-probe-0909.zip
-============================
+rbe-lookahead-slice1-0909.zip
+=============================
 Delivered 2026-09-09. Extract over the repo root; the paths already match.
 
-GOOD NEWS FIRST: THE EARLIER ZIP IS ALREADY ON THE REPO
--------------------------------------------------------
-I checked HEAD after cutting this. rbe-route-vehicles-0909.zip has landed and
-landed WHOLE -- 2,238 passed, 0 failed, every per-file count matching. So just
-extract this one over the top and you are done.
+THIS ZIP SUPERSEDES rbe-departure-probe-0909.zip
+------------------------------------------------
+It contains every file that zip contained, at the same or a later state, plus
+the Look-ahead slice. So:
 
-  eVehicles state present ......... yes
-  the retired {!editingRoute} guard  gone
-  route-scoped clear_geometry ..... present
-  suite at HEAD ................... 2,238 / 0
+  * if you have NOT applied the departure-probe zip: don't. Apply this one.
+  * if you HAVE applied it: extract this over the top. Same result.
+  * either way, rbe-route-vehicles-0909.zip is already on the repo (verified
+    at HEAD earlier today) and nothing here undoes it.
 
-!! BUT IF YOU EVER RE-APPLY THE OLDER ZIP, APPLY IT BEFORE THIS ONE. !!
+There is no ordering trap this time -- that is why the departure files are
+carried again rather than left to a second zip.
 
-Both zips contain backend/main.py and backend/network.py and THEY ARE NOT THE
-SAME FILES. This one was cut later, so its copies carry the vehicle changes as
-well as the departure probe; the earlier zip's copies know nothing about the
-probe.
+FILES
+-----
+  backend/days.py                 NEW. The commit week, day by day.
+  backend/db.py                   forecast_days registered (four places);
+                                  forecast_weeks.actual_source added.
+  backend/main.py                 GET/PUT /api/forecast-days, PUT .../actual;
+                                  confirm and calibrate routed via days.py;
+                                  calibrate takes spread + spread_from;
+                                  weeks GET also returns commit_week.
+                                  (Also carries the departure endpoint.)
+  backend/weeks.py                set_actual stamps actual_source='typed'.
+                                  The ONE touch to Task C/D code.
+  backend/here_routing.py         carried from the departure zip, unchanged.
+  backend/network.py              carried from the departure zip, unchanged.
+  backend/tests/test_lookahead.py NEW. 72 assertions.
+  backend/tests/test_phase4.py    carried from the departure zip, unchanged.
+  backend/tests/test_phase45.py   tenanted-table count pin 15 -> 16.
+  backend/tests/test_tenant_audit.py  forecast_days added to its registry.
+  env.example                     the ADMIN_TOKEN comment no longer reads as
+                                  if "openssl rand -hex 24" were the value.
 
-  route-vehicles then departure   -> correct.
-  departure then route-vehicles   -> BROKEN. The older main.py and network.py
-                                     overwrite the newer ones and the probe
-                                     endpoint silently disappears.
+Nothing is deleted. factors.json is not included and nothing touches it.
+There IS a schema change: one new table and one new column. See DEPLOY.
 
-Verified by running it, not assumed: the departure zip's network.py contains the
-route-scoped clear_geometry, and the vehicles zip's network.py contains no
-departure_diagnostics at all.
+DEPLOY
+------
+Boot creates forecast_days and ALTERs actual_source onto forecast_weeks in
+init_weeks_db(), both idempotent. On Postgres the ALTER is ADD COLUMN IF NOT
+EXISTS. On SQLite it is a plain ADD COLUMN inside try/except, same pattern as
+the locations capacity columns from Week 1.
 
-After extracting this over the current HEAD the suite should read 2,256.
+I have NOT run this against Postgres. The tenant migration path for a new
+table is the same one that ran for forecast_weeks on 2026-09-02 and has not
+changed since. Check the Render deploy log for the line
+"Phase 4.5: tenant key added to 1 table(s): forecast_days" on first boot, or
+its absence with no error, which means the CREATE already carried the key.
 
-WHY THIS EXISTS
----------------
-You reported a route that "has taken a detour where there is no road". It is
-R001, Muuga Harbour -> Soodevahe CB, laden leg, arriving at gate G001.
+WHAT IT DOES
+------------
+Sits ON forecast_weeks exactly as forecast_weeks sits on the forecasts line.
+Tasks C/D/D2 are not rebuilt. Rules, each one locked in your brief:
 
-It is NOT a bug in our code, and it is not the haul road. Ruled out against the
-live deployment, all five:
+  L1   Days exist only for the COMMIT week (the bucket that contains today,
+       weeks.editable_week) and only for Approved lines. Mon-Fri each get
+       week / n_weekdays. Sat and Sun get 0. Week 4 of a 31-day month is ten
+       days long and still weekday-weighted.
 
-  * no route has a haul road attached at all, so the splice path never ran.
-    HR01 is drawn from the G001 gate coordinate and is linked to nothing;
-  * haul roads are excluded from avoid[areas] by KIND, so nothing over-blocked;
-  * _bake_leg stores HERE's polyline verbatim -- nothing appends the gate;
-  * there is only alt 0, so there was no alternative to promote either;
-  * and the one thing that could have manufactured it in our code -- the
-    section concatenation in here_routing.routes(), which drops the first point
-    of every section after the first -- DID NOT RUN. HERE returned exactly ONE
-    section on every leg and every profile tried.
+  L6   Confirm is whole-week, one act. POST /api/forecast-weeks/confirm now
+       confirms the week and stamps every day in its bucket confirmed. After
+       that, planned days are read-only (a PUT returns blocked_by: confirmed)
+       and actuals are still typeable. No per-day confirm exists.
 
-THE ACTUAL PROBLEM IS BIGGER THAN THE DETOUR
---------------------------------------------
-The baked route does not reproduce.
+  derived / edited / confirmed on the day, same three as the week, same
+       meaning. A derived day follows the week's figure; an edited one holds.
+       parent_week_qty stamps the week-as-at-last-write, so "week changed" on
+       a day is an exact test -- the argument weeks.py makes for parent_qty,
+       one level down.
 
-                          cached (baked 06:29:59)   replayed live
-    R001 laden              16.15 km / 0.318 h        15.11 km / 0.291 h
-    R001 return             16.64 km / 0.320 h        16.64 km / 0.319 h
+  Sum rule is a FLAG. sum(day planned) should equal the week. When it does not,
+       the read says days_ne_week: true. Confirm is still allowed.
 
-Same endpoints, same profile, same (empty) avoid set, one section, no notices.
-The return leg reproduces to the metre. The laden leg is 1.04 km -- 6.4% --
-shorter than what is stored, and at bake time HERE had OFFERED a 15.22 km
-alternative and ranked the 16.15 km road first. It ranks the short one first
-now.
+  Actuals, two paths, and the second is the one that needed a column:
+         a) clerk types a week actual  -> actual_source = 'typed'. Day sums
+            never touch it.
+         b) clerk types day actuals    -> week actual = running sum of them,
+            actual_source = 'days', updated on every day save.
+       Without actual_source the FIRST partial day sum would have been
+       indistinguishable from a typed figure and would have frozen the week
+       there. Clearing a typed week actual lets the day sums take over again.
+       Clearing every day actual clears the week to None, not 0.
 
-Checked again at 13:19 local, about seven hours after the bake:
+  Calibrate spread is OPT-IN, default off. spread=true divides the delta that
+       was just applied to the target week over that week's WEEKDAYS on or
+       after spread_from (today if omitted), and stamps every day in the
+       bucket edited. Only the commit week has days, so calibrating into any
+       other week writes the week total only and says so. Saving an actual
+       still never calibrates.
 
-    laden distance   15.11    15.11    15.11      (stable since ~11:00)
-    laden duration   0.291    0.292    0.296      (drifting, ~1.7%)
-    return duration  0.319    0.320    0.321
+ONE THING I HAD TO DECIDE, AND WHERE YOU CAN OVERRULE IT
+--------------------------------------------------------
+"Spread across remaining commit-week days" (your brief) and "splits across
+Mon-Fri of the commit week (36 t/day)" (the Account mock's footer) are the
+same thing on a Monday and different things on a Thursday. I followed the
+brief's word: from today onward. spread_from is an explicit parameter so the
+UI can send Monday if you want the mock's behaviour. Tell me which.
 
-So there are TWO effects, not one:
+THE THING THE FIRST TEST RUN CAUGHT
+-----------------------------------
+The spread refreshed derived days to the NEW week total and then added the
+delta on top -- double counted. The fix is an ordering: freeze the as-was
+distribution BEFORE the week moves, then calibrate, then spread, then stamp
+every day edited (because a planner has just chosen a non-uniform split and
+the only thing that stops a derived day re-uniforming it on the next read is
+not being derived any more). It is the whole function; the docstring says so.
 
-  1. the ROAD changed between 06:29 and ~11:00 and has held since;
-  2. the DURATION on an unchanged road drifts run to run.
+API
+---
+  GET  /api/forecast-days?from=&to=&route_id=
+       -> { commit_week: {month_index, week_index, from, to, weekdays, days},
+            lines: [ {route_id, month_index, discipline, section_id, week_index,
+                      ipt, unit, material_type, vehicle_type,
+                      week: {...the forecast_weeks row...},
+                      days: [ {day_date, planned_qty, actual_qty, status,
+                               variance, week_changed, ...} ],
+                      days_sum, days_ne_week} ],
+            statuses, summary }
+       Reading materialises, like the week endpoint. from/to clip; they never
+       widen. Filtered by the parent line's IPT exactly as weeks are.
+  PUT  /api/forecast-days          { line key..., day_date, planned_qty }
+  PUT  /api/forecast-days/actual   { line key..., day_date, actual_qty, actual_note }
+  POST /api/forecast-weeks/calibrate  now also accepts { spread: bool, spread_from: "YYYY-MM-DD" }
+  GET  /api/forecast-weeks            now also returns commit_week (same value as next_week)
 
-(2) matters on its own. duration_hr is what route_analysis() turns into cycle
-time, and trips_per_day is floor(shift_minutes / cycle_minutes) -- a floor. A
-duration that moves 1.7% between two bakes can step that integer down with
-nothing a planner did to cause it, and vehicles, tonnes, t-km and CO2 all move
-with it.
+No CSV import. No file body. No upload endpoint -- asserted at source level.
 
-Nothing in our request pins a departure time. That is the named hypothesis. It
-is NOT proven, which is why this zip is an experiment and not a fix.
-
-WHAT IS IN THIS ZIP
--------------------
-  backend/here_routing.py     departure_time param on routes() and probe();
-                              departure_probe(); default_departure_times();
-                              _fingerprint()
-  backend/network.py          departure_diagnostics()
-  backend/main.py             GET /api/admin/diagnostics/departure/{route_id}
-  backend/tests/test_phase4.py  +18 assertions (202 -> 220)
-
-Nothing is deleted, so there is no manual removal step. factors.json is not
-included and nothing here touches it. No schema change, no migration.
-
-RUN THIS AFTER YOU DEPLOY -- IT IS THE POINT OF THE ZIP
--------------------------------------------------------
-  /api/admin/diagnostics/departure/R001?profile=Artic%20Tipper%20(44t)&token=...
-
-Add &leg=return to do the other direction, and &times=... (comma separated ISO
-timestamps, or the literal "any") to choose your own.
-
-It replays the SAME leg seven times: a control with no departureTime, then
-departureTime=any, then four times on the next weekday (06:30, 08:00, 11:00,
-17:00 Europe/Tallinn), then the control again. Read "experiment.reads_as" LAST,
-after the rows.
-
-Two things about how it is built that are worth knowing before you read it:
-
-  * THE CONTROL RUNS FIRST AND LAST. If HERE's unpinned answer moves during the
-    experiment itself, nothing measured in between is attributable to the
-    departureTime values, and the verdict says exactly that instead of
-    reporting a difference. Re-run if you see it.
-  * EVERY ROW CARRIES A GEOMETRY FINGERPRINT. Distance alone cannot answer this
-    question: two different roads can come back the same length, and a route
-    that changed shape but not length would read as "no change".
-
-Costs seven HERE requests per run. Writes nothing.
-
-WHAT IT WILL TELL YOU, AND WHAT TO DO NEXT
-------------------------------------------
-  * pinned times disagree with each other  -> the road depends on the clock. An
-    unpinned bake is a snapshot of whenever it ran. Pin bakes to a fixed
-    representative time and they become reproducible. THIS IS THE OUTCOME I
-    EXPECT, and it is a one-line change once you have said which time.
-  * pinned all agree but differ from the control -> pinning makes bakes
-    reproducible AND changes which road you get. Which road you want is your
-    decision, not mine.
-  * everything agrees -> that does NOT clear departureTime. It means conditions
-    were flat when you ran it. Re-run at a peak hour before concluding.
-
-NOTHING IS PINNED BY THIS ZIP
------------------------------
-No bake sends a departureTime. Behaviour on the deployment is byte-for-byte what
-it is today until you decide otherwise. There is an assertion that fails if a
-later session quietly threads one into the bake path.
-
-An immediate workaround for R001 exists and I want to be honest about it: just
-re-bake it and it will pick up the 15.11 km road and the detour goes. That is a
-lottery ticket, not a fix -- it can come back the next time anything re-bakes.
+NOT IN THIS SLICE
+-----------------
+No frontend. The Commit view, the day grid, the KPI strip, the clash rail, the
+XLSX/PDF export and the derived km/trips/vehicles columns are slices 2-6.
+Nothing you see in the app changes until those land. What changes is that the
+data and the rules now exist and are tested.
 
 TESTS
 -----
-Full suite: 2,256 passed, 0 failed (2,238 before this zip, +18).
+Full suite: 2,333 passed, 0 failed (2,256 -> 2,333, +77).
 
-  test_phase4.py 202 -> 220. Covers: the URL carries departureTime only when
-  given, and an unpinned call is unchanged; the fingerprint separates
-  same-km-different-road; the default times land ahead of now on a weekday and
-  the response names where the timezone came from; the return leg is resolved
-  d_exit -> o_entry rather than the loaded pair reversed, with the laden flag
-  flipping too; all four verdict readings; and that no bake sends a
-  departureTime.
+  test_lookahead.py   72  NEW
+  test_phase45.py    140 -> 144   its per-table loop picked the new table up
+  test_tenant_audit   26 ->  27   likewise -- and it read every query in days.py
+                                  and found a tenant predicate on all of them
+  test_phase4.py     220          (carried, unchanged)
 
-Seventeen regressions applied on purpose across both of today's deliveries; all
-seventeen caught by the assertion meant to catch them. Two of the new ones did
-not fail on the first pass and BOTH were defects in my tests, not gaps in the
-code:
+Twenty-six regressions applied on purpose across today's three deliveries;
+all twenty-six caught by the assertion meant to catch them. Two of the nine
+new ones needed a second pass, and both were defects in MY tests:
 
-  * the fingerprint assertion compared a 2-point line with a 3-point line, so
-    hashing the point count alone would have passed it;
-  * the "control moved" assertion matched on the string "Re-run", which also
-    appears in the all-agreed verdict ("Re-run at a peak hour"), so deleting the
-    control-stable branch entirely still passed.
+  * the PK-registration assertion subscripted a dict directly, so removing
+    the registration raised KeyError and killed the report. Lesson 13, again.
+  * "no days for the Pending line" stayed green with days.py's own Approved
+    guard DELETED -- because weeks.py never creates a week row for a
+    never-approved line, so there was nothing to hang a day on either way.
+    The case that guard actually protects is a line approved, then reopened:
+    its week rows survive (weeks.py's rule) and it must still get no days.
+    Added. Now caught.
 
-Both fixed and committed separately so the reason is in the history.
+Both are the same lesson as this morning: the regression that does not fail
+is the informative one.
 
 WHAT IS NOT TESTED
 ------------------
-  * HERE IS NEVER CALLED FROM THE BUILD SANDBOX. Every assertion above is about
-    the request we build and the report we write. Whether pinning changes
-    HERE's answer is precisely what the live probe is for, and it cannot be
-    known until you run it on the deployment.
-  * urlopen is stubbed, so the assertions read the URL we would have sent, not
-    a response we received.
-  * No browser ran. There is no UI in this zip.
-  * No Postgres branch ran. There is no SQL in this zip either.
+  * The HTTP layer is stubbed. Endpoint bodies run; nothing proves ?from= and
+    ?to= are parsed off a query string or that the routes are mounted.
+  * No Postgres branch ran. See DEPLOY.
+  * No browser. There is no UI in this slice.
+  * "Today" is the real clock for the endpoint-level assertions (as in
+    test_week1.py) and an explicit date for the bucket arithmetic. The seed
+    spans 24 months so the commit month is always Approved.
 
-SEPARATE AND URGENT: YOUR ADMIN TOKEN
--------------------------------------
-ADMIN_TOKEN on Render is literally the string
-
-    openssl rand -hex 24
-
-Somebody was told to generate a secret with that command and pasted the
-INSTRUCTION instead of its output. I confirmed it by using it -- the admin
-diagnostics answered 200. It is also visible in the token box in the Route
-Management screenshot, so it is in localStorage on at least one browser.
-
-This is worse than leaving ADMIN_TOKEN unset, because _check_admin() treats any
-non-empty value as protection and so nothing looks wrong. The value guards every
-admin endpoint, including PUT /api/admin/config/factors, which rewrites the
-document every payload, density and cycle time is computed from.
-
-  1. Actually run openssl rand -hex 24 and paste the OUTPUT into Render ->
-     Environment -> ADMIN_TOKEN -> Save.
-  2. Clear rbe_admin_token from localStorage in the browser.
-  3. Treat the old value as burned -- it has been in a screenshot and in a chat.
+PLEASE CHECK ON THE LIVE SITE
+-----------------------------
+  1. The Render deploy log on first boot -- see DEPLOY.
+  2. GET /api/forecast-days with a valid access code. You should see one entry
+     per Approved line for this week, days_ne_week false on every line, and
+     Sat/Sun at 0. If lines is empty, that is E16's blocker again: no Approved
+     lines this month.
+  3. The existing Look-ahead tab still works exactly as before. It does not
+     read the new endpoint yet.
 
 STILL OPEN
 ----------
-  * The eight IPT access codes are STILL not set on Render. Oldest open item.
-  * The warning stack (E16) -- run claude/warn-probe.js before editing the
-    renderer; it may be correct behaviour for the current data.
-  * Look-ahead v2: NOT STARTED. The four mockups you pasted are transcribed into
-    claude/lookahead-mockups-0909.md, including three places where the mockups
-    and the written brief disagree and you need to pick.
-  * The push is still blocked: "not in this session's authorized repository
-    set." Eighth delivery.
+  * Rotate ADMIN_TOKEN. It is still the literal string "openssl rand -hex 24"
+    until you change it on Render.
+  * Confirm one of your REAL access codes signs in. The demo codes are dead
+    (all 401 -- E10's success criterion) but I cannot prove a real one works.
+  * Run the departure probe once this is deployed:
+    /api/admin/diagnostics/departure/R001?profile=Artic%20Tipper%20(44t)&token=...
+  * Push still blocked. Ninth delivery.
