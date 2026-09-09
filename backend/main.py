@@ -33,6 +33,7 @@ import restrictions  # Phase 2.5a — Tark Tee restriction layers (proxied, repr
 import streetview    # Phase 2.5a — Google Street View proxy (key stays server-side)
 import gates         # Phase 5a — multiple gates per location, with a direction on each
 import weeks         # Week 1 — the 4-week look-ahead and typed actuals (Tasks C, D)
+import days         # Look-ahead v2 slice 1 (2026-09-09) — the commit week by day
 import stockpiles    # Week 1 — stockpile capacity and typed consumption (Task D2)
 import access        # 2026-09-02 — IPT access codes (Task F)
 import config        # 2.5b — the editable copy of factors.json
@@ -48,6 +49,7 @@ MONTH_COUNT = 60           # 5-year horizon
 # popup and cannot import main (circular), so it carries a default that this
 # overwrites at import time — and test_week1.py asserts the two agree.
 stockpiles.START_YEAR = START_YEAR
+days.START_YEAR = START_YEAR        # Look-ahead v2 slice 1: the day layer reads the same origin
 
 
 # ------------------------------------------------------------------ startup
@@ -636,6 +638,10 @@ class WeekCalibrate(WeekKey):
     # a typed figure INSTEAD of the variance formula, not on top of it
     override_qty: Optional[float] = None
     by: Optional[str] = None
+    # Look-ahead v2: opt-in, default OFF. Spread the applied delta over the commit
+    # week's remaining weekdays. spread_from is an ISO date; today when omitted.
+    spread: bool = False
+    spread_from: Optional[str] = None
 
 
 def _flags_of(body):
@@ -663,6 +669,9 @@ def list_forecast_weeks(from_month: int = Query(1, ge=1, le=MONTH_COUNT),
             # which cell the UI lets you edit and confirm. Computed server-side so the
             # browser's clock and time zone cannot move it.
             "next_week": {"month_index": nm, "week_index": nw},
+            # Look-ahead v2: the same bucket under the name the UI now uses. The brief
+            # says keep `next_week` rather than churn the backend name — so both.
+            "commit_week": {"month_index": nm, "week_index": nw},
             "statuses": list(weeks.WEEK_STATUSES),
             "flag_fields": list(weeks.FLAG_FIELDS),
             "summary": weeks.summary()}
@@ -685,9 +694,12 @@ def edit_forecast_week(body: WeekEdit):
 def confirm_forecast_week(body: WeekConfirm):
     """Confirm one week, with the four optional flags. Sets status `confirmed`."""
     _require_line(body.route_id, body.month_index, body.discipline, body.section_id)
-    res = weeks.confirm_week(body.route_id, body.month_index, body.discipline,
-                             body.section_id, body.week_index,
-                             by=body.confirmed_by, flags=_flags_of(body))
+    # Look-ahead v2 (L6): confirm is whole-week and ONE act. days.confirm_week() calls
+    # weeks.confirm_week() and then stamps every day in the bucket `confirmed`; a week
+    # outside the commit bucket has no days and confirms exactly as before.
+    res = days.confirm_week(body.route_id, body.month_index, body.discipline,
+                            body.section_id, body.week_index,
+                            by=body.confirmed_by, flags=_flags_of(body))
     if res.get("error"):
         raise HTTPException(400, res["error"])
     return res
@@ -720,9 +732,82 @@ def calibrate_forecast_week(body: WeekCalibrate):
     the UI can disable the button rather than discovering it on click.
     """
     _require_line(body.route_id, body.month_index, body.discipline, body.section_id)
-    res = weeks.calibrate(body.route_id, body.month_index, body.discipline,
-                          body.section_id, body.week_index,
-                          override_qty=body.override_qty, by=body.by)
+    res = days.calibrate(body.route_id, body.month_index, body.discipline,
+                         body.section_id, body.week_index,
+                         override_qty=body.override_qty, by=body.by,
+                         spread=bool(body.spread), spread_from=body.spread_from)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    return res
+
+
+# --------------------------------------------- forecast days (Look-ahead v2, slice 1)
+#
+# The commit week — the bucket that contains today — day by day. Days exist for that
+# bucket only and for Approved lines only; see days.py's rules. Visibility is the parent
+# line's ipt, exactly as the week endpoints. No CSV import, no file body.
+class DayKey(BaseModel):
+    route_id: str
+    month_index: int
+    discipline: str = ""
+    section_id: str = ""
+    day_date: str                          # ISO date, YYYY-MM-DD
+
+
+class DayEdit(DayKey):
+    planned_qty: float
+    edited_by: Optional[str] = None
+
+
+class DayActual(DayKey):
+    actual_qty: Optional[float] = None
+    actual_note: Optional[str] = None
+    actual_by: Optional[str] = None
+
+
+@app.get("/api/forecast-days")
+def list_forecast_days(from_date: Optional[str] = Query(None, alias="from"),
+                       to_date: Optional[str] = Query(None, alias="to"),
+                       route_id: Optional[str] = None):
+    """
+    The commit week's days, grouped by forecast line, with the sum-rule flag per line.
+
+    `from` / `to` (ISO dates) clip what is returned; the default is the whole bucket.
+    They never widen it — there are no days outside the commit week. Reading
+    materialises, as the week endpoint does.
+    """
+    acc = _require_access()
+    res = days.list_days(from_date, to_date, route_id=route_id)
+    res["lines"] = access.filter_lines(res["lines"], acc)
+    res["statuses"] = list(days.DAY_STATUSES)
+    res["summary"] = days.summary()
+    return res
+
+
+@app.put("/api/forecast-days")
+def edit_forecast_day(body: DayEdit):
+    """Type one day's planned quantity. The day and (if it was derived) its week go `edited`."""
+    _require_line(body.route_id, body.month_index, body.discipline, body.section_id)
+    res = days.set_day(body.route_id, body.month_index, body.discipline,
+                       body.section_id, body.day_date, body.planned_qty, by=body.edited_by)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    return res
+
+
+@app.put("/api/forecast-days/actual")
+def set_forecast_day_actual(body: DayActual):
+    """
+    Type what actually moved on one day.
+
+    ⭐ Does NOT calibrate. The week actual becomes the running sum of the day actuals
+    ONLY while no clerk has typed a week figure — a typed week actual is never overwritten.
+    """
+    _require_line(body.route_id, body.month_index, body.discipline, body.section_id)
+    res = days.set_day_actual(body.route_id, body.month_index, body.discipline,
+                              body.section_id, body.day_date,
+                              actual_qty=body.actual_qty, actual_note=body.actual_note,
+                              by=body.actual_by)
     if res.get("error"):
         raise HTTPException(400, res["error"])
     return res

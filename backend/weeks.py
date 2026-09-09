@@ -375,12 +375,18 @@ def set_actual(route_id, month_index, discipline, section_id, week_index,
     if not cur:
         return {"error": "no such week — the parent month is not approved"}
     q = None if actual_qty is None or actual_qty == "" else float(actual_qty)
+    # 2026-09-09 (Look-ahead v2): stamp WHERE the figure came from. A clerk typing here
+    # is 'typed' and day actuals (days.py) will never overwrite it; clearing it leaves
+    # the source empty so the day sums may take over again. The one touch this module
+    # takes from slice 1, and it is a stamp, not a behaviour change.
     db.execute(
         "UPDATE forecast_weeks SET actual_qty = ?, actual_note = ?, actual_by = ?, "
-        "actual_at = ?, updated_at = ? WHERE tenant_id = ? AND route_id = ? "
-        "AND month_index = ? AND discipline = ? AND section_id = ? AND week_index = ?",
-        (q, actual_note, by, _now(), _now(), db.current_tenant(), route_id,
-         int(month_index), discipline or "", section_id or "", int(week_index)))
+        "actual_at = ?, actual_source = ?, updated_at = ? WHERE tenant_id = ? "
+        "AND route_id = ? AND month_index = ? AND discipline = ? AND section_id = ? "
+        "AND week_index = ?",
+        (q, actual_note, by, _now(), ("typed" if q is not None else None), _now(),
+         db.current_tenant(), route_id, int(month_index), discipline or "",
+         section_id or "", int(week_index)))
     return {"week": get_week(route_id, month_index, discipline, section_id, week_index)}
 
 

@@ -56,6 +56,9 @@ TENANTED_TABLES = {
     # 2.5b, 2026-09-03. The editable copy of factors.json. Per tenant: two clients
     # will not share a payload table.
     "config",
+    # Look-ahead v2 slice 1, 2026-09-09. A day layer on forecast_weeks, same rule, same
+    # edit. Keyed by the week's line key plus a date; visibility is the parent line's ipt.
+    "forecast_days",
 }
 
 # A contextvar rather than a module global, so Phase 6 can make the tenant
@@ -581,6 +584,19 @@ def init_weeks_db():
         _create_tenanted(cur, "forecast_weeks")
         _create_tenanted(cur, "stockpile_weeks")
         conn.commit()
+        # 2026-09-09 (Look-ahead v2 slice 1): the day layer, and the one column the week
+        # layer needs to tell a typed actual from a summed one. ALTER is idempotent the
+        # same way the locations columns above are: a second boot rolls back harmlessly.
+        _create_tenanted(cur, "forecast_days")
+        try:
+            if IS_PG:
+                cur.execute("ALTER TABLE forecast_weeks ADD COLUMN IF NOT EXISTS actual_source TEXT")
+            else:
+                cur.execute("ALTER TABLE forecast_weeks ADD COLUMN actual_source TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()  # column already present — fine
+        conn.commit()
         # 2026-09-02: 'Rail head' -> 'Railhead', one word, everywhere. The build list's
         # one-line migration, verbatim. Idempotent — a second boot matches nothing.
         # Deliberately unscoped by tenant: this is a spelling fix to a type value, not a
@@ -905,10 +921,44 @@ _TENANT_DDL = {
             actual_note  TEXT,
             actual_by    TEXT,
             actual_at    TEXT,
+            -- 2026-09-09 (Look-ahead v2). Where actual_qty came from: 'typed' by a clerk
+            -- or 'days' as the running sum of the day actuals. Day actuals maintain the
+            -- second and never touch the first. Without it the first partial day sum
+            -- would be indistinguishable from a typed figure and would freeze the week
+            -- there. Listed here AND ALTERed in init_weeks_db() or the SQLite tenant
+            -- rebuild drops it.
+            actual_source TEXT,
             created_at   TEXT,
             updated_at   TEXT,
             PRIMARY KEY (tenant_id, route_id, month_index, discipline, section_id,
                          week_index)
+        )
+    """,
+    "forecast_days": """
+        CREATE TABLE forecast_days (
+            tenant_id          TEXT NOT NULL DEFAULT 'default',
+            route_id           TEXT NOT NULL,
+            month_index        INTEGER NOT NULL,
+            discipline         TEXT NOT NULL DEFAULT '',
+            section_id         TEXT NOT NULL DEFAULT '',
+            day_date           TEXT NOT NULL,
+            planned_qty        REAL,
+            actual_qty         REAL,
+            actual_note        TEXT,
+            actual_by          TEXT,
+            actual_at          TEXT,
+            status             TEXT NOT NULL DEFAULT 'derived',
+            parent_week_index  INTEGER,
+            -- The week's planned_qty AS AT the last write of this row. Same argument
+            -- weeks.py makes for parent_qty one level up: an edited day always differs
+            -- from week/n so comparing the two would flag every edited day forever.
+            -- A derived refresh re-stamps it; edit and confirm re-stamp it; only a
+            -- week moving under an untouched edited day leaves it stale which is what
+            -- raises week_changed.
+            parent_week_qty    REAL,
+            created_at         TEXT,
+            updated_at         TEXT,
+            PRIMARY KEY (tenant_id, route_id, month_index, discipline, section_id, day_date)
         )
     """,
     # ----------------------------------------------------------------------- #
@@ -974,6 +1024,8 @@ _TENANT_PK = {
                       "week_index)",
     "stockpile_weeks": "(tenant_id, location_id, month_index, week_index)",
     "config": "(tenant_id, key)",
+    "forecast_days": "(tenant_id, route_id, month_index, discipline, section_id, "
+                     "day_date)",
 }
 
 # Extra UNIQUE constraints that must also take tenant_id. Only forecasts has one.
