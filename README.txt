@@ -1,152 +1,210 @@
-rbe-route-vehicles-0909.zip
-===========================
+rbe-departure-probe-0909.zip
+============================
 Delivered 2026-09-09. Extract over the repo root; the paths already match.
 
-WHAT THIS IS
-------------
-"When selecting edit route I am unable to change vehicle."
+GOOD NEWS FIRST: THE EARLIER ZIP IS ALREADY ON THE REPO
+-------------------------------------------------------
+I checked HEAD after cutting this. rbe-route-vehicles-0909.zip has landed and
+landed WHOLE -- 2,238 passed, 0 failed, every per-file count matching. So just
+extract this one over the top and you are done.
 
-You were right about the symptom. The cause was deliberate -- the panel hid the
-vehicle tick-boxes whenever a route was being edited, and the label said so
-("Vehicle(s) - baked on create"). But the capability was missing from the WHOLE
-page, not just the edit form, and that is the part worth knowing:
+  eVehicles state present ......... yes
+  the retired {!editingRoute} guard  gone
+  route-scoped clear_geometry ..... present
+  suite at HEAD ................... 2,238 / 0
 
-  * A route has no vehicle field. Its vehicles are simply whichever profiles
-    have a row in route_geometry.
-  * The per-row "Bake" button re-bakes ONLY the profiles a route already has.
-    It falls back to the "Show" selector's vehicle only when the route has none
-    at all. So adding an 11th profile to a route that already has 7 was not
-    possible except by baking the whole network.
-  * clear_geometry() had no route filter -- it was network-wide by
-    construction. So removing a profile from ONE route was not possible at all,
-    from the UI or the API.
+!! BUT IF YOU EVER RE-APPLY THE OLDER ZIP, APPLY IT BEFORE THIS ONE. !!
 
-Both gaps are closed.
+Both zips contain backend/main.py and backend/network.py and THEY ARE NOT THE
+SAME FILES. This one was cut later, so its copies carry the vehicle changes as
+well as the departure probe; the earlier zip's copies know nothing about the
+probe.
 
-FILES IN THIS ZIP
------------------
-  backend/main.py                  clear-geometry endpoint takes route_id
-  backend/network.py               clear_geometry(route_id=...), and
-                                   route_edit_impact() reports forecast use by vehicle
-  backend/tests/test_week1.py      +12 assertions (303 -> 315)
-  backend/tests/parse_frontend.js  +11 assertions (259 -> 270)
-  frontend/index.html              the vehicle tick-boxes while editing
+  route-vehicles then departure   -> correct.
+  departure then route-vehicles   -> BROKEN. The older main.py and network.py
+                                     overwrite the newer ones and the probe
+                                     endpoint silently disappears.
 
-Nothing is deleted by this delivery, so there is no manual removal step.
-factors.json is NOT included -- nothing here touches it.
+Verified by running it, not assumed: the departure zip's network.py contains the
+route-scoped clear_geometry, and the vehicles zip's network.py contains no
+departure_diagnostics at all.
 
-WHAT YOU WILL SEE
------------------
-Press Edit on a route. The vehicle list is now there, pre-ticked with whatever
-that route is actually baked for, and every row says which way it is going:
+After extracting this over the current HEAD the suite should read 2,256.
 
-    Artic Tipper (44t)        . baked          (green - nothing happens)
-    Rigid 8-wheeler (32t)     . will be baked  (navy  - costs HERE calls)
-    Artic Flatbed (44t)       . will be removed(red   - geometry is deleted)
+WHY THIS EXISTS
+---------------
+You reported a route that "has taken a detour where there is no road". It is
+R001, Muuga Harbour -> Soodevahe CB, laden leg, arriving at gate G001.
 
-The Save button counts it before you press it -- "Save changes . +1 -1
-vehicle(s)" -- and the confirm dialog names the consequences:
+It is NOT a bug in our code, and it is not the haul road. Ruled out against the
+live deployment, all five:
 
-  * removing a vehicle deletes BOTH legs and EVERY alternative for it on that
-    route, so restoring it later is real HERE calls;
-  * how many forecast lines on that route name the vehicle you are removing,
-    and how many of those are Approved. forecasts.vehicle_type is the key the
-    Forecasts page looks route analysis up by, so those lines will read
-    "not baked" where their km, cycle time and vehicle count were;
-  * a separate warning if you are removing the LAST vehicle, because the route
-    then reads "not baked" everywhere including on the map.
+  * no route has a haul road attached at all, so the splice path never ran.
+    HR01 is drawn from the G001 gate coordinate and is linked to nothing;
+  * haul roads are excluded from avoid[areas] by KIND, so nothing over-blocked;
+  * _bake_leg stores HERE's polyline verbatim -- nothing appends the gate;
+  * there is only alt 0, so there was no alternative to promote either;
+  * and the one thing that could have manufactured it in our code -- the
+    section concatenation in here_routing.routes(), which drops the first point
+    of every section after the first -- DID NOT RUN. HERE returned exactly ONE
+    section on every leg and every profile tried.
 
-Adding a vehicle is not gated by a dialog -- it only spends HERE calls -- but
-it is reported in the status line afterwards.
+THE ACTUAL PROBLEM IS BIGGER THAN THE DETOUR
+--------------------------------------------
+The baked route does not reproduce.
 
-TWO THINGS THAT COULD HAVE GONE WRONG QUIETLY, AND DID NOT
-----------------------------------------------------------
-1. The edit list is its OWN state, not the Create panel's. Sharing it would
-   have been one line shorter and would have silently re-pointed the
-   network-wide "Bake all . N vehicle(s)" button at whatever route you happened
-   to have open -- while its own tooltip still said the list came from the
-   Create panel. There is an assertion that bulk bake never reads the edit set.
+                          cached (baked 06:29:59)   replayed live
+    R001 laden              16.15 km / 0.318 h        15.11 km / 0.291 h
+    R001 return             16.64 km / 0.320 h        16.64 km / 0.319 h
 
-2. Moving a route's endpoints already clears every profile server-side. The old
-   code then re-baked "the profiles it had". If you move the endpoints AND
-   untick a vehicle in the same save, that would have brought the unticked one
-   straight back, and the route list would have shown it as though you had
-   never touched it. A move now re-bakes the NEWLY TICKED set.
+Same endpoints, same profile, same (empty) avoid set, one section, no notices.
+The return leg reproduces to the metre. The laden leg is 1.04 km -- 6.4% --
+shorter than what is stored, and at bake time HERE had OFFERED a 15.22 km
+alternative and ranked the 16.15 km road first. It ranks the short one first
+now.
+
+Checked again at 13:19 local, about seven hours after the bake:
+
+    laden distance   15.11    15.11    15.11      (stable since ~11:00)
+    laden duration   0.291    0.292    0.296      (drifting, ~1.7%)
+    return duration  0.319    0.320    0.321
+
+So there are TWO effects, not one:
+
+  1. the ROAD changed between 06:29 and ~11:00 and has held since;
+  2. the DURATION on an unchanged road drifts run to run.
+
+(2) matters on its own. duration_hr is what route_analysis() turns into cycle
+time, and trips_per_day is floor(shift_minutes / cycle_minutes) -- a floor. A
+duration that moves 1.7% between two bakes can step that integer down with
+nothing a planner did to cause it, and vehicles, tonnes, t-km and CO2 all move
+with it.
+
+Nothing in our request pins a departure time. That is the named hypothesis. It
+is NOT proven, which is why this zip is an experiment and not a fix.
+
+WHAT IS IN THIS ZIP
+-------------------
+  backend/here_routing.py     departure_time param on routes() and probe();
+                              departure_probe(); default_departure_times();
+                              _fingerprint()
+  backend/network.py          departure_diagnostics()
+  backend/main.py             GET /api/admin/diagnostics/departure/{route_id}
+  backend/tests/test_phase4.py  +18 assertions (202 -> 220)
+
+Nothing is deleted, so there is no manual removal step. factors.json is not
+included and nothing here touches it. No schema change, no migration.
+
+RUN THIS AFTER YOU DEPLOY -- IT IS THE POINT OF THE ZIP
+-------------------------------------------------------
+  /api/admin/diagnostics/departure/R001?profile=Artic%20Tipper%20(44t)&token=...
+
+Add &leg=return to do the other direction, and &times=... (comma separated ISO
+timestamps, or the literal "any") to choose your own.
+
+It replays the SAME leg seven times: a control with no departureTime, then
+departureTime=any, then four times on the next weekday (06:30, 08:00, 11:00,
+17:00 Europe/Tallinn), then the control again. Read "experiment.reads_as" LAST,
+after the rows.
+
+Two things about how it is built that are worth knowing before you read it:
+
+  * THE CONTROL RUNS FIRST AND LAST. If HERE's unpinned answer moves during the
+    experiment itself, nothing measured in between is attributable to the
+    departureTime values, and the verdict says exactly that instead of
+    reporting a difference. Re-run if you see it.
+  * EVERY ROW CARRIES A GEOMETRY FINGERPRINT. Distance alone cannot answer this
+    question: two different roads can come back the same length, and a route
+    that changed shape but not length would read as "no change".
+
+Costs seven HERE requests per run. Writes nothing.
+
+WHAT IT WILL TELL YOU, AND WHAT TO DO NEXT
+------------------------------------------
+  * pinned times disagree with each other  -> the road depends on the clock. An
+    unpinned bake is a snapshot of whenever it ran. Pin bakes to a fixed
+    representative time and they become reproducible. THIS IS THE OUTCOME I
+    EXPECT, and it is a one-line change once you have said which time.
+  * pinned all agree but differ from the control -> pinning makes bakes
+    reproducible AND changes which road you get. Which road you want is your
+    decision, not mine.
+  * everything agrees -> that does NOT clear departureTime. It means conditions
+    were flat when you ran it. Re-run at a peak hour before concluding.
+
+NOTHING IS PINNED BY THIS ZIP
+-----------------------------
+No bake sends a departureTime. Behaviour on the deployment is byte-for-byte what
+it is today until you decide otherwise. There is an assertion that fails if a
+later session quietly threads one into the bake path.
+
+An immediate workaround for R001 exists and I want to be honest about it: just
+re-bake it and it will pick up the 15.11 km road and the detour goes. That is a
+lottery ticket, not a fix -- it can come back the next time anything re-bakes.
 
 TESTS
 -----
-Full suite: 2,238 passed, 0 failed (was 2,215 -- +23).
+Full suite: 2,256 passed, 0 failed (2,238 before this zip, +18).
 
-  test_week1.py     303 -> 315   parse_frontend.js  259 -> 270
-  test_phase5a 215 . test_phase4 202 . test_phase2 160 . test_phase3 154
-  test_phase45 140 . test_ipt_overlay 140 . test_phase25a 104
-  parse_map 484 . render_frontend 28 . test_tenant_audit 26   (all unchanged)
+  test_phase4.py 202 -> 220. Covers: the URL carries departureTime only when
+  given, and an unpinned call is unchanged; the fingerprint separates
+  same-km-different-road; the default times land ahead of now on a weekday and
+  the response names where the timezone came from; the return leg is resolved
+  d_exit -> o_entry rather than the loaded pair reversed, with the laden flag
+  flipping too; all four verdict readings; and that no bake sends a
+  departureTime.
 
-Ten regressions were applied on purpose and all ten were caught by the
-assertion meant to catch them -- including that another TENANT's identical row
-survives a route-scoped delete, and that the no-filter branch still means
-"everything for this tenant", which is what "Clear all routes" depends on.
+Seventeen regressions applied on purpose across both of today's deliveries; all
+seventeen caught by the assertion meant to catch them. Two of the new ones did
+not fail on the first pass and BOTH were defects in my tests, not gaps in the
+code:
 
-Two of the ten did not fail cleanly on the first pass, and both were defects in
-MY test code rather than gaps in coverage:
+  * the fingerprint assertion compared a 2-point line with a 3-point line, so
+    hashing the point count alone would have passed it;
+  * the "control moved" assertion matched on the string "Re-run", which also
+    appears in the all-agreed verdict ("Re-run at a peak hour"), so deleting the
+    control-stable branch entirely still passed.
 
-  * one assertion subscripted a dict key directly instead of using .get(), so
-    breaking that key raised KeyError and killed the run before the report
-    printed. A caught regression read as an uncaught one. An assertion that can
-    CRASH is worse than one that can fail: it hides every assertion after it.
-    Fixed, and committed separately so the reason is in the history.
-  * the first regression harness counted "FAIL:" lines and nothing else, so a
-    run that died before reaching the new assertions reported zero failures --
-    indistinguishable from a regression nobody caught. It now checks the run
-    finished at all.
+Both fixed and committed separately so the reason is in the history.
 
 WHAT IS NOT TESTED
 ------------------
-  * HERE is never called from the build sandbox. Nothing here proves a bake
-    actually succeeds -- only that the right profile is asked for.
-  * No browser ran. The tick-boxes, the labels and the confirm dialog are
-    asserted at SOURCE level only. Nothing has rendered them.
-  * The HTTP layer is stubbed, so clear-geometry's new route_id parameter is
-    proved to reach network.clear_geometry() by calling the endpoint function
-    directly. Nothing proves FastAPI parses it off the query string.
-  * No Postgres branch ran. The delete is a plain DELETE with one more WHERE
-    term, but it has only been executed against SQLite.
+  * HERE IS NEVER CALLED FROM THE BUILD SANDBOX. Every assertion above is about
+    the request we build and the report we write. Whether pinning changes
+    HERE's answer is precisely what the live probe is for, and it cannot be
+    known until you run it on the deployment.
+  * urlopen is stubbed, so the assertions read the URL we would have sent, not
+    a response we received.
+  * No browser ran. There is no UI in this zip.
+  * No Postgres branch ran. There is no SQL in this zip either.
 
-PLEASE CHECK ON THE LIVE SITE
------------------------------
-  1. Edit a route, tick a vehicle it does not have, save. The Vehicles column
-     should gain a chip. Watch for the chip being HOLLOW -- that means the
-     laden leg baked and the return did not, which is not enough for a cycle
-     time.
-  2. Edit it again, untick that vehicle, save. The chip should go, and only
-     that route should lose it. Check a second route that also has that
-     vehicle still has it.
-  3. Move a route's endpoints and change its vehicles in the SAME save. The
-     result should be exactly what you ticked -- nothing you unticked should
-     come back.
+SEPARATE AND URGENT: YOUR ADMIN TOKEN
+-------------------------------------
+ADMIN_TOKEN on Render is literally the string
 
-STILL OPEN, AND UNCHANGED BY THIS DELIVERY
-------------------------------------------
-  * THE DETOUR ON R001. Diagnosed but NOT fixed -- see claude/route-management-0909.md.
-    It is the laden leg into gate G001 at Soodevahe, and it is not the haul
-    road (no route has one attached). The stored geometry has a 147 m jump
-    between two consecutive vertices where its neighbours are 6-38 m apart.
-    Settling whether that came from HERE or from our own section-joining code
-    needs ONE call, and it needs your ADMIN_TOKEN:
+    openssl rand -hex 24
 
-      /api/admin/diagnostics/route/R001?profile=Artic%20Tipper%20(44t)&probe=true
+Somebody was told to generate a secret with that command and pasted the
+INSTRUCTION instead of its output. I confirmed it by using it -- the admin
+diagnostics answered 200. It is also visible in the token box in the Route
+Management screenshot, so it is in localStorage on at least one browser.
 
-    Send me that JSON. If it comes back with more than one section, every baked
-    route in the network is suspect at its section joins.
+This is worse than leaving ADMIN_TOKEN unset, because _check_admin() treats any
+non-empty value as protection and so nothing looks wrong. The value guards every
+admin endpoint, including PUT /api/admin/config/factors, which rewrites the
+document every payload, density and cycle time is computed from.
 
+  1. Actually run openssl rand -hex 24 and paste the OUTPUT into Render ->
+     Environment -> ADMIN_TOKEN -> Save.
+  2. Clear rbe_admin_token from localStorage in the browser.
+  3. Treat the old value as burned -- it has been in a screenshot and in a chat.
+
+STILL OPEN
+----------
   * The eight IPT access codes are STILL not set on Render. Oldest open item.
-
-  * The push is still blocked: "jgd230490-RBE/RBE_Alliance1 is not in this
-    session's authorized repository set." Seventh delivery. Adding the repo to
-    the session's sources would end the zip chain and the partial-upload
-    failure mode with it.
-
-  * code-snapshot.md says the suite total should be 2,222. Its own twelve
-    per-file counts sum to 2,215, which is what actually printed at HEAD before
-    this delivery. The per-file numbers are right; the total is wrong. Check by
-    the counts, not the total. Corrected in the notes, not in this zip.
+  * The warning stack (E16) -- run claude/warn-probe.js before editing the
+    renderer; it may be correct behaviour for the current data.
+  * Look-ahead v2: NOT STARTED. The four mockups you pasted are transcribed into
+    claude/lookahead-mockups-0909.md, including three places where the mockups
+    and the written brief disagree and you need to pick.
+  * The push is still blocked: "not in this session's authorized repository
+    set." Eighth delivery.
