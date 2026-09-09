@@ -377,6 +377,15 @@ ok("⭐ the clash rail is ONE row with '+N more', not a stack",
   _laBody.includes("rail.flags.slice(0, 3)") && _laBody.includes("more`") && !_laBody.includes("dismiss"));
 ok("...and a Tark Tee outage is said, not rendered as 'no restrictions'",
   _laBody.includes('rail.sources.tark_tee === "unavailable"') && _laBody.includes("were NOT checked"));
+// 🔴 09 Sep night: Tark Tee froze the page when it was on the critical path. The page
+// read must not ask for it; a second fetch does, after render, and the rail merges it.
+ok("🔴 the page read does not ask for Tark Tee, and the restrictions come from their own fetch after render",
+  !/lookahead\?bucket=\$\{bucket\}&tark_tee=1/.test(_laBody)
+  && /fetch\(`\$\{API\}\/forecast-weeks\/tark-tee\?bucket=\$\{bucket\}`\)/.test(_laBody)
+  && _laBody.includes('setTt({ status: "checking", flags: [] })')
+  && _laBody.includes("checking road restrictions"));
+ok("...and the Tark Tee flags are merged into the rail rather than shown as a second rail",
+  /const flags = \[\.\.\.\(base\.flags \|\| \[\]\), \.\.\.\(tt\.flags \|\| \[\]\)\]/.test(_laBody));
 ok("today's column carries the wash and the '· today' suffix; weekends read '0 default'",
   _laBody.includes('" · today"') && _laBody.includes('"0 default"') && _laBody.includes('#eff6ff'));
 ok("the expanded row prints km/trip, km/week, t·km, cycle and € or 'rate not set'",

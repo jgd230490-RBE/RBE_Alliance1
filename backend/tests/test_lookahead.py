@@ -21,6 +21,7 @@ Run:  python3 backend/tests/test_lookahead.py
 """
 import datetime
 import json
+import re
 import os
 import shutil
 import sys
@@ -901,8 +902,43 @@ ok("⭐ stock forecast: opening + planned inbound of every line into the pile �
    st["L2"]["over"] is True and abs(st["L2"]["inbound_planned"] - exp_in) < 1e-6
    and abs(st["L2"]["forecast"] - (100.0 + exp_in)) < 1e-6 and abs(st["L2"]["over_by"] - (100.0 + exp_in - 1000.0)) < 1e-6)
 ok("🔴 PILE_OVER on every line into the over-capacity pile", codes.get("PILE_OVER") == 3)
-ok("Tark Tee is reported as unavailable in the sandbox, and no TARK_TEE flag is invented either way",
-   pg["clashes"]["sources"]["tark_tee"] in ("unavailable", "ok") and codes.get("TARK_TEE") is None)
+# 🔴 09 Sep night: the live Tark Tee fetch + geometry loop was on the page's critical
+# path and froze the Look-ahead on its first Approved line. Reversed: the page read must
+# NOT consult Tark Tee; a separate read does, and only for the routes on the page.
+import restrictions as _rx
+_calls = {"fetch": 0, "check": []}
+_orig_fetch, _orig_check = _rx.fetch_all, _rx.check_route
+def _fake_fetch(*a, **k):
+    _calls["fetch"] += 1
+    return {"type": "FeatureCollection", "features": [{"geometry": None, "properties": {}}], "errors": {}}
+def _fake_check(rid, profile=None, layers=None, _fc=None):
+    _calls["check"].append(rid)
+    return {"route_id": rid, "hits": ([{"headline": "3.5 m limit"}] if rid == "R3" else [])}
+_rx.fetch_all, _rx.check_route = _fake_fetch, _fake_check
+try:
+    _pg_page = lookahead.page(bucket="commit")
+    ok("🔴 the page read never touches Tark Tee — the rail says 'pending', no TARK_TEE flag",
+       _calls["fetch"] == 0 and _calls["check"] == [] and _pg_page["clashes"]["sources"]["tark_tee"] == "pending"
+       and _pg_page["clashes"]["by_code"].get("TARK_TEE") is None)
+    _tt = lookahead.tark_tee_flags(bucket="commit")
+    ok("⭐ the tark-tee read fetches once and checks ONLY the routes on the page — not all routes",
+       _calls["fetch"] == 1 and sorted(_calls["check"]) == ["R1", "R3"] and _tt["routes_checked"] == ["R1", "R3"]
+       and _tt["status"] == "ok")
+    ok("...and raises TARK_TEE on the line whose route hit, with the headline",
+       _tt["count"] == 1 and _tt["flags"][0]["route_id"] == "R3" and "3.5 m limit" in _tt["flags"][0]["text"])
+    _calls["fetch"] = 0
+    _rx.fetch_all = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
+    _tt2 = lookahead.tark_tee_flags(bucket="commit")
+    ok("🔴 a Tark Tee outage reads 'unavailable' with no flags — never a silent clean",
+       _tt2["status"] == "unavailable" and _tt2["count"] == 0)
+finally:
+    _rx.fetch_all, _rx.check_route = _orig_fetch, _orig_check
+ok("...and with the real (unreachable) source the sandbox reads unavailable, not ok",
+   lookahead.tark_tee_flags(bucket="commit")["status"] in ("unavailable",))
+main_src2 = open(os.path.join(BACKEND, "main.py"), encoding="utf-8").read()
+ok("🔴 /api/lookahead defaults tark_tee to 0 and /api/forecast-weeks/tark-tee exists",
+   re.search(r'def lookahead_page\([^)]*tark_tee: int = 0', main_src2) is not None
+   and '"/api/forecast-weeks/tark-tee"' in main_src2)
 ok("no UNBAKED, no DAYS_NE_WEEK, no SHORTAGE on a fresh derived week",
    not any(c in codes for c in ("UNBAKED", "DAYS_NE_WEEK", "SHORTAGE")))
 ok("flags are ordered by the brief's code order", [f["code"] for f in flags] == sorted([f["code"] for f in flags], key=lambda c: clashes.CODES.index(c)))
