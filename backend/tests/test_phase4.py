@@ -849,6 +849,164 @@ ok("the via-alternatives question is named as unverified",
    "alternatives" in haul_src.split("WHAT IS NOT VERIFIED")[1][:600])
 
 # =========================================================================== #
+#  15. departureTime — 2026-09-09                                              #
+#                                                                              #
+#  🔴 Why this section exists: R001's laden leg was baked at 06:29 as 16.15 km  #
+#  and answered 15.11 km when the identical request was replayed ~90 minutes    #
+#  later, while its return leg reproduced to the metre. Nothing in the request  #
+#  pins a departure time. These assertions cover the request shape and the      #
+#  report logic. ⚠️ THEY DO NOT COVER HERE. Whether pinning actually changes    #
+#  HERE's answer is exactly what the live probe is for.                         #
+# =========================================================================== #
+_urls = []
+import datetime                                   # noqa: E402
+_FACT = conversions.load_factors()
+
+
+class _Resp:
+    """Minimal stand-in for urlopen's context manager: json.load() needs .read()."""
+    def __init__(self, payload):
+        self._b = json.dumps(payload).encode()
+
+    def read(self, *a):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _fake_urlopen(url, timeout=None):
+    _urls.append(url)
+    return _Resp({"routes": [{"sections": [
+        {"polyline": "x", "summary": {"length": 15110, "duration": 1048}}]}]})
+
+
+_real_urlopen = here_routing.urllib.request.urlopen
+_real_key = os.environ.get("HERE_API_KEY")
+here_routing.urllib.request.urlopen = _fake_urlopen
+os.environ["HERE_API_KEY"] = "test-key"
+try:
+    _urls.clear()
+    here_routing.routes(58.5, 24.0, 58.6, 24.1, "Artic Tipper (44t)", _FACT)
+    ok("09-09: 🔴 an unpinned call sends NO departureTime — today's behaviour is unchanged",
+       len(_urls) == 1 and "departureTime" not in _urls[0])
+
+    _urls.clear()
+    here_routing.routes(58.5, 24.0, 58.6, 24.1, "Artic Tipper (44t)", _FACT,
+                        departure_time="2026-09-10T08:00:00+03:00")
+    ok("09-09: ...and a pinned one sends it, URL-encoded",
+       len(_urls) == 1 and "departureTime=2026-09-10T08%3A00%3A00%2B03%3A00" in _urls[0])
+
+    _urls.clear()
+    here_routing.probe(58.5, 24.0, 58.6, 24.1, "Artic Tipper (44t)", _FACT,
+                       departure_time=here_routing.TIME_ANY)
+    ok("09-09: the probe carries it too, or it answers a different question from the bake",
+       len(_urls) == 1 and "departureTime=any" in _urls[0])
+finally:
+    here_routing.urllib.request.urlopen = _real_urlopen
+    if _real_key is None:
+        os.environ.pop("HERE_API_KEY", None)
+    else:
+        os.environ["HERE_API_KEY"] = _real_key
+
+# ⭐ Distance alone cannot answer the question: two different roads can be the same
+# length, and a route that changed shape but not length would read as "no change".
+# ⚠️ The two lines below have the SAME vertex count and the same length — they are each
+# other mirrored. Written first with a 2-point line against a 3-point line, and breaking
+# the hash on purpose then still passed, because counting the points distinguishes those.
+# A regression that does not fail is the informative one.
+_A = [[24.0, 58.5], [24.1, 58.6]]
+_B = [[24.0, 58.6], [24.1, 58.5]]
+ok("09-09: ⭐ the fingerprint separates 'same km' from 'same road'",
+   len(_A) == len(_B) and here_routing._fingerprint(_A) != here_routing._fingerprint(_B))
+ok("09-09: ...and is stable for the same line",
+   here_routing._fingerprint(_A) == here_routing._fingerprint(list(_A)))
+ok("09-09: ...and is None, not a hash of nothing, when there is no geometry",
+   here_routing._fingerprint([]) is None and here_routing._fingerprint(None) is None)
+
+# A past departureTime is not a sensible request, so the defaults must land ahead of now
+# and on a working day — the experiment can show variation BY hour, never reproduce a
+# specific past morning.
+_now = datetime.datetime(2026, 9, 11, 12, 0, tzinfo=datetime.timezone.utc)   # a Friday
+_times, _note = here_routing.default_departure_times(now=_now)
+ok("09-09: the default times are four, on the next WEEKDAY, and in the future",
+   len(_times) == 4 and all(t > _now.isoformat() for t in _times)
+   and len({t[:10] for t in _times}) == 1
+   and datetime.date.fromisoformat(_times[0][:10]).weekday() <= 4)
+ok("09-09: ⚠️ ...and the report says where the timezone came from rather than assuming",
+   isinstance(_note, str) and ("tz database" in _note or "ASSUMED" in _note))
+
+# The verdict logic, with HERE replaced by a scripted sequence. Each case is a real
+# reading the experiment can produce, and the wrong verdict on any of them would send
+# someone off to fix the wrong thing.
+_seq = []
+
+
+def _scripted(*a, **kw):
+    geom = _seq.pop(0)
+    return [{"geometry": geom, "distance_km": 10.0, "duration_hr": 0.25, "sections": [{}]}]
+
+
+_saved_routes = here_routing.routes
+here_routing.routes = _scripted
+try:
+    # control_before, any, t1..t4, control_after  == 7 runs
+    _seq = [_A] + [_A] * 5 + [_B]
+    v = here_routing.departure_probe(1, 2, 3, 4, "Artic Tipper (44t)", _FACT)
+    ok("09-09: 🔴 a control that MOVED during the run invalidates the whole experiment",
+       v["control_stable"] is False
+       # ⚠️ NOT "Re-run" — that string is in the all-agreed verdict too ("Re-run at a
+       # peak hour"), so it passed against the wrong reading until a regression showed it.
+       and "nothing below is attributable" in v["reads_as"])
+
+    _seq = [_A, _A, _B, _A, _A, _A, _A]
+    v = here_routing.departure_probe(1, 2, 3, 4, "Artic Tipper (44t)", _FACT)
+    ok("09-09: ⭐ pinned times that disagree read as 'the road depends on the clock'",
+       v["control_stable"] and v["pinned_all_agree"] is False
+       and "different roads" in v["reads_as"])
+
+    _seq = [_A, _B, _B, _B, _B, _B, _A]
+    v = here_routing.departure_probe(1, 2, 3, 4, "Artic Tipper (44t)", _FACT)
+    ok("09-09: ⭐ pinned agreeing with each other but NOT the control is its own answer",
+       v["pinned_all_agree"] and "reproducible" in v["reads_as"])
+
+    _seq = [_A] * 7
+    v = here_routing.departure_probe(1, 2, 3, 4, "Artic Tipper (44t)", _FACT)
+    ok("09-09: 🔴 everything agreeing does NOT clear departureTime, and says so",
+       v["pinned_all_agree"] and "does NOT clear" in v["reads_as"])
+    ok("09-09: the controls bracket the run, first and last",
+       [r["label"] for r in v["rows"]][0] == "control_before"
+       and [r["label"] for r in v["rows"]][-1] == "control_after"
+       and v["rows"][1]["label"] == "any")
+finally:
+    here_routing.routes = _saved_routes
+
+# ⚠️ The return leg is d_exit -> o_entry, NOT the loaded pair reversed. Getting this
+# wrong compares two routes no bake will ever produce, and it is invisible in the numbers.
+ok("09-09: 🔴 the return leg is resolved as exit-from-dest, entry-to-origin",
+   "a = _waypoint_full(d, \"exit\"" in net_code.replace("'", '"')
+   and "b = _waypoint_full(o, \"entry\"" in net_code.replace("'", '"'))
+ok("09-09: ...and the laden flag flips with the leg — HERE picks roads on gross weight",
+   'laden=(leg == "loaded")' in net_code.split("def departure_diagnostics")[1]
+                                        .split("\ndef ")[0])
+ok("09-09: an unknown leg is refused rather than silently treated as loaded",
+   "leg must be one of" in net_code)
+ok("09-09: the diagnostic is admin-gated like every other one",
+   "_check_admin(token)" in main_code.split("def diagnostics_departure")[1]
+                                     .split("\ndef ")[0])
+
+# 🔴 The whole point of this slice is that it does NOT pin anything yet. If a later
+# session quietly threads a departure time into the bake, this fails and says why.
+_bake_leg_body = net_code.split("def _bake_leg")[1].split("\ndef ")[0]
+ok("09-09: 🔴 NOTHING in the bake path sends a departureTime — the probe decides first",
+   "departure_time" not in _bake_leg_body
+   and "departure_time" not in net_code.split("def bake_batch")[1].split("\ndef ")[0])
+
+
+# =========================================================================== #
 print()
 for f in FAIL:
     print("  FAIL:", f)
