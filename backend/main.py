@@ -1160,13 +1160,21 @@ def bake_routes(profile: str = network.DEFAULT_PROFILE,
 
 @app.post("/api/admin/clear-geometry")
 def clear_geometry(profile: Optional[str] = None, leg: Optional[str] = None,
-                   token: Optional[str] = None):
-    """Clear cached geometry (a profile and/or leg, or all) so it can be re-baked."""
+                   route_id: Optional[str] = None, token: Optional[str] = None):
+    """
+    Clear cached geometry (a profile and/or leg and/or route, or all) for re-baking.
+
+    ⚠️ `route_id` narrows this to one route and is what makes "drop this vehicle from
+    this route" possible; without it the only delete was network-wide. Every parameter
+    is optional and omitting all three still means ALL geometry for the tenant, which is
+    what "Clear all routes" wants -- so a caller that means one route must say so.
+    """
     admin_token = os.getenv("ADMIN_TOKEN", "").strip()
     if admin_token and token != admin_token:
         raise HTTPException(403, "bad or missing admin token")
-    network.clear_geometry(profile, leg=leg)
-    return {"status": "cleared", "profile": profile or "all", "leg": leg or "all"}
+    network.clear_geometry(profile, leg=leg, route_id=route_id)
+    return {"status": "cleared", "profile": profile or "all", "leg": leg or "all",
+            "route_id": route_id or "all"}
 
 
 class LocationIn(BaseModel):

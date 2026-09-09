@@ -382,16 +382,33 @@ def _upsert_geom(route_id, profile, geometry, dist, dur, error, leg="loaded", al
     )
 
 
-def clear_geometry(profile=None, leg=None):
-    """Delete cached geometry so it can be recomputed. All profiles if profile is None."""
+def clear_geometry(profile=None, leg=None, route_id=None):
+    """
+    Delete cached geometry so it can be recomputed. All profiles if profile is None.
+
+    2026-09-09: `route_id` scopes the delete to ONE route. Until it existed a vehicle
+    profile could be baked onto a single route but never dropped from one, because the
+    only delete was network-wide -- so correcting a profile baked onto the wrong route
+    meant clearing it from every route that had it and re-baking them all. That is the
+    backend half of the Route Management vehicle gap; the other half is that nothing in
+    the UI ever offered the choice.
+
+    ⚠️ Deleting a (route, profile) pair deletes BOTH legs and EVERY alternative for it,
+    because neither is named in the filter. That is deliberate -- a laden leg with no
+    return gives no cycle time, so half a pair is not a state worth being able to reach
+    from here -- but it means the caller is spending HERE calls to undo a mistake, and
+    route_edit_impact() is what lets it say so first.
+    """
     clauses, params = [], []
     if profile:
         clauses.append("vehicle_profile = ?"); params.append(profile)
     if leg:
         clauses.append("leg = ?"); params.append(leg)
+    if route_id:
+        clauses.append("route_id = ?"); params.append(route_id)
     # tenant_id is baked into the base statement rather than appended as one more
-    # optional clause, so the branch where neither profile nor leg is given cannot
-    # produce an unfiltered DELETE. Its param leads the tuple for the same reason.
+    # optional clause, so the branch where none of the three is given cannot produce an
+    # unfiltered DELETE. Its param leads the tuple for the same reason.
     sql = "DELETE FROM route_geometry WHERE tenant_id = ?"
     if clauses:
         sql += " AND " + " AND ".join(clauses)
@@ -1189,9 +1206,28 @@ def route_edit_impact(route_id):
     tenant = db.current_tenant()
     lines = db.query("SELECT COUNT(*) AS n, COUNT(DISTINCT discipline || '|' || section_id) AS lines "
                      "FROM forecasts WHERE tenant_id = ? AND route_id = ?", (tenant, route_id))[0]
+    # 2026-09-09: which VEHICLE each forecast row on this route names, so dropping a
+    # profile can say what it costs before it is dropped. forecasts.vehicle_type holds
+    # the same string as route_geometry.vehicle_profile -- the Forecasts page indexes
+    # route analysis by it -- so a row whose vehicle has no geometry left reads
+    # "not baked" where its km, cycle and vehicle count were. Approved is counted
+    # separately because Approved lines are what the dashboard, the map KPIs and the
+    # look-ahead read; a Pending line losing its figures is recoverable by re-baking
+    # before anyone approves it.
+    by_veh = {}
+    for row in db.query(
+            "SELECT vehicle_type, COUNT(*) AS n, "
+            "SUM(CASE WHEN status = 'Approved' THEN 1 ELSE 0 END) AS approved "
+            "FROM forecasts WHERE tenant_id = ? AND route_id = ? GROUP BY vehicle_type",
+            (tenant, route_id)):
+        # a line with no vehicle named is real and is not attributable to any profile,
+        # so it is keyed separately rather than dropped or blamed on one
+        key = row["vehicle_type"] or ""
+        by_veh[key] = {"lines": int(row["n"] or 0), "approved": int(row["approved"] or 0)}
     return {
         "route_id": route_id,
         "forecast_rows": lines["n"], "forecast_lines": lines["lines"],
+        "forecast_vehicles": by_veh,
         "baked_profiles": profiles_for_route(route_id),
         "haul_roads": [r["zone_id"] for r in db.query(
             "SELECT zone_id FROM route_haul_roads WHERE tenant_id = ? AND route_id = ? ORDER BY seq",
