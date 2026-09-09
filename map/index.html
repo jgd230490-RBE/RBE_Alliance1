@@ -656,6 +656,13 @@
     //
     // ⚠️ Shape discriminates, not colour. Two types never share a mark: a colour-blind
     // reader, a greyscale print and a satellite basemap all lose colour before shape.
+    //
+    // 2026-09-08 (pm), the human's review: the OUTER shape is now a circle for Quarry,
+    // Site, Stockpile, Port and Other, and the INNER symbol is what discriminates —
+    // a pick, a dot, a pile, an anchor, nothing. That is a deliberate reversal of the
+    // rule above and it is the human's call: the pre-08 Sep map was circles-with-symbols
+    // and they preferred it. Railhead and Compound stay squares so the two types that
+    // sit ON the corridor are separable from the rest by silhouette alone.
     const LOC_KINDS = ['Quarry', 'Port', 'Compound', 'Site', 'Railhead', 'Stockpile', 'Other'];
     const LOC_FILL = {
         Port:      '#0369A1',
@@ -667,9 +674,15 @@
         Compound:  '#CA8A04',
         Site:      '#6D28D9',
         Railhead:  '#0F766E',
-        Stockpile: '#78350F',
+        // ⚠️ ALSO CHOSEN, NOT INHERITED. The human asked for "a creamy grey" pile, so this
+        // is the CONTAINER cream; STOCK_FILL below is the pile itself and STOCK_OVER is the
+        // pile once it is past its capacity. It was #78350F (dark brown) until 08 Sep pm.
+        Stockpile: '#EFEBE0',
         Other:     '#94a3b8',
     };
+    const STOCK_FILL = '#BDB49C';        // the creamy-grey pile
+    const STOCK_EMPTY = '#FAF7EF';       // headroom above the stock line
+    const STOCK_OVER = '#BF2E55';        // over capacity, the same red the Clash level uses
     // The QUARRY MATERIAL MAP, kept exactly as it was — the brief is explicit that
     // quarries must not flatten to one terracotta. Real data carries Sand, Gravel,
     // "Limestone - rockfill" and "Limestone (Shale aggregate)".
@@ -696,11 +709,35 @@
     // key -> {kind, fill}. Filled as the network loads, so a quarry material nobody
     // anticipated still gets its own image rather than a fallback.
     const LOC_ICONS = {};
+    // 2026-09-08 (pm): a stockpile draws as a GAUGE — the pile fills to the stock level and
+    // goes red over capacity. The level therefore has to reach the image key, and an image
+    // per exact percentage would be an unbounded set, so it is quantised into six steps
+    // plus 'over' plus 'na'. 'na' is a pile with NO recorded capacity, which is a real
+    // state (see stockpiles.set_capacity) and must not be drawn as an empty one.
+    const STOCK_STEPS = [0, 20, 40, 60, 80, 100];
+    function stockBucket(props) {
+        const cap = Number(props.capacity_qty), bal = Number(props.stock_balance);
+        if (!isFinite(cap) || cap <= 0 || props.capacity_qty == null) return 'na';
+        if (!isFinite(bal) || props.stock_balance == null) return 'na';
+        // the backend already decides `over`; only fall back to the ratio when it is absent,
+        // so the mark and the popup can never disagree about the same pile
+        const over = props.stock_over == null ? (bal > cap)
+                   : !(props.stock_over === false || props.stock_over === 'false');
+        if (over) return 'over';
+        const pct = Math.max(0, Math.min(100, (bal / cap) * 100));
+        let best = STOCK_STEPS[0];
+        STOCK_STEPS.forEach(s => { if (Math.abs(s - pct) < Math.abs(best - pct)) best = s; });
+        return String(best);
+    }
     function locIconKey(props) {
         const kind = canonicalLocType(props.node_type);
         const fill = kind === 'Quarry' ? quarryFill(props.material) : LOC_FILL[kind];
-        const key = 'loc-' + kind.toLowerCase() + (kind === 'Quarry' ? '-' + fill.slice(1) : '');
-        LOC_ICONS[key] = { kind: kind, fill: fill };
+        let suffix = '';
+        if (kind === 'Quarry') suffix = '-' + fill.slice(1);
+        else if (kind === 'Stockpile') suffix = '-' + stockBucket(props);
+        const key = 'loc-' + kind.toLowerCase() + suffix;
+        LOC_ICONS[key] = { kind: kind, fill: fill,
+                           stock: kind === 'Stockpile' ? stockBucket(props) : null };
         return key;
     }
     // Stamp the icon key and the canonical kind onto every Node feature, once, as the
@@ -728,41 +765,60 @@
     const LOC_IMG_S = 72;
     function locShapePath(g, kind, cx, cy, r) {
         g.beginPath();
-        if (kind === 'Quarry') {                     // diamond
-            g.moveTo(cx, cy - r); g.lineTo(cx + r, cy); g.lineTo(cx, cy + r); g.lineTo(cx - r, cy);
-            g.closePath();
-        } else if (kind === 'Stockpile') {           // hexagon, flat top
-            for (let i = 0; i < 6; i++) {
-                const a = Math.PI / 180 * (60 * i - 30);
-                const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
-                if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-            }
-            g.closePath();
-        } else if (kind === 'Compound' || kind === 'Railhead') {   // rounded square
+        if (kind === 'Compound' || kind === 'Railhead') {          // rounded square
             const s = r * 1.72, x = cx - s / 2, y = cy - s / 2, rr = s * 0.24;
             g.moveTo(x + rr, y);
             g.arcTo(x + s, y, x + s, y + s, rr); g.arcTo(x + s, y + s, x, y + s, rr);
             g.arcTo(x, y + s, x, y, rr);         g.arcTo(x, y, x + s, y, rr);
             g.closePath();
-        } else {                                     // Port, Site, Other: circle
+        } else {              // Quarry, Stockpile, Port, Site, Other: circle
             g.arc(cx, cy, r, 0, Math.PI * 2);
         }
     }
-    function locGlyph(kind, fill, active) {
+    // The pile silhouette drawn INSIDE the stockpile circle. Its own path so the gauge can
+    // clip to it — the fill level is a rectangle clipped to this outline, not a second
+    // shape that has to be kept in step with it.
+    function stockPilePath(g, cx, cy, r) {
+        const w = r * 0.82, h = r * 0.62, base = cy + r * 0.46;
+        g.beginPath();
+        g.moveTo(cx - w, base);
+        g.lineTo(cx - w * 0.40, base - h * 1.30);
+        g.quadraticCurveTo(cx, base - h * 1.72, cx + w * 0.40, base - h * 1.30);
+        g.lineTo(cx + w, base);
+        g.closePath();
+        return { top: base - h * 1.72, bottom: base, left: cx - w, right: cx + w };
+    }
+    function locGlyph(kind, fill, active, stock) {
         const S = LOC_IMG_S, c = document.createElement('canvas');
         c.width = S; c.height = S;
         const g = c.getContext('2d'), cx = S / 2, cy = S / 2;
         // 'Other' is deliberately a SMALL dot — an unclassified location should not shout
         // as loudly as a quarry the network actually hauls from.
         let r = (kind === 'Other') ? 10 : 24;
-        if (active) r += 4;                          // §C: +2 CSS px
-        if (active) {                                // the halo, outside the mark
-            g.save(); locShapePath(g, kind, cx, cy, r + 4);
-            g.lineWidth = 4; g.strokeStyle = 'rgba(10,20,70,0.55)'; g.stroke(); g.restore();
+        // 2026-09-08 (pm) — THE IN-USE MARK IS A WHITE RING, NOT A SIZE.
+        // The 08 Sep morning treatment was +4 device px and a navy halo. Measured in the
+        // browser that is 26 -> 34 CSS px across, which is only readable when an UNUSED
+        // mark happens to sit beside it — and in a busy month most marks are in use, so
+        // there is nothing to compare against and the human could not see it at all. The
+        // ring is drawn OUTSIDE the mark in white with a dark rim, so it reads on the light
+        // basemap and on satellite, and it does not change the mark's own size or colour.
+        // The other half of the treatment is `icon-opacity` on the layer, which dims what
+        // is NOT in use; that one cannot live in the image.
+        if (active) {
+            g.save();
+            // ⚠️ the ring lives in the image's MARGIN, so the mark itself is the same size
+            // in both states and nothing jumps. r + 8.5 + half of 2 = 33.5 against a 36
+            // half-canvas: the outermost stroke must stay inside LOC_IMG_S / 2 or it is
+            // clipped, and a clipped ring reads as a broken mark, not a subtle one.
+            locShapePath(g, kind, cx, cy, r + 6);
+            g.lineWidth = 5; g.strokeStyle = '#ffffff'; g.stroke();
+            locShapePath(g, kind, cx, cy, r + 8.5);
+            g.lineWidth = 2; g.strokeStyle = 'rgba(10,20,70,0.75)'; g.stroke();
+            g.restore();
         }
         locShapePath(g, kind, cx, cy, r);
         g.fillStyle = fill; g.fill();
-        // a dark edge on every mark, so a white limestone diamond still reads on a light
+        // a dark edge on every mark, so a white limestone circle still reads on a light
         // basemap and a dark one still reads on satellite
         g.lineWidth = 3; g.strokeStyle = '#0A1446'; g.stroke();
 
@@ -784,25 +840,78 @@
             g.beginPath(); g.moveTo(cx - t * 0.62, cy - t * 0.24); g.lineTo(cx + t * 0.62, cy - t * 0.24); g.stroke();
             g.beginPath(); g.arc(cx, cy + t * 0.16, t * 0.78, Math.PI * 0.18, Math.PI * 0.82); g.stroke();
         } else if (kind === 'Compound') {
-            // a compound is an enclosure: a white inner rectangle, open at the gate side
-            g.strokeStyle = '#ffffff'; g.lineWidth = Math.max(2.2, r * 0.14);
-            const s = r * 0.82;
-            g.strokeRect(cx - s / 2, cy - s / 2, s, s);
-            g.strokeStyle = fill; g.lineWidth = Math.max(3, r * 0.2);
-            g.beginPath(); g.moveTo(cx + s / 2, cy - s * 0.12); g.lineTo(cx + s / 2, cy + s * 0.12); g.stroke();
+            // ⚠️ WAS a thin white outline square with a gap for the gate, which vanished
+            // below about 22 CSS px — a compound at corridor zoom was an empty amber square.
+            // A site cabin instead: SOLID white, so it survives being small. Roof band, body,
+            // and a door punched back out in the fill colour.
+            const w = r * 0.98, h = r * 0.56, top = cy - h * 0.62;
+            g.fillStyle = '#ffffff';
+            g.fillRect(cx - w * 0.62, top - h * 0.42, w * 1.24, h * 0.34);   // roof
+            g.fillRect(cx - w / 2, top, w, h * 1.18);                        // body
+            g.fillStyle = fill;
+            g.fillRect(cx - w * 0.13, top + h * 0.42, w * 0.26, h * 0.76);   // the door
         } else if (kind === 'Stockpile') {
-            // a pile: a white triangle inside the hexagon
-            g.fillStyle = '#ffffff'; const s = r * 0.68;
-            g.beginPath(); g.moveTo(cx, cy - s * 0.7); g.lineTo(cx + s, cy + s * 0.55);
-            g.lineTo(cx - s, cy + s * 0.55); g.closePath(); g.fill();
+            // ⭐ A GAUGE. The pile fills to the recorded stock level and goes red once the
+            // pile is over its capacity — the same fact the popup already states in words
+            // and the same red the Clash level uses. `stock` is the bucket from
+            // stockBucket(); 'na' is a pile with no recorded capacity and is drawn PLAIN,
+            // because an unknown pile drawn empty would read as a measured zero.
+            const box = stockPilePath(g, cx, cy, r);
+            const W = (box.right - box.left) + 4, H = (box.bottom - box.top) + 4;
+            const x0 = box.left - 2, y0 = box.top - 2;
+            g.save(); g.clip();
+            if (stock === 'na') {
+                g.fillStyle = STOCK_FILL; g.fillRect(x0, y0, W, H);
+            } else {
+                const pct = stock === 'over' ? 1 : Math.max(0, Math.min(1, Number(stock) / 100));
+                g.fillStyle = STOCK_EMPTY; g.fillRect(x0, y0, W, H);
+                g.fillStyle = stock === 'over' ? STOCK_OVER : STOCK_FILL;
+                g.fillRect(x0, y0 + H * (1 - pct), W, H * pct);
+                // ⚠️ THE STOCK LINE IS THE READABLE PART, not the two fills. Cream on cream
+                // is a few percent of luminance apart and at 26 CSS px it is not a boundary
+                // anybody can see — the first render proved that. An ink rule at the fill
+                // height is legible at every size the ramp produces. Not drawn when the pile
+                // is over (the whole pile is red) or full (the line would sit on the edge).
+                if (stock !== 'over' && pct < 1 && pct > 0) {
+                    g.strokeStyle = '#0A1446'; g.lineWidth = 2.2;
+                    g.beginPath(); g.moveTo(x0, y0 + H * (1 - pct)); g.lineTo(x0 + W, y0 + H * (1 - pct)); g.stroke();
+                }
+            }
+            g.restore();
+            stockPilePath(g, cx, cy, r);
+            g.lineWidth = 2.6; g.strokeStyle = '#0A1446';
+            // ⚠️ A pile with NO recorded capacity is drawn with a DASHED outline. Without
+            // it, 'na' and a 90-100% full pile are the same picture — both solid to the
+            // top — and the map would be claiming a reading it does not have.
+            if (stock === 'na') g.setLineDash([5, 4]);
+            g.stroke(); g.setLineDash([]);
         } else if (kind === 'Site') {
             g.fillStyle = '#ffffff'; g.beginPath(); g.arc(cx, cy, r * 0.34, 0, Math.PI * 2); g.fill();
         } else if (kind === 'Quarry') {
-            // a pick, in the ink colour so it reads on gold, white and sienna alike
-            g.strokeStyle = '#0A1446'; g.lineCap = 'round'; g.lineWidth = Math.max(2.4, r * 0.15);
+            // A PICK, in the ink colour so it reads on gold, white and sienna alike.
+            // ⚠️ The first version put the handle's far end OUTSIDE the head's arc, and
+            // rendered at 96 px it read as a figure 2. The head is now an arc that bulges
+            // UP with both tips DOWN — the silhouette of a pick head — and the handle stops
+            // under the middle of it instead of running past.
+            // ⚠️ Third attempt, and the two failures are worth recording because both
+            // rendered fine and both were WRONG at a glance:
+            //   v1  handle overshooting a shallow arc            -> read as a figure 2
+            //   v2  near-flat arc over a near-vertical handle    -> read as a letter T
+            // The head has to be PERPENDICULAR TO THE HANDLE and it has to stop where the
+            // handle stops. Built from the handle vector rather than hand-picked angles,
+            // so the two can no longer drift apart.
+            g.strokeStyle = '#0A1446'; g.lineCap = 'round'; g.lineWidth = Math.max(2.6, r * 0.15);
             const t = r * 0.56;
-            g.beginPath(); g.moveTo(cx - t, cy + t); g.lineTo(cx + t, cy - t); g.stroke();
-            g.beginPath(); g.arc(cx + t * 0.2, cy - t * 0.2, t * 0.95, Math.PI * 1.15, Math.PI * 1.75); g.stroke();
+            const ax = cx - t * 0.78, ay = cy + t * 0.88;      // butt of the handle
+            const bx = cx + t * 0.46, by = cy - t * 0.56;      // where the head sits
+            const dx = bx - ax, dy = by - ay, dl = Math.hypot(dx, dy) || 1;
+            const ux = dx / dl, uy = dy / dl;                  // along the handle
+            g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
+            // a crescent capping the handle: centred just BEHIND the head so the arc
+            // bulges past it, spanning +/- 52 degrees about the handle's own direction
+            const hcx = bx - ux * t * 0.42, hcy = by - uy * t * 0.42;
+            const a0 = Math.atan2(uy, ux), sw = Math.PI * 0.29;
+            g.beginPath(); g.arc(hcx, hcy, t * 1.02, a0 - sw, a0 + sw); g.stroke();
         }
         g.restore();
         return { width: S, height: S, data: g.getImageData(0, 0, S, S).data };
@@ -812,8 +921,8 @@
     function addLocationImages(m) {
         Object.keys(LOC_ICONS).forEach(key => {
             const spec = LOC_ICONS[key];
-            if (!m.hasImage(key)) m.addImage(key, locGlyph(spec.kind, spec.fill, false), { pixelRatio: 2 });
-            if (!m.hasImage(key + '-on')) m.addImage(key + '-on', locGlyph(spec.kind, spec.fill, true), { pixelRatio: 2 });
+            if (!m.hasImage(key)) m.addImage(key, locGlyph(spec.kind, spec.fill, false, spec.stock), { pixelRatio: 2 });
+            if (!m.hasImage(key + '-on')) m.addImage(key + '-on', locGlyph(spec.kind, spec.fill, true, spec.stock), { pixelRatio: 2 });
         });
     }
     // ---- visibility ------------------------------------------------------------------
@@ -836,6 +945,50 @@
         map.setFilter('locations', ['all', ['==', ['get', 'type'], 'Node'],
             ['in', ['get', 'loc_kind'], ['literal', visibleLocKinds()]]]);
         map.setLayoutProperty('locations', 'visibility', nodesVisible() ? 'visible' : 'none');
+    }
+
+    // ===== 2026-09-08 (pm) — THE MARKS SIT ON TOP OF EVERYTHING =====================
+    //
+    // ⚠️ THIS IS A REGRESSION THE 08 SEP MORNING SLICE INTRODUCED, and it is the human's
+    // report. Until then the sites were DOM mapboxgl.Markers, which are HTML siblings of
+    // the WebGL canvas and therefore ALWAYS above every layer, unconditionally and for
+    // free. Moving them into the canvas as a symbol layer bought the PNG export and the
+    // single-source-of-truth taxonomy — and silently put them UNDER everything added
+    // afterwards. Measured in Chromium: NINE layers drew over them, including all three
+    // forecast layers, the whole rail-alignment stack, and the selection glow. A railhead
+    // with two routes converging on it was ~70% covered by the 6 px forecast casing,
+    // which is exactly where a mark matters most.
+    //
+    // Layer ORDER in Mapbox is add order, and several of the layers above are added
+    // LAZILY (ensureForecastLayers, ensureFlowLayer, the zone and restriction builders),
+    // so there is no single add site to insert before. Hence a re-raise, called from
+    // every lazy adder AND from applyFilters(), which runs after every user action.
+    //
+    // The index guard is not decoration: setLayerZoomRange/moveLayer forces a style
+    // recalculation, and applyFilters() runs on every filter keystroke.
+    const MARK_LAYERS = ['site-gates', 'locations', 'site-gates-label'];
+    function raiseMarks() {
+        if (!map || !map.getStyle) return;
+        let ids;
+        try { ids = map.getStyle().layers.map(l => l.id); } catch (e) { return; }
+        const present = MARK_LAYERS.filter(id => ids.indexOf(id) >= 0);
+        if (!present.length) return;
+        // already the last N layers, in order? then there is nothing to do
+        const tail = ids.slice(ids.length - present.length);
+        if (tail.join('|') === present.join('|')) return;
+        present.forEach(id => { try { map.moveLayer(id); } catch (e) {} });
+    }
+
+    // The other half of the in-use treatment: what is NOT in use goes translucent while
+    // the timeline is open. It has to be a PAINT property rather than a second image,
+    // because the dimmed state is a property of the SCREEN (is a month on the playhead),
+    // not of the mark — baking it in would double the image set for every type.
+    const LOC_DIM_OPACITY = 0.34;
+    function applyLocationDim(dimming) {
+        if (!map.getLayer('locations')) return;
+        map.setPaintProperty('locations', 'icon-opacity', dimming
+            ? ['case', ['coalesce', ['get', 'is_end'], false], 1, LOC_DIM_OPACITY]
+            : 1);
     }
     function toggleNodes(visible) {
         // the master switch: it moves the seven boxes with it so the legend never claims
@@ -1059,6 +1212,10 @@
         // ⚠️ setData on a source this size is not free, and this runs on every timeline
         // tick. Only when something actually flipped.
         if (changed) src.setData(a1_data);
+        // 2026-09-08 (pm): dim the marks that are NOT ends, but only while a month is on
+        // screen. `live` is the same condition the ends themselves use, so the ring and
+        // the dimming can never disagree about whether a month is being shown.
+        applyLocationDim(live);
     }
 
     // 2026-09-08 (§B): this used to choose between RAIL_DIM and RAIL_BOLD. It no longer
@@ -1143,6 +1300,7 @@
                     'fill-extrusion-opacity': 0.55,
                 },
             });
+            raiseMarks();
         }
         return true;
     }
@@ -1433,6 +1591,7 @@
         // setTimelineMonth so that changing a filter drops the emphasis from a route the
         // filter just removed — every filter change comes through this function.
         markRouteEnds();
+        raiseMarks();
     }
 
     function resetFilters() {
@@ -1834,6 +1993,8 @@
                       'icon-size': ['interpolate', ['linear'], ['zoom'], 6, 0.55, 12, 0.9, 16, 1.1],
                       'icon-allow-overlap': true, 'icon-ignore-placement': true,
                       'icon-anchor': 'center' },
+            // set from applyLocationDim(); 1 for every mark until the timeline is open
+            paint: { 'icon-opacity': 1 },
         });
         // §F4: only when the checkbox is on. Adding it unconditionally would put a
         // fill-extrusion layer on every basemap switch for a feature that is off.
@@ -1848,6 +2009,7 @@
             paint: { 'text-color': '#475569', 'text-halo-color': '#ffffff',
                      'text-halo-width': 1.6 },
         });
+        raiseMarks();
 
         // ===== Direction of travel — REMOVED 2026-09-01 ======================
         // The inbound/outbound arrow symbol layers were deleted at the user's
@@ -2489,6 +2651,7 @@
             paint: { 'text-color': '#0A1446', 'text-halo-color': '#ffffff', 'text-halo-width': 2 },
         });
         applyZoneMonth((typeof TL !== 'undefined' && TL.on) ? TL.month : null);
+        raiseMarks();
     }
 
     // Restrict the overlay to zones whose date window overlaps the month on screen. With
@@ -2656,6 +2819,7 @@
             paint:{ 'text-color':COLOUR, 'text-halo-color':'#ffffff', 'text-halo-width':2 },
         });
         applyRestrictionFilter();
+        raiseMarks();
     }
 
     // Visibility is per KIND, but there is one layer pair, so "which kinds are ticked"
@@ -3172,6 +3336,7 @@
         if(!map.getSource('selected-route')) map.addSource('selected-route',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
         if(!map.getLayer('sel-glow')) map.addLayer({id:'sel-glow',type:'line',source:'selected-route',paint:{'line-color':CONFIG.COLORS.selection,'line-width':10,'line-opacity':0.28,'line-blur':2}});
         if(!map.getLayer('sel-core')) map.addLayer({id:'sel-core',type:'line',source:'selected-route',paint:{'line-color':CONFIG.COLORS.selection,'line-width':3.5,'line-opacity':0.95}});
+        raiseMarks();
     }
     function selectRoute(routeId){
         selectedRouteId=routeId;
@@ -3295,10 +3460,12 @@
         map.addLayer({id:'forecast-casing',type:'line',source:'routes-source',filter:['==','is_forecast',true],paint:{'line-color':CONFIG.COLORS.forecastCasing,'line-width':6,'line-opacity':0.9}});
         map.addLayer({id:'forecast-layer',type:'line',source:'routes-source',filter:['==','is_forecast',true],paint:{'line-color':CONFIG.COLORS.forecast,'line-width':3.5,'line-opacity':0.95}});
         map.addLayer({id:'forecast-labels',type:'symbol',source:'routes-source',filter:['==','is_forecast',true],layout:{'symbol-placement':'line-center','text-field':['concat', ['get', 'f_avg'], ' ', FORECAST_LABEL_UNIT],'text-size':12,'text-offset':[0,-1]},paint:{'text-color':'#ffffff','text-halo-color':CONFIG.COLORS.forecastLabelHalo,'text-halo-width':2}});
+        raiseMarks();
     }
     function ensureFlowLayer(){
         if(map.getLayer('forecast-flow') || !map.getSource('routes-source')) return;
         map.addLayer({id:'forecast-flow',type:'line',source:'routes-source',filter:['==','is_forecast',true],paint:{'line-color':'#ffffff','line-width':2,'line-opacity':0.85,'line-dasharray':[0,4,3]}});
+        raiseMarks();
     }
     // Animated "ant-march" dashes convey haul direction (origin -> destination, in
     // geometry order).
