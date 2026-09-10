@@ -290,6 +290,7 @@ def page(bucket="commit", route_id=None, acc=None, with_tark_tee=True, today=Non
         # the week's planned € and (once typed) actual € against it, through the same
         # formulas the Commit view uses for a day — a week is just a bigger quantity
         ctx = derived.line_context({"route_id": r["route_id"], "unit": r.get("unit"),
+                                    "month_index": r.get("month_index"),
                                     "material_type": r.get("material_type"),
                                     "vehicle_type": r.get("vehicle_type"), "ipt": r.get("ipt"),
                                     "discipline": r.get("discipline"), "section_id": r.get("section_id"),
@@ -300,6 +301,8 @@ def page(bucket="commit", route_id=None, acc=None, with_tark_tee=True, today=Non
         r["planned_eur"] = pf.get("eur")
         r["planned_eur_partial"] = pf.get("eur_partial")
         r["planned_eur_adj"] = pf.get("eur_adj")
+        r["planned_fair_eur"] = pf.get("fair_eur")
+        r["fair_flags"] = list(((ctx.get("fair") or {}).get("flags")) or [])
         r["planned_t"] = pf.get("tonnes")
         r["eur_variance"] = (round(float(pf["eur"]) - float(r["actual_cost_eur"]), 2)
                              if pf.get("eur") is not None and r.get("actual_cost_eur") is not None
@@ -313,6 +316,7 @@ def page(bucket="commit", route_id=None, acc=None, with_tark_tee=True, today=Non
     aw = acct.get("week") or {}
     acct["stock"] = account_stock(aw.get("month_index"), aw.get("week_index")) if aw else []
     acct["eur_target_lines"] = sum(1 for r in acct["rows"] if r.get("rate_source") == "target")
+    acct["fair_lines"] = sum(1 for r in acct["rows"] if r.get("planned_fair_eur") is not None)
     out["account"] = acct
     # the settings and index behind every € on the page (also on commit.costing)
     out["costing"] = cost

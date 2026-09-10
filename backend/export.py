@@ -129,7 +129,10 @@ def _line_rows(page, weekdays_only=True):
                 "tonnes": f.get("tonnes"), "trips": f.get("trips"), "veh": f.get("vehicles"),
                 "km_trip": c.get("km_trip"), "km_day": f.get("km_day"), "tonne_km": f.get("tonne_km"),
                 "eur": f.get("eur"), "rate_source": c.get("rate_source") or "",
-                "eur_adj": f.get("eur_adj"), "cycle_min": c.get("cycle_min"),
+                "eur_adj": f.get("eur_adj"), "fair_eur": f.get("fair_eur"),
+                "fair_eur_per_t": ((c.get("fair") or {}).get("eur_per_t")),
+                "fair_flags": " ".join(((c.get("fair") or {}).get("flags")) or []),
+                "cycle_min": c.get("cycle_min"),
                 "cycle_mark": c.get("cycle_mark") or ("" if c.get("baked") else "—"),
                 "baked": c.get("baked"), "status": d.get("status"),
                 "days_ne_week": l.get("days_ne_week"), "week_qty": (l.get("week") or {}).get("planned_qty"),
@@ -146,6 +149,7 @@ XLSX_COLS = [("Date", "date"), ("Route", "route_id"), ("Origin", "origin"), ("De
              ("Vehicle", "vehicle"), ("Qty", "qty"), ("Unit", "unit"), ("Tonnes", "tonnes"),
              ("Trips", "trips"), ("Vehicles", "veh"), ("km/trip", "km_trip"), ("km/day", "km_day"),
              ("t·km", "tonne_km"), ("€", "eur"), ("€ source", "rate_source"), ("€ + BAF", "eur_adj"),
+             ("€ fair (model)", "fair_eur"), ("fair €/t", "fair_eur_per_t"), ("fair flags", "fair_flags"),
              ("Cycle min", "cycle_min"), ("Cycle source", "cycle_mark"),
              ("Day status", "status"), ("Week qty", "week_qty"), ("Days ≠ week", "days_ne_week")]
 
@@ -193,7 +197,16 @@ def build_xlsx(page):
             ("BAF not applied because", cost.get("baf_reason") or ""),
             # the yard price and the target rates are the planner's own numbers and are
             # NOT on the supplier's sheet — only the public index and the BAF terms
-            ("Lines priced at the target rate", (page.get("commit", {}).get("totals") or {}).get("eur_target_lines"))), 1):
+            ("Lines priced at the target rate", (page.get("commit", {}).get("totals") or {}).get("eur_target_lines")),
+            ("Fair price (model) — total this week", (page.get("commit", {}).get("totals") or {}).get("fair_eur")),
+            ("Fair price: driver €/h", (cost.get("fair") or {}).get("driver_eur_per_h")),
+            ("Fair price: vehicle standing €/h", (cost.get("fair") or {}).get("vehicle_standing_eur_per_h")),
+            ("Fair price: running €/km", (cost.get("fair") or {}).get("running_eur_per_km")),
+            ("Fair price: margin %", (cost.get("fair") or {}).get("margin_pct")),
+            ("Fair price: L/100 km per tonne · rigid empty · artic empty",
+             " · ".join(str((cost.get("fair") or {}).get(k)) for k in ("l_per_100km_per_tonne", "rigid_l_per_100km_empty", "artic_l_per_100km_empty"))),
+            ("Fair price: winter months / uplift % / thaw months",
+             f"{(cost.get('fair') or {}).get('winter_months')} / {(cost.get('fair') or {}).get('winter_consumption_uplift_pct')} / {(cost.get('fair') or {}).get('thaw_months')}")), 1):
         ws_f.cell(row=i, column=1, value=k).font = Font(bold=True)
         ws_f.cell(row=i, column=2, value=v)
     ws_f.column_dimensions["A"].width = 34

@@ -2353,6 +2353,10 @@ class NoCacheStatic(StaticFiles):
 
 # Map (Mapbox app) at /map/ ; must be mounted before the catch-all "/".
 app.mount("/map", NoCacheStatic(directory=str(ROOT / "map"), html=True), name="map")
+# The user guide at /help/ (frontend/help/, landed on the repo on 10 Sep afternoon by
+# another session; its main.py mount had been lost under the costing zip). Same
+# no-cache static class, after /map, before the catch-all "/". test_help.py pins it.
+app.mount("/help", NoCacheStatic(directory=str(ROOT / "frontend" / "help"), html=True), name="help")
 
 
 @app.get("/")

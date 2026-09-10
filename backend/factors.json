@@ -342,6 +342,45 @@
       "message": "Winter conditions: check road access and allow longer cycle times on this corridor."
     }
   ],
+  "_fair_price_note": "See fair_price._README. Seeded benchmarks with sources; edit on Config.",
+  "fair_price": {
+    "_README": "10 Sep 2026 night — the FAIR PRICE model's coefficients (backend/fairprice.py). SEEDED by the human's decision: these are public cost benchmarks, not contract rates, and each carries its source. Edit on Config -> Costing · fuel, or here and 'Reset to file'. Three are ASSUMPTIONS with no public source — vehicle_new_price_eur (behind vehicle_standing_eur_per_h), running_eur_per_km, margin_pct — replace them with the fleet's own figures. The diesel price is NOT here: it is the live EU Weekly Oil Bulletin row (fuel.py).",
+    "consumption": {
+      "_source": "artic laden ~34 L/100 km: ICCT 'Fuel efficiency technology in European heavy-duty vehicles' (2018), regional delivery cycle; +0.4-0.95 L/100 km per tonne of payload: UK DfT 'Effects of payload on the fuel consumption of trucks' — both via lkw-control.com/en/truck-fuel-consumption-per-100-km (read 2026-09-10). The LOW end 0.4 is used, so empty = laden - 0.4 x payload: artic 34 - 0.4 x 26 = 23.6. Rigid 32 t average-laden ~35 L/100 km is DERIVED from this file's own DEFRA/BEIS 0.95 kg CO2e/km / 2.68 kg per litre, then 35 - 0.4 x 20 = 27 empty. The rigid figure is the weakest number in this block.",
+      "l_per_100km_per_tonne": 0.4,
+      "rigid": {
+        "l_per_100km_empty": 27.0
+      },
+      "artic": {
+        "l_per_100km_empty": 23.6
+      }
+    },
+    "_driver_source": "Statistics Estonia, Q2 2026: average gross EUR 2,243, median EUR 1,840 (stat.ee news 03.09.2026); palgad.ee lorry-driver band EUR 1,134-2,456. Taken as EUR 2,000 gross x 1.338 employer taxes (33 % social tax + 0.8 % unemployment) / 160 h / 0.85 productive = EUR 19.7/h, rounded.",
+    "driver_eur_per_h": 20.0,
+    "_vehicle_standing_source": "ASSUMPTION — no Estonian public source found. vehicle_new_price_eur 190,000 over 7 years to a 20 % residual = 21,714/yr; insurance 3 % of price = 5,700/yr; HGV road user charge EUR 1,100/yr (emta.ee, >12 t 4+ axles Euro VI); / 1,800 operating h/yr = EUR 15.8/h. Only the derivation is shown here; the price is the number to replace.",
+    "vehicle_new_price_eur": 190000,
+    "vehicle_standing_eur_per_h": 16.0,
+    "_running_source": "ASSUMPTION — tyres, maintenance and repairs per km. No Estonian public source found; UK RHA cost tables put it in the EUR 0.10-0.16/km range for tippers. Replace with the fleet's own figure.",
+    "running_eur_per_km": 0.12,
+    "_margin_source": "ASSUMPTION — a haulier's margin on top of cost. Replace with the figure the alliance considers fair.",
+    "margin_pct": 8.0,
+    "season": {
+      "_source": "Winter: US DOE fueleconomy.gov/feg/coldweather.shtml — cars ~15 % worse at -7 C in city driving; HGVs at road speed with warm engines suffer less, so +8 % Nov-Mar is an assumption inside a sourced range. Thaw: Transpordiamet's spring load restrictions — typically 8 t on many state roads and most municipal roads from early March to about mid-April, free permits for essential transport (Virumaa Teataja, 11.03.2025). A FLAG on the figure, not a cost: which roads are restricted is not data the product holds.",
+      "winter_months": [
+        11,
+        12,
+        1,
+        2,
+        3
+      ],
+      "winter_consumption_uplift_pct": 8.0,
+      "thaw_months": [
+        3,
+        4
+      ]
+    },
+    "_sanity_source": "IRU (2025): goods transport in Europe costs EUR 0.50-2.00 per km all-in. A check on the model's output, not an input. On the test fixture (60 km round trip, 20 t, 1.73 h cycle, diesel 1.922) the model gives ~EUR 113/trip = EUR 1.88/km, and the Estonian list price found on 09 Sep (EUR 45 + 1.50/km each way) gives EUR 135 for the same trip."
+  },
   "_routing_note": "vehicles[].routing holds HGV dimensions for HERE truck routing (weight kg, sizes cm, axle count).",
   "_materials_vehicles_note": "Which of the four new planning vehicles each category lists is CLAUDE'S INFERENCE, 2026-09-01, not sourced from the build list: V07/V12 tippers on soil and aggregates, V10 mixer on concrete, V11 flat semi on concrete/steel/general. It had to be decided because the Submit Forecast picker DISABLES a vehicle a category does not list, so an unlisted planning vehicle would be unselectable. The join is advisory in the UI, not enforced - correct any line of it freely.",
   "_labels_note": "labels.{en,eu,ee} per vehicle - 2026-09-02, the EN/EU/EE toggle. The KEY is the canonical id and is what a forecast line stores; a label only changes what the picker shows. Missing en/eu/ee falls back to the key, never to an invented name. EU strings exist only for the four planning vehicles (the key IS the EU 2018/858 string); the six legacy keys are UK trade names, so their EU label falls back to the key. ee is ABSENT on every entry: the build list names 'veoauto, sadulveduk, kallur' as examples of EE official aliases but does not say which vehicle each belongs to, and the EU matrix that carries them is not in this repo. Fill labels.ee here and the toggle picks it up."

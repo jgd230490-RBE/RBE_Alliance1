@@ -76,6 +76,7 @@ import math
 import conversions
 import costing
 import db
+import fairprice
 import fuel
 import network
 
@@ -171,7 +172,13 @@ def costing_context():
     fetch: the index is whatever fuel.py last stored.
     """
     s = costing.settings()
-    return costing.summary(fuel.get_index(s["fuel"].get("country") or fuel.DEFAULT_COUNTRY))
+    out = costing.summary(fuel.get_index(s["fuel"].get("country") or fuel.DEFAULT_COUNTRY))
+    # 10 Sep night: the fair-price model's coefficients, from the live factors document
+    # (falling back to factors.json's seeded block key by key)
+    p = fairprice.params(conversions.load_factors())
+    out["fair_params"] = p
+    out["fair"] = fairprice.summary(p, out.get("index_eur_per_l"))
+    return out
 
 
 def cycle_for(route_id, vehicle, cache=None):
@@ -229,6 +236,17 @@ def line_context(line, factors, routes=None, cache=None, cost=None):
     # the route's own rates where any is typed, else the tenant's target rates, else none
     rates, rate_source = costing.resolve_rates(route_rates, cost.get("target"))
     rate_set = rate_source is not None
+    # 10 Sep night: the fair-price model, per trip, from the line's own month. A route
+    # that is not baked has no distance and therefore no fair price — nothing invented.
+    mi = line.get("month_index")
+    cal_month = ((int(mi) - 1) % 12) + 1 if mi is not None else None
+    vclass = fairprice.vehicle_class(veh, factors)
+    fair = None
+    if baked and cal_month is not None:
+        fair = fairprice.trip_cost({"baked": True, "distance_km": dist, "return_km": ret,
+                                    "cycle_min": cycle_min, "payload_t": payload,
+                                    "vehicle_class": vclass},
+                                   cal_month, cost.get("index_eur_per_l"), cost.get("fair_params") or {})
     return {
         "origin_id": rt.get("origin_id"), "origin_name": rt.get("origin_name"),
         "dest_id": rt.get("dest_id"), "dest_name": rt.get("dest_name"),
@@ -259,6 +277,9 @@ def line_context(line, factors, routes=None, cache=None, cost=None):
         # 10 Sep evening: where the rates came from, and the typed ones for the form
         "rate_source": rate_source, "route_rates": route_rates,
         "baf_pct": cost.get("baf_pct"),
+        "vehicle_class": vclass, "month": cal_month,
+        # per-trip fair cost and its breakdown, or None (unbaked / no index / blank coefficient)
+        "fair": fair,
         "km_basis": basis,
         "basis_km": (round(basis_km, 2) if basis_km is not None else None),
         "flags": flags,
@@ -291,7 +312,7 @@ def day_figures(qty, ctx, factors):
         trips = _ceil(t / payload) if payload > 0 else 0
     out = {"tonnes": round(t, 3), "trips": trips,
            "vehicles": None, "km_day": None, "km_per_vehicle": None, "tonne_km": None,
-           "eur": None, "eur_partial": False, "eur_adj": None}
+           "eur": None, "eur_partial": False, "eur_adj": None, "fair_eur": None}
     rates = ctx.get("rates") or {}
     per_load, per_t, per_km = rates.get("per_load"), rates.get("per_t"), rates.get("per_km")
     if not ctx.get("baked"):
@@ -319,6 +340,11 @@ def day_figures(qty, ctx, factors):
                            + trips * basis_km * (per_km or 0), 2)
         # Quote + BAF beside the quote — None until an index, a base and a share exist
         out["eur_adj"] = costing.adjust(out["eur"], ctx.get("baf_pct"))
+    # the fair price is a THIRD figure, present whenever the model can run — a line with
+    # no quote and no target still gets one, marked fair (model) wherever it is shown
+    fair = ctx.get("fair")
+    if fair and fair.get("eur_trip") is not None:
+        out["fair_eur"] = round(trips * float(fair["eur_trip"]), 2)
     return out
 
 
@@ -338,14 +364,15 @@ def decorate(res, factors=None):
     by_day = {}                                  # date -> summed vehicles across lines
     tot = {"planned_t": 0.0, "trips": 0, "tonne_km": 0.0, "km": 0.0,
            "lines": 0, "unbaked_lines": 0, "eur": 0.0, "eur_lines": 0, "eur_partial": False,
-           "eur_target_lines": 0, "eur_adj": 0.0, "eur_adj_lines": 0}
+           "eur_target_lines": 0, "eur_adj": 0.0, "eur_adj_lines": 0,
+           "fair_eur": 0.0, "fair_lines": 0}
     for line in res.get("lines", []) or []:
         ctx = line_context(line, factors, routes=routes, cache=cache, cost=cost)
         line["context"] = ctx
         wk = {"tonnes": 0.0, "trips": 0, "vehicles_peak": (0 if ctx["baked"] else None),
               "km": (0.0 if ctx["baked"] else None),
               "tonne_km": (0.0 if ctx["baked"] else None),
-              "eur": None, "eur_partial": False, "eur_adj": None,
+              "eur": None, "eur_partial": False, "eur_adj": None, "fair_eur": None,
               "rate_source": ctx.get("rate_source")}
         for d in line.get("days", []) or []:
             f = day_figures(d.get("planned_qty"), ctx, factors)
@@ -357,6 +384,8 @@ def decorate(res, factors=None):
                 wk["eur_partial"] = wk["eur_partial"] or f["eur_partial"]
             if f.get("eur_adj") is not None:
                 wk["eur_adj"] = (wk["eur_adj"] or 0.0) + f["eur_adj"]
+            if f.get("fair_eur") is not None:
+                wk["fair_eur"] = (wk["fair_eur"] or 0.0) + f["fair_eur"]
             if ctx["baked"]:
                 wk["vehicles_peak"] = max(wk["vehicles_peak"], f["vehicles"] or 0)
                 wk["km"] += f["km_day"] or 0.0
@@ -367,6 +396,8 @@ def decorate(res, factors=None):
             wk["eur"] = round(wk["eur"], 2)
         if wk["eur_adj"] is not None:
             wk["eur_adj"] = round(wk["eur_adj"], 2)
+        if wk["fair_eur"] is not None:
+            wk["fair_eur"] = round(wk["fair_eur"], 2)
         if ctx["baked"]:
             wk["km"] = round(wk["km"], 2)
             wk["tonne_km"] = round(wk["tonne_km"], 1)
@@ -387,6 +418,9 @@ def decorate(res, factors=None):
         if wk["eur_adj"] is not None:
             tot["eur_adj"] += wk["eur_adj"]
             tot["eur_adj_lines"] += 1
+        if wk["fair_eur"] is not None:
+            tot["fair_eur"] += wk["fair_eur"]
+            tot["fair_lines"] += 1
     peak_date = max(by_day, key=lambda k: by_day[k]) if by_day else None
     res["totals"] = {
         "planned_t": round(tot["planned_t"], 3),
@@ -412,6 +446,9 @@ def decorate(res, factors=None):
         "eur_target_lines": tot["eur_target_lines"],
         "eur_adj": (round(tot["eur_adj"], 2) if tot["eur_adj_lines"] else None),
         "baf_pct": cost.get("baf_pct"),
+        # 10 Sep night: the model's total over the lines it can price (baked, with an index)
+        "fair_eur": (round(tot["fair_eur"], 2) if tot["fair_lines"] else None),
+        "fair_lines": tot["fair_lines"],
     }
     # the settings, index and BAF behind the figures — once per response, not per line
     res["costing"] = cost

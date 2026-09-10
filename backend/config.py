@@ -169,6 +169,35 @@ def validate(doc, network=None):
             x = plan.get(f)
             if not num(x) or x <= 0:
                 p.append(f"planning.{f} must be a positive number")
+    # 10 Sep night: the fair-price block, when present — numbers >= 0, months 1-12
+    fp = doc.get("fair_price")
+    if fp is not None:
+        if not isinstance(fp, dict):
+            p.append("fair_price must be an object")
+        else:
+            for f in ("driver_eur_per_h", "vehicle_standing_eur_per_h", "running_eur_per_km",
+                      "margin_pct", "vehicle_new_price_eur"):
+                x = fp.get(f)
+                if x is not None and (not num(x) or x < 0):
+                    p.append(f"fair_price.{f} must be a number >= 0")
+            cons = fp.get("consumption") or {}
+            if isinstance(cons, dict):
+                x = cons.get("l_per_100km_per_tonne")
+                if x is not None and (not num(x) or x < 0):
+                    p.append("fair_price.consumption.l_per_100km_per_tonne must be a number >= 0")
+                for cls in ("rigid", "artic"):
+                    y = (cons.get(cls) or {}).get("l_per_100km_empty") if isinstance(cons.get(cls), dict) else None
+                    if y is not None and (not num(y) or y <= 0):
+                        p.append(f"fair_price.consumption.{cls}.l_per_100km_empty must be a positive number")
+            se = fp.get("season") or {}
+            if isinstance(se, dict):
+                for f in ("winter_months", "thaw_months"):
+                    ms = se.get(f) or []
+                    if not all(isinstance(m, int) and 1 <= m <= 12 for m in ms):
+                        p.append(f"fair_price.season.{f} must be integers 1-12")
+                u = se.get("winter_consumption_uplift_pct")
+                if u is not None and (not num(u) or u < 0):
+                    p.append("fair_price.season.winter_consumption_uplift_pct must be a number >= 0")
     for w in doc.get("seasonal_restrictions") or []:
         if not isinstance(w, dict) or not w.get("name"):
             p.append("every seasonal restriction needs a name")
