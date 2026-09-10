@@ -760,7 +760,7 @@ function Portal({ role, who, meta, metaErr, vehLang }){
         {page === "dashboard" && <Dashboard meta={meta} />}
         {page === "submit" && <Matrix meta={meta} who={who} editTarget={editTarget} vehLang={vehLang} access={role} />}
         {page === "forecasts" && <Forecasts meta={meta} who={who} access={role} onEdit={editInMatrix} onChanged={refreshPending} />}
-        {page === "lookahead" && <LookAhead meta={meta} who={who} />}
+        {page === "lookahead" && <LookAhead meta={meta} who={who} access={role} />}
         {/* one mounted instance across the three data pages — see the note at the top */}
         {DATA_PAGES.includes(page) && canApprove && (
           <DataManagement meta={meta} who={who} subTab={page} onSubTab={(t) => setPage(t)} />
@@ -1655,6 +1655,69 @@ function Forecasts({ meta, who, access, onEdit, onChanged }){
 // form-backed editing plus a raw JSON tab for everything the forms do not cover
 // (routing dimensions, aliases, notes). Save sends the WHOLE document; the server
 // validates it and refuses with the list of problems rather than storing a bad one.
+// ---- 10 Sep evening: the Costing tab — the TARGET rates and the fuel widget ----------
+// The target rates are the Planned € for every route that has no rate of its own: typed
+// once here, never seeded, saved with the admin token because one number moves every
+// unpriced line. Saved on their own endpoint, not inside the factors document, so the
+// Save button above (which sends the whole factors doc) does not carry them.
+function CostingTab({ who, access, token, setToken }){
+  const [data, setData] = useState(null);
+  const [draft, setDraft] = useState({});
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => fetch(`${API}/costing`).then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(j => { setData(j); setDraft({}); })
+    .catch(e => setMsg({ ok: false, text: `Couldn't load the costing settings (${e}).` }));
+  useEffect(() => { load(); }, []);
+  const tg = (data && data.target) || {};
+  const save = async () => {
+    const body = { updated_by: who || null };
+    let bad = null;
+    ["rate_eur_per_load", "rate_eur_per_t", "rate_eur_per_km"].forEach(k => {
+      if(draft[k] === undefined) return;
+      if(draft[k] === ""){ body[k] = null; return; }
+      const n = numOr(draft[k], null); if(n === null){ bad = k; } else body[k] = n;
+    });
+    if(bad){ setMsg({ ok: false, text: "A target rate must be a number." }); return; }
+    try { localStorage.setItem("rbe_admin_token", token); } catch(e){}
+    setBusy(true); setMsg(null);
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    try {
+      const r = await fetch(`${API}/admin/costing/target${qs}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if(!r.ok) throw new Error((await r.text()).slice(0, 300).replace(/^\{"detail":"|"\}$/g, ""));
+      setData(await r.json()); setDraft({});
+      setMsg({ ok: true, text: "Saved. Every route without a rate of its own now prices at the target, marked \"target\" on the Look-ahead." });
+    } catch(e){ setMsg({ ok: false, text: "Not saved — " + e.message }); }
+    setBusy(false);
+  };
+  const inp = "border border-slate-300 rounded-md px-2 py-1 text-sm w-full tabular-nums";
+  const dirty = ["rate_eur_per_load", "rate_eur_per_t", "rate_eur_per_km"].some(k => draft[k] !== undefined);
+  return (
+    <div className="p-4 space-y-4">
+      {msg && <div className="rounded-lg border p-2.5 text-sm" style={{ borderColor: msg.ok ? "var(--green)" : "var(--red)", color: msg.ok ? "var(--green)" : "var(--red)" }}>{msg.text}</div>}
+      <div>
+        <div className="text-sm font-semibold text-slate-700">Target rate — the planned price where a route has no rate</div>
+        <p className="text-[11px] text-slate-400 mt-0.5 mb-2">Summed like the route rates (€ per load + € per tonne + € per km on the route's km basis). Used ONLY for routes with no rate typed on the route form; a route with any rate of its own is priced from that alone. Every figure it produces is marked "target" on the Look-ahead and the exports. Typed, never seeded. Admin token to save.</p>
+        {!data ? <div className="text-slate-400 text-sm">Loading…</div> : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-3xl items-end">
+            {[["rate_eur_per_load", "€ per load"], ["rate_eur_per_t", "€ per tonne"], ["rate_eur_per_km", "€ per km"]].map(([k, l]) => (
+              <label key={k} className="block">
+                <span className="text-[11px] uppercase tracking-wide text-slate-400">{l}</span>
+                <input className={inp + " mt-1"} inputMode="decimal" placeholder="—" value={draft[k] ?? (tg[k] ?? "")} onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))} />
+              </label>
+            ))}
+            <button onClick={save} disabled={busy || !dirty} className="px-4 py-1.5 rounded-lg text-white text-sm font-semibold disabled:opacity-50" style={{ background: "var(--navy)" }}>{busy ? "Saving…" : "Save target rate"}</button>
+          </div>
+        )}
+      </div>
+      <div>
+        <div className="text-sm font-semibold text-slate-700 mb-1">Diesel index and fuel surcharge (BAF)</div>
+        <FuelWidget mode="config" who={who} access={access} initial={data && data.summary} onChanged={load} />
+      </div>
+    </div>
+  );
+}
+
 function ConfigPage({ meta, who, access }){
   const [doc, setDoc] = useState(null);
   const [orig, setOrig] = useState(null);
@@ -1709,7 +1772,7 @@ function ConfigPage({ meta, who, access }){
   };
 
   const inp = "border border-slate-300 rounded-md px-2 py-1 text-sm w-full tabular-nums";
-  const TABS = [["vehicles", "Vehicles"], ["materials", "Materials"], ["planning", "Planning"], ["seasonal", "Seasonal restrictions"], ["raw", "Everything (JSON)"]];
+  const TABS = [["vehicles", "Vehicles"], ["materials", "Materials"], ["planning", "Planning"], ["costing", "Costing · fuel"], ["seasonal", "Seasonal restrictions"], ["raw", "Everything (JSON)"]];
 
   return (
     <div className="max-w-7xl mx-auto p-6">
@@ -1823,6 +1886,8 @@ function ConfigPage({ meta, who, access }){
               ))}
             </div>
           )}
+
+          {tab === "costing" && <CostingTab who={who} access={access} token={token} setToken={setToken} />}
 
           {tab === "seasonal" && (
             <div className="p-4 space-y-3">
@@ -1984,10 +2049,152 @@ function LineFlags({ flags }){
   );
 }
 
+// ---- 10 Sep evening: the fuel-price widget — ONE component, THREE mounts --------------
+// Account (top of the strip), Commit (the KPI strip, right of t·km) and Config (under the
+// rates). It reads /api/fuel-index — the STORED EU Weekly Oil Bulletin diesel row plus the
+// tenant's fuel settings — never the feed itself; the server refreshes in the background
+// when the row is older than 12 h and this polls `refresh` while it runs. Two numbers,
+// deliberately: the INDEX (public, weekly, what BAF is computed from) and the YARD price
+// (typed, what the haulier pays, for a later cost-plus slice). The feed never writes the
+// yard; the yard never changes the index. Nothing is seeded — no share, no base, no price.
+// `initial` is the page's own `costing` block, so a mount inside the Look-ahead paints at
+// once from the page read and the widget's fetch only refines it.
+const fuelDate = (iso) => iso ? longDate(String(iso).slice(0, 10)) : "—";
+const costingToData = (c) => !c ? null : ({
+  fuel: c.fuel || {}, summary: c,
+  index: { eur_per_l: c.index_eur_per_l, bulletin_date: c.index_bulletin_date, source: c.index_source,
+           stale: c.index_eur_per_l == null, refresh: null, attribution: "EU Weekly Oil Bulletin via EuroOilWatch" } });
+function FuelWidget({ who, access, mode, initial, onChanged }){
+  // mode: "compact" (Commit KPI card) · "strip" (Account, one row) · "config" (everything)
+  const [fetched, setFetched] = useState(null);
+  const [draft, setDraft] = useState({});
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [token, setToken] = useState(() => { try { return localStorage.getItem("rbe_admin_token") || ""; } catch(e){ return ""; } });
+  const canType = !!(access && access.can_approve);
+  const load = (lazy) => fetch(`${API}/fuel-index?lazy=${lazy ? 1 : 0}`).then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(j => { setFetched(j); return j; })
+    .catch(e => { setErr(`Couldn't read the fuel index (${e}).`); return null; });
+  useEffect(() => {
+    let live = true, timer = null;
+    const poll = (j) => {
+      if(!live || !j) return;
+      const rf = j.index && j.index.refresh;
+      if(rf && rf.running){ timer = setTimeout(() => load(false).then(poll), 3000); }
+      else if(rf && rf.finished_at && onChanged && j.__polled){ onChanged(); }
+    };
+    load(true).then(j => { if(j && j.index && j.index.refresh && j.index.refresh.running){ j.__polled = true; } poll(j); });
+    return () => { live = false; if(timer) clearTimeout(timer); };
+  }, []);
+  const data = fetched || costingToData(initial);
+  const idx = (data && data.index) || {};
+  const fuelS = (data && data.fuel) || {};
+  const sum = (data && data.summary) || {};
+  const rf = idx.refresh || {};
+  const put = async (path, body, method, admin) => {
+    setBusy(true); setErr("");
+    try {
+      if(admin){ try { localStorage.setItem("rbe_admin_token", token); } catch(e){} }
+      const qs = admin && token ? `?token=${encodeURIComponent(token)}` : "";
+      const r = await fetch(`${API}${path}${qs}`, { method: method || "PUT", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+      if(!r.ok) throw new Error((await r.text()).slice(0, 200).replace(/^\{"detail":"|"\}$/g, ""));
+      const j = await r.json(); setFetched(j); setDraft({});
+      if(onChanged) onChanged();
+    } catch(e){ setErr(String(e.message || e)); }
+    setBusy(false);
+  };
+  const saveSetting = (k) => {
+    if(draft[k] === undefined) return;
+    const v = draft[k] === "" ? null : numOr(draft[k], null);
+    if(draft[k] !== "" && v === null){ setErr(`${k === "share_pct" ? "Fuel share" : "Yard price"} must be a number.`); return; }
+    put("/fuel-index/settings", { [k]: v, updated_by: who || null });
+  };
+  const hasIndex = idx.eur_per_l != null;
+  const price = hasIndex ? `€${(+idx.eur_per_l).toFixed(3)} / L` : null;
+  const country = fuelS.country || "EE";
+  const bafTxt = sum.baf_pct != null
+    ? `BAF ${sum.baf_pct >= 0 ? "+" : ""}${(sum.baf_pct * 100).toFixed(2)} % of quote`
+    : sum.baf_reason === "no base" ? "BAF: set a base on Confirm week"
+    : sum.baf_reason === "no share" ? "BAF: type a fuel share"
+    : "BAF: no index";
+  const baseTxt = fuelS.baf_base_eur_per_l != null ? `base €${(+fuelS.baf_base_eur_per_l).toFixed(3)} · ${fuelDate(fuelS.baf_base_bulletin_date)}` : "no base locked";
+  const staleChip = hasIndex && idx.stale ? <span className="ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full" style={{ color: "#B45309", background: "rgba(217,119,6,.14)" }} title="The last good bulletin is older than 8 days">stale</span> : null;
+  const inputCls = "border border-slate-300 rounded px-1.5 py-0.5 text-xs text-right tabular-nums w-20";
+  const setting = (k, label, placeholder, title) => (
+    <label className="inline-flex items-center gap-1 text-[11px] text-slate-600" title={title}>
+      <span>{label}</span>
+      {canType ? (
+        <input className={inputCls} inputMode="decimal" placeholder={placeholder}
+          value={draft[k] ?? (fuelS[k] ?? "")}
+          onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))}
+          onBlur={() => saveSetting(k)} disabled={busy} />
+      ) : <span className="tabular-nums">{fuelS[k] ?? "—"}</span>}
+    </label>
+  );
+  const attribution = <span className="text-[10px] text-slate-400" title={idx.source === "manual" ? "typed by an admin on Config" : "EU Weekly Oil Bulletin, Estonia, automotive diesel, price with taxes — via EuroOilWatch"}>
+    {idx.source === "manual" ? "typed index" : "EU Weekly Oil Bulletin via EuroOilWatch"}</span>;
+
+  if(mode === "compact"){
+    return (
+      <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 min-w-0" data-fuel-widget="compact">
+        <div className="text-2xl font-bold tabular-nums truncate" style={{ color: "var(--navy-deep)" }}>
+          {hasIndex ? price : <span className="text-base text-amber-700">Index unavailable</span>}{staleChip}
+        </div>
+        <div className="text-[10px] uppercase tracking-wide text-slate-400 mt-0.5 truncate" title={bafTxt}>
+          diesel {country} · {hasIndex ? `bulletin ${fuelDate(idx.bulletin_date)}` : "type a price on Config"}{rf.running ? " · updating…" : ""}
+        </div>
+        <div className="text-[10px] text-slate-500 mt-0.5 truncate">{bafTxt}</div>
+      </div>
+    );
+  }
+  return (
+    <div className={"rounded-xl border border-slate-200 bg-white " + (mode === "config" ? "p-4" : "px-4 py-2.5 mb-3")} data-fuel-widget={mode || "strip"}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        <div className="flex items-baseline gap-2 min-w-0">
+          <span className="text-[10px] uppercase tracking-wide text-slate-400">Diesel {country}</span>
+          {hasIndex ? <span className="text-lg font-bold tabular-nums" style={{ color: "var(--navy-deep)" }}>{price}</span>
+                    : <span className="text-sm font-semibold text-amber-700">Index unavailable — {canType ? "type a price" : "not set"}</span>}
+          {staleChip}
+          <span className="text-[11px] text-slate-500">{hasIndex ? `bulletin ${fuelDate(idx.bulletin_date)}` : (idx.last_error ? `feed: ${String(idx.last_error).slice(0, 60)}` : "")}</span>
+          {rf.running && <span className="text-[11px] text-slate-400">updating…</span>}
+          {!rf.running && idx.last_error && hasIndex && <span className="text-[11px]" style={{ color: "var(--red)" }} title={idx.last_error}>· last fetch failed {String(idx.last_attempt_at || "").replace("T", " ").slice(0, 16)}; the stored bulletin stands</span>}
+        </div>
+        {setting("yard_eur_per_l", "Yard €/L", "—", "What the haulier actually pays at the yard. Optional; for cost-plus later. Never replaces the bulletin index.")}
+        {setting("share_pct", "Fuel share %", "—", "Fuel's share of the haulage price, 0–100. Empty = no BAF line.")}
+        <span className="text-[11px] font-semibold tabular-nums" style={{ color: sum.baf_pct != null ? "var(--navy)" : "#64748b" }} title={baseTxt}>{bafTxt}</span>
+        <span className="text-[10px] text-slate-400">{baseTxt}</span>
+        <span className="ml-auto">{attribution}</span>
+      </div>
+      {mode === "config" && (
+        <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-slate-600">
+          <span className="text-[10px] uppercase tracking-wide text-slate-400">Admin</span>
+          <input value={token} onChange={e => setToken(e.target.value)} placeholder="Admin token" className="border border-slate-200 rounded px-2 py-0.5 text-xs w-32" />
+          <button onClick={() => put("/admin/fuel-index/refresh?sync=1", null, "POST", true)} disabled={busy || rf.running}
+            className="font-semibold px-2 py-0.5 rounded border border-slate-200 hover:bg-slate-50 disabled:opacity-40">Fetch the bulletin now</button>
+          <label className="inline-flex items-center gap-1">
+            <span>Manual index €/L</span>
+            <input className={inputCls} inputMode="decimal" placeholder="—" value={draft.manual_eur ?? ""} onChange={e => setDraft(d => ({ ...d, manual_eur: e.target.value }))} />
+            <input type="date" className="border border-slate-300 rounded px-1.5 py-0.5 text-xs" value={draft.manual_date ?? ""} onChange={e => setDraft(d => ({ ...d, manual_date: e.target.value }))} />
+            <button onClick={() => put("/admin/fuel-index/manual", { eur_per_l: numOr(draft.manual_eur, null), bulletin_date: draft.manual_date || "", updated_by: who || null }, "PUT", true)}
+              disabled={busy || !draft.manual_eur || !draft.manual_date}
+              className="font-semibold px-2 py-0.5 rounded border border-slate-200 hover:bg-slate-50 disabled:opacity-40"
+              title="When the feed is down: writes the same index row, marked 'typed'. It is the INDEX, not the yard price.">Use this index</button>
+          </label>
+          <button onClick={() => { if(confirm("Clear the locked BAF base? The next Confirm week will lock a fresh one from the index of that day.")) put(`/admin/fuel-index/reset-base?updated_by=${encodeURIComponent(who || "")}`, null, "POST", true); }}
+            disabled={busy || fuelS.baf_base_eur_per_l == null}
+            className="font-semibold px-2 py-0.5 rounded border disabled:opacity-40" style={{ borderColor: "var(--red)", color: "var(--red)" }}>Reset the BAF base</button>
+          <span className="w-full text-[10px] text-slate-400">The base is locked by the first Confirm week that finds an index and no base; later confirms never move it. BAF = (index ÷ base − 1) × fuel share, applied as a second figure beside every quote — the quote itself is never replaced. One base per tenant, not per haulier.</span>
+        </div>
+      )}
+      {err && <div className="text-[11px] mt-1" style={{ color: "var(--red)" }}>{err}</div>}
+    </div>
+  );
+}
+
 // `initialPage` / `initialView` exist for the render harness only — useEffect does not run
 // under renderToStaticMarkup, so without them the populated views could never be rendered
 // in a test. The app never passes them.
-function LookAhead({ meta, who, initialPage, initialView }){
+function LookAhead({ meta, who, access, initialPage, initialView }){
   const { months } = meta;
   const [view, setView] = useState(() => { if(initialView) return initialView; try { return localStorage.getItem("rbe_la_view") || "commit"; } catch(e){ return "commit"; } });
   const [bucket, setBucket] = useState("commit");        // 'commit' = the week containing today · 'next' = the Thursday process
@@ -2197,12 +2404,16 @@ function LookAhead({ meta, who, initialPage, initialView }){
       : view === "commit" ? (
         <>
           {/* KPI strip — six cards; only the shortage is coloured */}
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3 mb-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 mb-3">
             <LaKpi value={`${grp(totals.planned_t)} t`} caption="planned this week" />
             <LaKpi value={grp(totals.trips)} caption="trips" />
             <LaKpi value={grp(totals.vehicles_peak)} caption={"vehicles / day peak" + (totals.excludes_unbaked ? " · unbaked lines excluded" : "")} />
             <LaKpi value={grp(totals.tonne_km)} caption="t·km · route basis" />
-            <LaKpi value={totals.eur == null ? "—" : "€ " + grp(totals.eur)} caption={totals.eur == null ? "planned € · no rate typed" : `planned € · ${totals.eur_lines} of ${totals.lines} lines priced${totals.eur_partial ? " · partial" : ""}`} />
+            {/* 10 Sep evening: the diesel index, right of t·km — the same widget as Account and Config */}
+            <FuelWidget mode="compact" who={who} access={access} initial={page && page.costing} onChanged={() => setTick(t => t + 1)} />
+            <LaKpi value={totals.eur == null ? "—" : "€ " + grp(totals.eur)}
+              caption={totals.eur == null ? "planned € · no rate typed, no target set"
+                : `planned € · ${totals.eur_lines} of ${totals.lines} lines priced${totals.eur_target_lines ? ` · ${totals.eur_target_lines} at target` : ""}${totals.eur_partial ? " · partial" : ""}${totals.eur_adj != null ? ` · + BAF € ${grp(totals.eur_adj)}` : ""}`} />
             <LaKpi value={account.shortfall > 0 ? `+${grp(account.shortfall)}` : "0"} tone={account.shortfall > 0 ? "red" : undefined} caption="last week shortage" />
             <LaKpi value={account.lines ? `${account.delivered} of ${account.lines} lines` : "—"} caption="last week delivered" />
           </div>
@@ -2337,10 +2548,10 @@ function LookAhead({ meta, who, initialPage, initialView }){
                                     {grp(c.km_trip)} km/trip{c.return_baked ? "" : " (outbound only — return not baked)"} · {grp(wd.km)} km/week
                                     · {grp(wd.vehicles_peak)} veh peak · {grp(wd.tonne_km)} t·km ({c.km_basis === "loaded" ? "loaded leg" : "round trip"})
                                     · cycle {grp(c.cycle_min)} min {c.cycle_source === "here" ? "HERE" : "HERE‡ (return estimated)"}
-                                    · {c.cycles_per_vehicle_day} cycles/veh/day · {wd.eur == null ? "rate not set" : `€ ${grp(wd.eur)}${wd.eur_partial ? " (per-km term missing)" : ""} this week`}
+                                    · {c.cycles_per_vehicle_day} cycles/veh/day · {wd.eur == null ? "rate not set" : `€ ${grp(wd.eur)}${c.rate_source === "target" ? " (target rate)" : ""}${wd.eur_partial ? " (per-km term missing)" : ""} this week${wd.eur_adj != null ? ` · + BAF € ${grp(wd.eur_adj)}` : ""}`}
                                   </>
                                 ) : (
-                                  <span className="text-amber-700">km — until the route is baked · trips still from {grp(c.payload_t, 1)} t planning payload{c.payload_fallback ? ` (${c.payload_fallback} fallback)` : ""}{wd.eur != null ? ` · € ${grp(wd.eur)}${wd.eur_partial ? " without the per-km term" : ""}` : ""}</span>
+                                  <span className="text-amber-700">km — until the route is baked · trips still from {grp(c.payload_t, 1)} t planning payload{c.payload_fallback ? ` (${c.payload_fallback} fallback)` : ""}{wd.eur != null ? ` · € ${grp(wd.eur)}${c.rate_source === "target" ? " (target rate)" : ""}${wd.eur_partial ? " without the per-km term" : ""}${wd.eur_adj != null ? ` · + BAF € ${grp(wd.eur_adj)}` : ""}` : ""}</span>
                                 )}
                               </td>
                             </tr>
@@ -2366,6 +2577,8 @@ function LookAhead({ meta, who, initialPage, initialView }){
         </>
       ) : view === "account" ? (
         <>
+          {/* 10 Sep evening: the diesel index and the two fuel settings, top of the strip */}
+          <FuelWidget mode="strip" who={who} access={access} initial={page && page.costing} onChanged={() => setTick(t => t + 1)} />
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-3">
             <LaKpi value={account.lines ? `${account.delivered} of ${account.lines} lines` : "—"} caption="last week delivered · 98% band" />
             <LaKpi value={`${grp(account.actual_t)} t`} caption={`actual moved · ${account.reported || 0} of ${account.lines || 0} reported`} />
@@ -2416,7 +2629,12 @@ function LookAhead({ meta, who, initialPage, initialView }){
                             style={{ color: r.variance == null ? "#cbd5e1" : r.variance > 0 && !r.held ? "var(--red)" : "var(--green)" }}>
                             {r.variance == null ? "—" : (r.variance > 0 ? "+" : "") + grp(r.variance, 1)}
                           </td>
-                          <td className="px-2 py-2 text-right tabular-nums text-slate-600">{r.planned_eur == null ? <span className="text-slate-300">rate not set</span> : "€ " + grp(r.planned_eur)}</td>
+                          <td className="px-2 py-2 text-right tabular-nums text-slate-600">
+                            {r.planned_eur == null ? <span className="text-slate-300">rate not set</span> : <>
+                              <div>€ {grp(r.planned_eur)}{r.rate_source === "target" && <span className="ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full text-slate-600 bg-slate-100" title="No rate on this route — priced at the target rate from Config">target</span>}</div>
+                              {r.planned_eur_adj != null && <div className="text-[10px] text-slate-500" title="Quote × (1 + BAF). The quote above is unchanged.">+ BAF € {grp(r.planned_eur_adj)}</div>}
+                            </>}
+                          </td>
                           <td className="px-2 py-2 text-right">
                             <input className={fld + " max-w-[110px] ml-auto"} inputMode="decimal" placeholder="€ —"
                               title="The confirmed cost of this week, as invoiced or agreed. Typed, never derived."
@@ -2455,6 +2673,7 @@ function LookAhead({ meta, who, initialPage, initialView }){
                 <div>Variance = planned − actual. Green = held (within the 98 % band) or over-delivered. Red = short. Empty actual is not zero — it is "not reported".
                   Calibrate never fires on save; only the navy button writes the commit week, and only if that week is not already confirmed.</div>
                 <div>"Spread on this week" divides the shortage not yet carried across the remaining weekdays of the commit week (all of Mon–Fri when that week has not started). Sat/Sun stay 0 unless you type them. A second press carries only what the first did not.</div>
+                <div>Planned € is the route's own rates, or the target rate from Config where the route has none (marked "target"). "+ BAF" is the same quote with the fuel surcharge; the quote is never replaced. € var compares the actual against the quote, not the surcharged figure.{account.eur_target_lines ? ` ${account.eur_target_lines} line${account.eur_target_lines === 1 ? "" : "s"} at the target rate.` : ""}</div>
                 {busy && <span className="text-slate-500">saving…</span>}
               </div>
             </div>
@@ -2778,7 +2997,7 @@ function RoutePlanning({ route, token, onSaved }){
   return (
     <div className="border-t border-slate-200 pt-3 mt-3 space-y-2">
       <div className="text-sm font-semibold text-slate-700">Planning · Look-ahead</div>
-      <p className="text-[11px] text-slate-400">Typed, never seeded. Rates are SUMMED where filled (a base per load plus a per-km rate is the usual Estonian quote). Blank = no rate, and the Look-ahead prints "rate not set".</p>
+      <p className="text-[11px] text-slate-400">Typed, never seeded. Rates are SUMMED where filled (a base per load plus a per-km rate is the usual Estonian quote). Blank = no rate on this route: the Look-ahead then prices it at the target rate from Config (marked "target") — or prints "rate not set" when none is set either. A typed rate here is used ALONE; it is never mixed with the target.</p>
       <div className="grid grid-cols-2 gap-2">
         <F k="max_vehicles_per_day" label="Max vehicles / day (flag only)" />
         <label className="block">
