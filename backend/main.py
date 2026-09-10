@@ -827,16 +827,15 @@ def list_forecast_days(from_date: Optional[str] = Query(None, alias="from"),
 
 @app.get("/api/lookahead")
 def lookahead_page(bucket: str = "commit", route_id: Optional[str] = None,
-                   tark_tee: int = 0):
+                   tark_tee: int = 1):
     """
     Look-ahead v2 slices 3-6: everything the page's three views need in one read —
     commit (days + derived + totals), account (last week), horizon (roles), stock and
     the clash rail. `bucket=next` is the Thursday process.
 
-    🔴 Tark Tee is OFF this read by default (09 Sep night: the live fetch + geometry loop
-    froze the page on its first Approved line). The page fetches
-    /api/forecast-weeks/tark-tee separately once it has rendered; `tark_tee=1` here is
-    for diagnostics only.
+    🔴 Tark Tee here is the STORED per-route check (a DB read), never the live fetch —
+    the live fetch froze the page on 09 Sep. `sources.tark_tee` says how current it is;
+    POST /api/forecast-weeks/tark-tee/refresh re-checks in the background.
     """
     acc = _require_access()
     return lookahead.page(bucket=("next" if bucket == "next" else "commit"),
@@ -846,14 +845,25 @@ def lookahead_page(bucket: str = "commit", route_id: Optional[str] = None,
 @app.get("/api/forecast-weeks/tark-tee")
 def forecast_week_tark_tee(bucket: str = "commit", route_id: Optional[str] = None):
     """
-    The TARK_TEE flags alone — live Tark Tee data checked against the baked geometry of
-    the routes on the page, and ONLY those routes. Slow by nature (external fetch on a
-    cold cache, then a geometry loop), so the page calls it after rendering and shows
-    "checking…" meanwhile. `status` is ok · unavailable · skipped — never a silent clean.
+    The STORED Tark Tee flags for the page's routes, how old they are, which routes
+    have never been checked, and whether a refresh is running. Instant — a DB read.
+    The page polls this while a refresh runs.
     """
     acc = _require_access()
-    return lookahead.tark_tee_flags(bucket=("next" if bucket == "next" else "commit"),
-                                    route_id=route_id, acc=acc)
+    return lookahead.tark_tee_status(bucket=("next" if bucket == "next" else "commit"),
+                                     route_id=route_id, acc=acc)
+
+
+@app.post("/api/forecast-weeks/tark-tee/refresh")
+def forecast_week_tark_tee_refresh(sync: int = 0):
+    """
+    Re-check every baked route against live Tark Tee and store the result. Runs in a
+    background thread (30 s+ on a cold cache); returns at once with the refresh state.
+    `sync=1` waits. Any signed-in staff code may call it — it reads public road data
+    and writes only the stored check.
+    """
+    _require_access()
+    return restrictions.refresh_async(sync=bool(sync))
 
 
 @app.get("/api/forecast-weeks/clashes")
@@ -872,8 +882,7 @@ def forecast_week_clashes(bucket: str = "commit", route_id: Optional[str] = None
 @app.get("/api/forecast-weeks/export")
 def forecast_week_export(format: str = "xlsx", bucket: str = "commit",
                          route_id: Optional[str] = None, tark_tee: int = 1):
-    # tark_tee defaults ON for the export: a sheet handed to a haulier should carry the
-    # restriction flags, and a download can afford to wait where the page cannot
+    # the export reads the same STORED restriction check the page does — instant
     """
     Browser download of the commit week — xlsx (day × line, stock, clashes) or the PDF
     one-pager. No email, no upload. Built from the same read the page shows.

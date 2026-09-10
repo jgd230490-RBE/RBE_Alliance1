@@ -380,6 +380,12 @@ def _upsert_geom(route_id, profile, geometry, dist, dur, error, leg="loaded", al
         (db.current_tenant(), route_id, profile, leg, alt_index, geometry, dist, dur,
          now, error, zones_applied, haul_zones, haul_km, duration_hr_here),
     )
+    # 2026-09-10: new geometry ⇒ the stored Tark Tee check no longer describes this
+    # route. Cleared, not recomputed — the check is slow and runs on demand.
+    db.execute(
+        "UPDATE routes SET restrictions_hits = NULL, restrictions_checked_at = NULL, "
+        "restrictions_status = NULL WHERE tenant_id = ? AND id = ?",
+        (db.current_tenant(), route_id))
 
 
 def clear_geometry(profile=None, leg=None, route_id=None):

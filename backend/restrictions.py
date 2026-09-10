@@ -52,6 +52,7 @@ assertion is against parsing, projection and matching maths with recorded fixtur
 live service actually returns.
 """
 import json
+import threading
 import time
 import urllib.request
 import urllib.parse
@@ -690,6 +691,124 @@ def check_all(profile=None, layers=None):
             "features_checked": len(fc.get("features") or []),
             "layers": fc.get("layers"), "fetch_errors": fc.get("errors") or {},
             "attribution": fc.get("attribution")}
+
+
+# --------------------------------------------------------------------------- #
+#  The STORED check (2026-09-10)                                               #
+# --------------------------------------------------------------------------- #
+# Live Tark Tee on the Look-ahead took 30 s+ (six services on a cold cache, then a
+# pure-Python geometry loop). Tark Tee's data changes rarely and a route's geometry
+# changes only when it is re-baked, so the check is now RUN ON DEMAND (or after a
+# bake clears it) and STORED on the route; the Look-ahead and the export read the
+# stored result instantly, with its timestamp. The refresh runs in a background
+# thread so nothing waits on it; a page polls `refresh_state()`.
+_REFRESH = {"running": False, "started_at": None, "finished_at": None,
+            "status": None, "routes": 0, "hits": 0, "error": None}
+_REFRESH_LOCK = threading.Lock()
+
+
+def _iso_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def store_checks(route_ids=None, profile=None):
+    """
+    Check every baked route (or the given ones) against Tark Tee ONCE and store the
+    result on each route. Synchronous — the caller decides whether to thread it.
+    Returns a summary. On a fetch failure nothing is written (a failure must never
+    read as 'clean' later) and status is 'unavailable'.
+    """
+    tenant = db.current_tenant()
+    rows = db.query("SELECT id FROM routes WHERE tenant_id = ? ORDER BY id", (tenant,))
+    ids = [r["id"] for r in rows if not route_ids or r["id"] in set(route_ids)]
+    try:
+        fc = fetch_all()
+    except Exception as e:
+        return {"status": "unavailable", "error": str(e)[:200], "routes": 0, "hits": 0}
+    if not isinstance(fc, dict) or (not fc.get("features") and fc.get("errors")):
+        return {"status": "unavailable", "error": str((fc or {}).get("errors"))[:200],
+                "routes": 0, "hits": 0}
+    now = _iso_now()
+    n_hits = 0
+    for rid in ids:
+        try:
+            res = check_route(rid, profile=profile, _fc=fc)
+        except Exception as e:
+            db.execute("UPDATE routes SET restrictions_hits = ?, restrictions_checked_at = ?, "
+                       "restrictions_status = ? WHERE tenant_id = ? AND id = ?",
+                       (None, now, "error: " + str(e)[:120], tenant, rid))
+            continue
+        hits = res.get("hits") or []
+        n_hits += len(hits)
+        status = "not_baked" if res.get("baked") is False else "ok"
+        db.execute("UPDATE routes SET restrictions_hits = ?, restrictions_checked_at = ?, "
+                   "restrictions_status = ? WHERE tenant_id = ? AND id = ?",
+                   (json.dumps(hits), now, status, tenant, rid))
+    return {"status": "ok", "routes": len(ids), "hits": n_hits, "checked_at": now,
+            "features_checked": len(fc.get("features") or [])}
+
+
+def stored_checks(route_ids=None):
+    """{route_id: {hits, checked_at, status}} for the routes given (or all)."""
+    tenant = db.current_tenant()
+    rows = db.query("SELECT id, restrictions_hits, restrictions_checked_at, restrictions_status "
+                    "FROM routes WHERE tenant_id = ?", (tenant,))
+    out = {}
+    want = set(route_ids) if route_ids else None
+    for r in rows:
+        if want is not None and r["id"] not in want:
+            continue
+        hits = []
+        if r.get("restrictions_hits"):
+            try:
+                hits = json.loads(r["restrictions_hits"]) or []
+            except Exception:
+                hits = []
+        out[r["id"]] = {"hits": hits, "checked_at": r.get("restrictions_checked_at"),
+                        "status": r.get("restrictions_status")}
+    return out
+
+
+def refresh_state():
+    with _REFRESH_LOCK:
+        return dict(_REFRESH)
+
+
+def refresh_async(route_ids=None, sync=False):
+    """
+    Start a background refresh of the stored checks (one at a time). `sync=True` runs
+    it inline — for tests and for a caller that wants to wait. Returns the state.
+    """
+    with _REFRESH_LOCK:
+        if _REFRESH["running"]:
+            return dict(_REFRESH)
+        _REFRESH.update({"running": True, "started_at": _iso_now(), "finished_at": None,
+                         "status": None, "error": None})
+    tenant = db.current_tenant()
+
+    def run():
+        tok = db.set_current_tenant(tenant)
+        try:
+            res = store_checks(route_ids)
+            with _REFRESH_LOCK:
+                _REFRESH.update({"status": res.get("status"), "routes": res.get("routes", 0),
+                                 "hits": res.get("hits", 0), "error": res.get("error")})
+        except Exception as e:
+            with _REFRESH_LOCK:
+                _REFRESH.update({"status": "error", "error": str(e)[:200]})
+        finally:
+            with _REFRESH_LOCK:
+                _REFRESH.update({"running": False, "finished_at": _iso_now()})
+            try:
+                db.reset_current_tenant(tok)
+            except Exception:
+                pass
+
+    if sync:
+        run()
+    else:
+        threading.Thread(target=run, name="tarktee-refresh", daemon=True).start()
+    return refresh_state()
 
 
 # --------------------------------------------------------------------------- #

@@ -27,9 +27,9 @@ Rules that are the module, not details:
 * **A source that cannot be reached says so.** Tark Tee is live data; when it is down
   the rail must not read "no restrictions" — `sources.tark_tee` is 'unavailable' and no
   TARK_TEE flag is raised or suppressed. Never cache a failure (warning-stack lesson).
-  🔴 **And it is NEVER on the page's critical path**: compute() defaults to
-  `with_tark_tee=False` and reports 'pending'; the page fetches the TARK_TEE flags from
-  their own endpoint after it has rendered.
+  🔴 **And the LIVE check is never on a page read.** The page reads the STORED per-route
+  check (restrictions.store_checks, run on demand or after a bake) and reports its age;
+  a route never checked is listed as such, not shown clean.
 * **Nothing invents a 40-trip constant.** ROUTE_CAP fires only on a typed cap.
 """
 import datetime
@@ -246,52 +246,51 @@ def pile_over(lines, stock):
     return out
 
 
-def tark_tee(lines, fc=None):
+def tark_tee(lines):
     """
-    TARK_TEE for the routes on the page ONLY. Returns (flags, status, checked_routes).
-    status: 'ok' · 'unavailable' (the live source could not be fetched — say so, never
-    pretend clean) · 'skipped' (no baked line to check).
+    TARK_TEE from the STORED per-route check (restrictions.store_checks) — a DB read,
+    instant, always part of the page. Returns (flags, source) where source says how
+    current the stored result is:
 
-    🔴 09 Sep night: this is LIVE data and a pure-Python geometry loop, and it was on the
-    page's critical path — the first Approved line on a baked route froze the Look-ahead
-    on "Loading…". It now (a) checks only the routes that carry lines, never all 107,
-    and (b) is called from its own endpoint, after the page has rendered. Never cache a
-    failure (warning-stack lesson) — restrictions.py's cache holds successes only.
+        status      'ok' every route on the page has a stored check
+                    'partial' some have, some never checked (or re-baked since)
+                    'unchecked' none has
+                    'skipped' no baked line on the page
+        checked_at  the OLDEST stored check among the page's routes
+        unchecked   the routes with no stored check — a refresh fills them
+
+    🔴 History: the live check (six services + a geometry loop) was on the page's
+    critical path on 09 Sep and froze the Look-ahead; then, off the path, it still took
+    30 s+ per read. It now runs on demand / after a bake and is stored on the route.
+    A stored result is never a silent clean: the source block carries its age.
     """
     routes = sorted({l["route_id"] for l in lines if (l.get("context") or {}).get("baked")})
     if not routes:
-        return [], "skipped", []
-    try:
-        fc = fc if fc is not None else restrictions.fetch_all()
-    except Exception:
-        return [], "unavailable", routes
-    if not isinstance(fc, dict) or (not fc.get("features") and fc.get("errors")):
-        return [], "unavailable", routes
-    hit_by = {}
-    for rid in routes:
-        try:
-            res = restrictions.check_route(rid, _fc=fc)
-        except Exception:
-            continue
-        if res.get("hits"):
-            hit_by[rid] = res["hits"]
+        return [], {"status": "skipped", "checked_at": None, "unchecked": [], "routes": []}
+    stored = restrictions.stored_checks(routes)
+    unchecked = [r for r in routes if not (stored.get(r) or {}).get("checked_at")]
+    checked = [stored[r]["checked_at"] for r in routes if (stored.get(r) or {}).get("checked_at")]
+    status = ("unchecked" if len(unchecked) == len(routes)
+              else "partial" if unchecked else "ok")
     out = []
     for l in lines:
-        hits = hit_by.get(l["route_id"])
+        st = stored.get(l["route_id"]) or {}
+        hits = st.get("hits") or []
         if hits:
             first = hits[0] if isinstance(hits[0], dict) else {}
             what = first.get("headline") or first.get("layer") or "a restriction"
             out.append(_flag("TARK_TEE", l,
                              f"{_label(l)} crosses {what}" + (f" (+{len(hits) - 1} more)" if len(hits) > 1 else ""),
-                             hits=len(hits)))
-    return out, "ok", routes
+                             hits=len(hits), checked_at=st.get("checked_at")))
+    return out, {"status": status, "checked_at": (min(checked) if checked else None),
+                 "unchecked": unchecked, "routes": routes}
 
 
 # --------------------------------------------------------------------------- #
 #  The rail                                                                    #
 # --------------------------------------------------------------------------- #
 def compute(all_lines, visible_keys, account_rows, month_index, week_index,
-            with_tark_tee=False):
+            with_tark_tee=True):
     """
     Every flag for the visible lines. `all_lines` is the WHOLE tenant's decorated lines
     (cross-IPT sums need them); `visible_keys` is the set of line_key() the caller may
@@ -303,11 +302,11 @@ def compute(all_lines, visible_keys, account_rows, month_index, week_index,
     flags += route_cap(all_lines)
     flags += ipt_share(all_lines)
     flags += pile_over(all_lines, stock)
-    # 'pending' = not consulted on this read; the page fetches it separately, after
-    # rendering, from /api/forecast-weeks/tark-tee — see tark_tee() above
-    tt_status = "pending"
+    # the STORED check — a DB read, so it is always on. `with_tark_tee=False` is for a
+    # caller that wants the rail without it (none today).
+    tt_source = {"status": "off", "checked_at": None, "unchecked": [], "routes": []}
     if with_tark_tee:
-        tt, tt_status, _ = tark_tee(all_lines)
+        tt, tt_source = tark_tee(all_lines)
         flags += tt
     vis = [f for f in flags
            if (f["route_id"], int(f["month_index"]), f["discipline"], f["section_id"]) in visible_keys]
@@ -318,5 +317,7 @@ def compute(all_lines, visible_keys, account_rows, month_index, week_index,
         by_code[f["code"]] = by_code.get(f["code"], 0) + 1
     return {"flags": vis, "count": len(vis), "by_code": by_code,
             "codes": list(CODES), "hold_band": HOLD_BAND,
-            "sources": {"tark_tee": tt_status},
+            "sources": {"tark_tee": tt_source["status"], "tark_tee_checked_at": tt_source["checked_at"],
+                        "tark_tee_unchecked": tt_source["unchecked"],
+                        "tark_tee_refresh": restrictions.refresh_state()},
             "stock": stock}

@@ -8,12 +8,21 @@ same numbers the screen shows; nothing is recomputed here.
     build_xlsx(page)   sheet 1  day × line (the export mock's columns + € where set)
                        sheet 2  stock at week end
                        sheet 3  clashes
-    build_pdf(page)    the one-pager: grouped by origin (carrier is not a field yet —
-                       brief item 7 — so the "then by carrier" grouping is by origin
-                       only), the collapse rule where every weekday of a line is
-                       identical, flags (not a stop), stock, and the three honest-gap
-                       footer lines. Payloads are planning figures; km from HERE unless
-                       marked ‡.
+    build_pdf(page)    the one-pager: a map of the week's routes, then the lines grouped
+                       by origin (carrier is not a field yet — brief item 7 — so the
+                       "then by carrier" grouping is by origin only), the collapse rule
+                       where every weekday of a line is identical, flags (not a stop),
+                       and the three honest-gap footer lines. Payloads are planning
+                       figures; km from HERE unless marked ‡.
+
+2026-09-10, on the human's feedback: **Mon–Fri only** (weekend rows are dropped from
+both files — the days still exist at 0 in the database), **no stockpile section** (the
+sheet is for the supplier; stock belongs on a look-ahead dashboard, not built), and a
+**route map** on the PDF in the stock section's place. The map is Mapbox's Static
+Images API when MAPBOX_TOKEN is set and the fetch succeeds (never tested from the
+sandbox, which is offline), otherwise a schematic drawn from the baked geometry —
+the PDF says which it is. Tark Tee flags come from the STORED per-route check, so the
+export is as fast as the page.
 
 openpyxl and reportlab are runtime dependencies of these two functions ONLY — added to
 requirements.txt; the app boots without them and the export endpoints say so if they
@@ -21,6 +30,12 @@ are missing.
 """
 import datetime
 import io
+import json
+import os
+import urllib.parse
+import urllib.request
+
+import db
 
 MISSING = {}
 try:
@@ -34,6 +49,7 @@ try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas as rl_canvas
 except Exception as e:                                   # pragma: no cover
     rl_canvas = None
@@ -49,6 +65,8 @@ BAND = (0xEF / 255, 0xF6 / 255, 0xFF / 255)
 FOOTER = ("€ not printed where no contract rate is typed on the route.",
           "Vignette is time-based in Estonia and is not on this sheet. Payloads are planning "
           "figures, not plated. Km from the baked HERE route unless marked ‡.",
+          "Mon–Fri only. Road restrictions are Tark Tee's stored check as of its own date, "
+          "not re-read for this sheet.",
           )
 
 
@@ -77,12 +95,19 @@ def _week_title(page):
     return f"week of {d.day} {d.strftime('%b %Y')}"
 
 
-def _line_rows(page):
-    """Flatten commit lines into (line, day) rows in the export mock's column order."""
+def _is_weekday(iso):
+    return datetime.date.fromisoformat(iso).weekday() <= 4
+
+
+def _line_rows(page, weekdays_only=True):
+    """Flatten commit lines into (line, day) rows in the export mock's column order.
+    Mon–Fri only by default (10 Sep): the weekend days exist at 0 and are not printed."""
     rows = []
     for l in page.get("commit", {}).get("lines", []):
         c = l.get("context") or {}
         for d in l.get("days", []):
+            if weekdays_only and not _is_weekday(d["day_date"]):
+                continue
             f = d.get("derived") or {}
             rows.append({
                 "date": d["day_date"], "origin": c.get("origin_name") or c.get("origin_id"),
@@ -138,11 +163,7 @@ def build_xlsx(page):
     ws.title = "Commit week"
     rows = _line_rows(page)
     sheet(ws, XLSX_COLS, rows)
-    ws2 = wb.create_sheet("Stock")
-    sheet(ws2, [("Pile", "name"), ("Unit", "unit"), ("Capacity", "capacity_qty"), ("Opening", "opening"),
-                ("Inbound planned", "inbound_planned"), ("Consume", "consume"), ("Forecast", "forecast"),
-                ("Remaining", "remaining"), ("Over", "over"), ("Over by", "over_by")],
-          page.get("stock") or [])
+    # no Stock sheet (10 Sep): the sheet is for the supplier; stock is the planner's
     ws3 = wb.create_sheet("Clashes")
     sheet(ws3, [("Code", "code"), ("Route", "route_id"), ("IPT", "ipt"), ("WS", "section_id"),
                 ("Day", "day_date"), ("Detail", "text")],
@@ -155,6 +176,8 @@ def build_xlsx(page):
         ("Lines", (page.get("commit", {}).get("totals") or {}).get("lines")),
         ("Unbaked lines", (page.get("commit", {}).get("totals") or {}).get("unbaked_lines")),
         ("Tark Tee", ((page.get("clashes") or {}).get("sources") or {}).get("tark_tee")),
+        ("Tark Tee checked", ((page.get("clashes") or {}).get("sources") or {}).get("tark_tee_checked_at")),
+        ("Days", "Mon–Fri only; Sat/Sun are 0 and not listed"),
     ] + [("Note", f) for f in FOOTER]
     for i, (k, v) in enumerate(about, 1):
         ws4.cell(row=i, column=1, value=k).font = Font(bold=True)
@@ -164,6 +187,141 @@ def build_xlsx(page):
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+#  The route map (2026-09-10)                                                  #
+# --------------------------------------------------------------------------- #
+def _encode_polyline(coords, precision=5):
+    """Google encoded polyline of [(lon, lat), …] — what Mapbox's static path takes."""
+    out, last_lat, last_lon, f = [], 0, 0, 10 ** precision
+    for lon, lat in coords:
+        ilat, ilon = int(round(lat * f)), int(round(lon * f))
+        for v in (ilat - last_lat, ilon - last_lon):
+            v = ~(v << 1) if v < 0 else (v << 1)
+            while v >= 0x20:
+                out.append(chr((0x20 | (v & 0x1f)) + 63))
+                v >>= 5
+            out.append(chr(v + 63))
+        last_lat, last_lon = ilat, ilon
+    return "".join(out)
+
+
+def _thin(coords, n=120):
+    if len(coords) <= n:
+        return coords
+    step = (len(coords) - 1) / (n - 1)
+    return [coords[int(round(i * step))] for i in range(n)]
+
+
+def route_geometries(page):
+    """[(route_id, origin_name, dest_name, [(lon, lat), …])] for the lines on the page —
+    the loaded alt-0 geometry for the line's own vehicle, else any baked profile."""
+    seen, out = set(), []
+    for l in page.get("commit", {}).get("lines", []):
+        rid = l.get("route_id")
+        if rid in seen:
+            continue
+        seen.add(rid)
+        c = l.get("context") or {}
+        rows = db.query(
+            "SELECT vehicle_profile, geometry FROM route_geometry WHERE tenant_id = ? AND route_id = ? "
+            "AND leg = 'loaded' AND alt_index = 0 AND geometry IS NOT NULL",
+            (db.current_tenant(), rid))
+        rows.sort(key=lambda r: 0 if r["vehicle_profile"] == c.get("vehicle_type") else 1)
+        if not rows:
+            continue
+        try:
+            coords = [(float(p[0]), float(p[1])) for p in json.loads(rows[0]["geometry"])]
+        except Exception:
+            continue
+        if len(coords) >= 2:
+            out.append((rid, c.get("origin_name") or c.get("origin_id") or "", c.get("dest_name") or c.get("dest_id") or "", coords))
+    return out
+
+
+def mapbox_static_png(routes, size="900x450", timeout=12):
+    """
+    A PNG of the routes over Mapbox's light style, or None. Needs MAPBOX_TOKEN and a
+    network path to api.mapbox.com — neither exists in the build sandbox, so this path
+    has NOT been exercised there; the caller falls back to a schematic.
+    """
+    token = (os.getenv("MAPBOX_TOKEN") or "").strip()
+    if not token or not routes:
+        return None
+    overlays = []
+    for i, (rid, o, d, coords) in enumerate(routes):
+        thin = _thin(coords)
+        overlays.append("path-3+0B1B45-0.9(" + urllib.parse.quote(_encode_polyline(thin), safe="") + ")")
+        overlays.append(f"pin-s-{chr(97 + (i % 26))}+0B1B45({thin[0][0]:.5f},{thin[0][1]:.5f})")
+        overlays.append(f"pin-s-{chr(97 + (i % 26))}+BF2E55({thin[-1][0]:.5f},{thin[-1][1]:.5f})")
+    url = ("https://api.mapbox.com/styles/v1/mapbox/light-v11/static/" + ",".join(overlays)
+           + f"/auto/{size}@2x?padding=40&access_token=" + urllib.parse.quote(token))
+    if len(url) > 8000:                       # the API's URL limit; drop pins, thin harder
+        overlays = ["path-3+0B1B45-0.9(" + urllib.parse.quote(_encode_polyline(_thin(c, 60)), safe="") + ")"
+                    for (_, _, _, c) in routes]
+        url = ("https://api.mapbox.com/styles/v1/mapbox/light-v11/static/" + ",".join(overlays)
+               + f"/auto/{size}@2x?padding=40&access_token=" + urllib.parse.quote(token))
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "RBE-Alliance1/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = resp.read()
+        return data if data[:8] == b"\x89PNG\r\n\x1a\n" else None
+    except Exception:
+        return None
+
+
+def _draw_schematic(c, routes, x, y, w, h):
+    """The fallback: every route as a line scaled into the box, ends labelled."""
+    c.setStrokeColorRGB(0.85, 0.85, 0.85)
+    c.setLineWidth(0.5)
+    c.rect(x, y, w, h, stroke=1, fill=0)
+    pts = [p for (_, _, _, cs) in routes for p in cs]
+    if not pts:
+        c.setFont("Helvetica", 8); c.setFillColorRGB(*GREY)
+        c.drawString(x + 3 * mm, y + h / 2, "no baked route to draw")
+        return
+    lons, lats = [p[0] for p in pts], [p[1] for p in pts]
+    lo_x, hi_x, lo_y, hi_y = min(lons), max(lons), min(lats), max(lats)
+    import math
+    kx = math.cos(math.radians((lo_y + hi_y) / 2)) or 1.0    # lon degrees are shorter than lat degrees
+    span_x, span_y = max((hi_x - lo_x) * kx, 1e-6), max(hi_y - lo_y, 1e-6)
+    pad = 6 * mm
+    scale = min((w - 2 * pad) / span_x, (h - 2 * pad) / span_y)
+    ox = x + (w - span_x * scale) / 2
+    oy = y + (h - span_y * scale) / 2
+    def P(p):
+        return ox + (p[0] - lo_x) * kx * scale, oy + (p[1] - lo_y) * scale
+    for i, (rid, o, d, cs) in enumerate(routes):
+        c.setStrokeColorRGB(*NAVY_RGB); c.setLineWidth(1.4)
+        path = c.beginPath()
+        path.moveTo(*P(cs[0]))
+        for p in cs[1:]:
+            path.lineTo(*P(p))
+        c.drawPath(path, stroke=1, fill=0)
+        sx, sy = P(cs[0]); ex, ey = P(cs[-1])
+        c.setFillColorRGB(*NAVY_RGB); c.circle(sx, sy, 1.6, stroke=0, fill=1)
+        c.setFillColorRGB(*RED_RGB); c.circle(ex, ey, 1.6, stroke=0, fill=1)
+        c.setFont("Helvetica", 6.5); c.setFillColorRGB(*NAVY_RGB)
+        c.drawString(sx + 2, sy + 2, f"{o}"[:24])
+        c.setFillColorRGB(*RED_RGB)
+        c.drawString(ex + 2, ey - 6, f"{d} ({rid})"[:30])
+
+
+def draw_route_map(c, page, x, y, w, h):
+    """The map block: Mapbox static when it can be had, else the schematic. Returns
+    which one was drawn, so the caption can say so."""
+    routes = route_geometries(page)
+    png = mapbox_static_png(routes)
+    if png:
+        try:
+            c.drawImage(ImageReader(io.BytesIO(png)), x, y, width=w, height=h,
+                        preserveAspectRatio=True, anchor="c")
+            return "mapbox"
+        except Exception:
+            pass
+    _draw_schematic(c, routes, x, y, w, h)
+    return "schematic"
 
 
 # --------------------------------------------------------------------------- #
@@ -219,6 +377,15 @@ def build_pdf(page):
     line_h(1.3)
     text(lm, "Commitment sheet · not a delivery note · planning payloads, not plated", 9, False, GREY)
     line_h(2)
+
+    # the week's routes on a map (10 Sep — in place of the stock list the supplier did not need)
+    map_h = 62 * mm
+    kind = draw_route_map(c, page, lm, y - map_h, rm - lm, map_h)
+    y -= map_h
+    line_h(0.9)
+    n_routes = len({l.get("route_id") for l in page.get("commit", {}).get("lines", [])})
+    text(lm, f"Routes this week: {n_routes}" + (" · schematic from the baked geometry (no map tiles)" if kind == "schematic" else " · map © Mapbox"), 7.5, False, GREY)
+    line_h(1.6)
 
     cols = [("DATE", lm, "l"), ("IPT / WS", lm + 22 * mm, "l"), ("DEST", lm + 48 * mm, "l"),
             ("MATERIAL", lm + 82 * mm, "l"), ("QTY", lm + 118 * mm, "r"), ("TRIPS", lm + 132 * mm, "r"),
@@ -281,10 +448,10 @@ def build_pdf(page):
                     if len(cols) == 10:
                         rtext(rm, _n(r["eur"]) if r["eur"] is not None else "—", 8.5)
                 line_h()
+            # weekend rows are not printed (Mon–Fri only, 10 Sep); `we` is empty by
+            # construction and kept so the collapse rule's weekday filter reads plainly
             for r in we:
-                text(lm, _day_label(r["date"]), 8.5, False, GREY)
-                rtext(lm + 118 * mm, _n(r["qty"]), 8.5, False, GREY)
-                line_h()
+                pass
             for r in drs:
                 tot["t"] += float(r["tonnes"] or 0)
                 tot["trips"] += int(r["trips"] or 0)
@@ -319,25 +486,7 @@ def build_pdf(page):
         line_h()
     line_h(0.6)
 
-    # stock
-    stock = page.get("stock") or []
-    text(lm, "Stock at week end (forecast)", 11)
-    line_h()
-    if not stock:
-        text(lm, "no storage location with a recorded capacity", 8.5, False, GREY)
-        line_h()
-    for s in stock:
-        if s.get("capacity_qty") is None:
-            txt = f"{s['name']}  {_n(s['forecast'])} {s['unit']} · no capacity recorded"
-            rgb = GREY
-        elif s.get("over"):
-            txt = f"{s['name']}  {_n(s['forecast'])} / {_n(s['capacity_qty'])} {s['unit']}  OVER {_n(s['over_by'])} {s['unit']}"
-            rgb = RED_RGB
-        else:
-            txt = f"{s['name']}  {_n(s['forecast'])} / {_n(s['capacity_qty'])} {s['unit']} remaining {_n(s['remaining'])}"
-            rgb = (0, 0, 0)
-        text(lm, txt, 9, False, rgb)
-        line_h()
+    # no stock section (10 Sep): the sheet is the supplier's; stock is the planner's
     line_h(0.6)
     c.setStrokeColorRGB(0.85, 0.85, 0.85)
     c.setLineWidth(0.5)

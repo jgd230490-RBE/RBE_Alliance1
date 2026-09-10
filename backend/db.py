@@ -742,6 +742,9 @@ def init_lookahead_db():
                                 ("routes", "rate_eur_per_t", "REAL"),
                                 ("routes", "rate_eur_per_km", "REAL"),
                                 ("routes", "km_basis", "TEXT"),
+                                ("routes", "restrictions_hits", "TEXT"),
+                                ("routes", "restrictions_checked_at", "TEXT"),
+                                ("routes", "restrictions_status", "TEXT"),
                                 ("forecast_weeks", "actual_cost_eur", "REAL"),
                                 ("forecast_weeks", "calibrated_at", "TEXT"),
                                 ("forecast_weeks", "calibrated_qty", "REAL")):
@@ -869,6 +872,13 @@ _TENANT_DDL = {
             rate_eur_per_t    REAL,
             rate_eur_per_km   REAL,
             km_basis          TEXT,
+            -- 2026-09-10. The STORED Tark Tee check for this route: the hits as JSON
+            -- and when they were checked. Live Tark Tee took 30 s+ on the Look-ahead
+            -- so the check now runs on demand / after a bake and the page reads this.
+            -- NULL = never checked (or re-baked since). ALTERed in init_lookahead_db().
+            restrictions_hits TEXT,
+            restrictions_checked_at TEXT,
+            restrictions_status TEXT,
             PRIMARY KEY (tenant_id, id)
         )
     """,
