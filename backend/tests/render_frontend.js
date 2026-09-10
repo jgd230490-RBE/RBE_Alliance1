@@ -261,6 +261,24 @@ if (loaded) {
       ok("...with the target-rate copy and the config widget's admin controls",
         fCfg.includes("Target rate") && fCfg.includes('data-fuel-widget="config"') && fCfg.includes("Reset the BAF base")
         && fCfg.includes("Fetch the bulletin now") && fCfg.includes("Use this index") && !/undefined|NaN/.test(fCfg));
+      // 10 Sep night: the fair price on the Account view, and the coefficients section on Config
+      const nFair = fuelFix.account.rows.filter(r => r.planned_fair_eur != null).length;
+      ok("...the Account view has a 'Fair € (model)' column with a figure on every baked row and — on the unbaked one",
+        fAcct.includes("Fair € <span") && nFair >= 1
+        && (fAcct.match(/title="No fair price: the route is not baked/g) || []).length === fuelFix.account.rows.length - nFair);
+      ok("...the KPI caption on Commit carries the fair total and how many lines it covers",
+        fuelFix.commit.totals.fair_eur != null && fOut.includes(`(model, ${fuelFix.commit.totals.fair_lines} of ${fuelFix.commit.totals.lines})`));
+      const fileDoc = { fair_price: { driver_eur_per_h: 20, vehicle_standing_eur_per_h: 16, running_eur_per_km: 0.12, margin_pct: 8,
+        consumption: { l_per_100km_per_tonne: 0.4, rigid: { l_per_100km_empty: 27 }, artic: { l_per_100km_empty: 23.6 } },
+        season: { winter_months: [11, 12, 1, 2, 3], winter_consumption_uplift_pct: 8, thaw_months: [3, 4] } } };
+      const fCfg2 = render("the Costing tab renders the fair-price section from the FILE when the document has no block",
+        h(CostingTab, { who: "t", access: planner, token: "", setToken: () => {}, doc: { vehicles: {} }, upd: () => {}, fileDoc }));
+      ok("...with the file's values in the inputs, the 'no block yet' note, and the three assumption labels",
+        fCfg2.includes('data-fair-price-section="1"') && fCfg2.includes('value="20"') && fCfg2.includes('value="23.6"')
+        && fCfg2.includes("the live document has no fair_price block yet") && (fCfg2.match(/ASSUMPTION/g) || []).length === 3 && !/undefined|NaN/.test(fCfg2));
+      const fCfg3 = render("...and from the DOCUMENT when it has one",
+        h(CostingTab, { who: "t", access: planner, token: "", setToken: () => {}, doc: { fair_price: { ...fileDoc.fair_price, driver_eur_per_h: 25 } }, upd: () => {}, fileDoc }));
+      ok("...the document's value wins and the note is gone", fCfg3.includes('value="25"') && !fCfg3.includes("no fair_price block yet"));
       const fNone = render("the widget renders with NO data at all", h(FuelWidget, { who: "t", access: planner, mode: "strip", initial: null }));
       ok("...as 'Index unavailable — type a price' for a planner, and nothing undefined",
         fNone.includes("Index unavailable — type a price") && !/undefined|NaN/.test(fNone));

@@ -931,6 +931,30 @@ ok("LookAhead now receives the role (for the widget's typeable boxes)", /<LookAh
 ok("🔴 no fuel on the public map: map/index.html has no widget, no fuel-index, no BAF",
   !/FuelWidget|fuel-index|\bBAF\b/.test(fs.readFileSync(path.join(__dirname, "..", "..", "map", "index.html"), "utf8")));
 
+// ---- 4g. 10 Sep night — the fair-price model on the page -------------------------------
+const _fpBody = code.slice(code.indexOf("const FAIR_FIELDS = "), code.indexOf("function ConfigPage("));   // the field list sits just above the component
+ok("⭐ ONE FairPriceSection, mounted once inside the Costing tab, editing doc.fair_price through the page's upd()",
+  (code.match(/function FairPriceSection\(/g) || []).length === 1 && (code.match(/<FairPriceSection\b/g) || []).length === 1
+  && _ctBody.includes("<FairPriceSection doc={doc} upd={upd} fileDoc={fileDoc}") && _fpBody.includes("d.fair_price = JSON.parse(JSON.stringify(fileFp))"));
+ok("...it saves through the factors document (the page's Save + admin token), never its own endpoint",
+  !_fpBody.includes("fetch(") && _fpBody.includes("Saved with the page's Save button (admin token)"));
+ok("...the four money coefficients, the three consumption figures, the uplift and both month pickers are editable",
+  ["driver_eur_per_h", "vehicle_standing_eur_per_h", "running_eur_per_km", "margin_pct"].every(k => _fpBody.includes(`"${k}"`))
+  && _fpBody.includes("l_per_100km_per_tonne") && _fpBody.includes("f.consumption.rigid.l_per_100km_empty") && _fpBody.includes("f.consumption.artic.l_per_100km_empty")
+  && _fpBody.includes("winter_consumption_uplift_pct") && _fpBody.includes('monthsBox("winter_months"') && _fpBody.includes('monthsBox("thaw_months"'));
+ok("...and says which three are assumptions", (_fpBody.match(/ASSUMPTION/g) || []).length === 3);
+ok("...a live document without the block shows the file's values and says so",
+  _fpBody.includes("const fp = (doc && doc.fair_price) || fileFp") && _fpBody.includes("the live document has no fair_price block yet"));
+ok("the Look-ahead prints the fair figure as a THIRD figure, marked 'model': KPI caption, expanded row, Account column",
+  _laBody.includes("fair € ${grp(totals.fair_eur)} (model") && _laBody.includes("fair € {grp(wd.fair_eur)}") && _laBody.includes("Fair € <span")
+  && _laBody.includes("€ {grp(r.planned_fair_eur)}"));
+ok("...with the winter and thaw flags on the Account cell and the expanded row",
+  _laBody.includes('(r.fair_flags || []).includes("WINTER")') && _laBody.includes('(r.fair_flags || []).includes("THAW")')
+  && _laBody.includes('c.fair.flags.includes("THAW") ? ", thaw restrictions may apply"'));
+ok("...an unbaked line prints — with the reason, never a number", _laBody.includes("No fair price: the route is not baked for this vehicle, or the diesel index is missing"));
+ok("...and the footer calls it a floor for negotiation, never a quote", _laBody.includes("a floor for negotiation, never a quote"));
+ok("the Config page hands the file document to the tab (for the fallback values)", code.includes("setFileDoc(j.file || null)"));
+
 // ---- report ------------------------------------------------------------------
 console.log();
 for (const f of fail) console.log("  FAIL:", f);
