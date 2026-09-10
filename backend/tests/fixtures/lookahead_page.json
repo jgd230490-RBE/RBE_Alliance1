@@ -51,7 +51,9 @@
    "eur_partial": false,
    "eur_target_lines": 0,
    "eur_adj": null,
-   "baf_pct": null
+   "baf_pct": null,
+   "fair_eur": null,
+   "fair_lines": 0
   },
   "costing": {
    "target": {
@@ -73,7 +75,60 @@
    "index_bulletin_date": null,
    "index_source": null,
    "baf_pct": null,
-   "baf_reason": "no index"
+   "baf_reason": "no index",
+   "fair_params": {
+    "consumption": {
+     "l_per_100km_per_tonne": 0.4,
+     "rigid": {
+      "l_per_100km_empty": 27.0
+     },
+     "artic": {
+      "l_per_100km_empty": 23.6
+     }
+    },
+    "season": {
+     "winter_months": [
+      11,
+      12,
+      1,
+      2,
+      3
+     ],
+     "winter_consumption_uplift_pct": 8.0,
+     "thaw_months": [
+      3,
+      4
+     ]
+    },
+    "driver_eur_per_h": 20.0,
+    "vehicle_standing_eur_per_h": 16.0,
+    "margin_pct": 8.0,
+    "running_eur_per_km": 0.12,
+    "vehicle_new_price_eur": 190000
+   },
+   "fair": {
+    "index_eur_per_l": null,
+    "driver_eur_per_h": 20.0,
+    "vehicle_standing_eur_per_h": 16.0,
+    "running_eur_per_km": 0.12,
+    "margin_pct": 8.0,
+    "l_per_100km_per_tonne": 0.4,
+    "rigid_l_per_100km_empty": 27.0,
+    "artic_l_per_100km_empty": 23.6,
+    "winter_months": [
+     11,
+     12,
+     1,
+     2,
+     3
+    ],
+    "winter_consumption_uplift_pct": 8.0,
+    "thaw_months": [
+     3,
+     4
+    ],
+    "complete": false
+   }
   },
   "lines": [
    {
@@ -146,7 +201,8 @@
        "tonne_km": 12000.0,
        "eur": 1750.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -177,7 +233,8 @@
        "tonne_km": 12000.0,
        "eur": 1750.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -208,7 +265,8 @@
        "tonne_km": 12000.0,
        "eur": 1750.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -239,7 +297,8 @@
        "tonne_km": 12000.0,
        "eur": 1750.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -270,7 +329,8 @@
        "tonne_km": 12000.0,
        "eur": 1750.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -301,7 +361,8 @@
        "tonne_km": 0.0,
        "eur": 0.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -332,7 +393,8 @@
        "tonne_km": 0.0,
        "eur": 0.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      }
     ],
@@ -377,6 +439,9 @@
       "per_km": 1.5
      },
      "baf_pct": null,
+     "vehicle_class": "rigid",
+     "month": 9,
+     "fair": null,
      "km_basis": "round_trip",
      "basis_km": 60.0,
      "flags": []
@@ -390,6 +455,7 @@
      "eur": 8750.0,
      "eur_partial": false,
      "eur_adj": null,
+     "fair_eur": null,
      "rate_source": "route"
     }
    },
@@ -463,7 +529,8 @@
        "tonne_km": 18000.0,
        "eur": 2625.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -494,7 +561,8 @@
        "tonne_km": 18000.0,
        "eur": 2625.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -525,7 +593,8 @@
        "tonne_km": 18000.0,
        "eur": 2625.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -556,7 +625,8 @@
        "tonne_km": 23400.0,
        "eur": 3480.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -587,7 +657,8 @@
        "tonne_km": 23400.0,
        "eur": 3480.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -618,7 +689,8 @@
        "tonne_km": 0.0,
        "eur": 0.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -649,7 +721,8 @@
        "tonne_km": 0.0,
        "eur": 0.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      }
     ],
@@ -694,6 +767,9 @@
       "per_km": 1.5
      },
      "baf_pct": null,
+     "vehicle_class": "rigid",
+     "month": 9,
+     "fair": null,
      "km_basis": "round_trip",
      "basis_km": 60.0,
      "flags": []
@@ -707,6 +783,7 @@
      "eur": 14835.0,
      "eur_partial": false,
      "eur_adj": null,
+     "fair_eur": null,
      "rate_source": "route"
     }
    },
@@ -780,7 +857,8 @@
        "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -811,7 +889,8 @@
        "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -842,7 +921,8 @@
        "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -873,7 +953,8 @@
        "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -904,7 +985,8 @@
        "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -935,7 +1017,8 @@
        "tonne_km": 0.0,
        "eur": 0.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      },
      {
@@ -966,7 +1049,8 @@
        "tonne_km": 0.0,
        "eur": 0.0,
        "eur_partial": false,
-       "eur_adj": null
+       "eur_adj": null,
+       "fair_eur": null
       }
      }
     ],
@@ -1011,6 +1095,9 @@
       "per_km": null
      },
      "baf_pct": null,
+     "vehicle_class": "rigid",
+     "month": 9,
+     "fair": null,
      "km_basis": "loaded",
      "basis_km": 31.0,
      "flags": []
@@ -1024,6 +1111,7 @@
      "eur": 1500.0,
      "eur_partial": false,
      "eur_adj": null,
+     "fair_eur": null,
      "rate_source": "route"
     }
    }
@@ -1081,6 +1169,8 @@
     "planned_eur": 8750.0,
     "planned_eur_partial": false,
     "planned_eur_adj": null,
+    "planned_fair_eur": null,
+    "fair_flags": [],
     "planned_t": 1000.0,
     "eur_variance": 7515.5
    },
@@ -1123,6 +1213,8 @@
     "planned_eur": 13125.0,
     "planned_eur_partial": false,
     "planned_eur_adj": null,
+    "planned_fair_eur": null,
+    "fair_flags": [],
     "planned_t": 1500.0,
     "eur_variance": null
    },
@@ -1165,6 +1257,8 @@
     "planned_eur": 1500.0,
     "planned_eur_partial": false,
     "planned_eur_adj": null,
+    "planned_fair_eur": null,
+    "fair_flags": [],
     "planned_t": 500.0,
     "eur_variance": null
    }
@@ -1194,7 +1288,8 @@
     "unconvertible_movements": 0
    }
   ],
-  "eur_target_lines": 0
+  "eur_target_lines": 0,
+  "fair_lines": 0
  },
  "costing": {
   "target": {
@@ -1216,7 +1311,60 @@
   "index_bulletin_date": null,
   "index_source": null,
   "baf_pct": null,
-  "baf_reason": "no index"
+  "baf_reason": "no index",
+  "fair_params": {
+   "consumption": {
+    "l_per_100km_per_tonne": 0.4,
+    "rigid": {
+     "l_per_100km_empty": 27.0
+    },
+    "artic": {
+     "l_per_100km_empty": 23.6
+    }
+   },
+   "season": {
+    "winter_months": [
+     11,
+     12,
+     1,
+     2,
+     3
+    ],
+    "winter_consumption_uplift_pct": 8.0,
+    "thaw_months": [
+     3,
+     4
+    ]
+   },
+   "driver_eur_per_h": 20.0,
+   "vehicle_standing_eur_per_h": 16.0,
+   "margin_pct": 8.0,
+   "running_eur_per_km": 0.12,
+   "vehicle_new_price_eur": 190000
+  },
+  "fair": {
+   "index_eur_per_l": null,
+   "driver_eur_per_h": 20.0,
+   "vehicle_standing_eur_per_h": 16.0,
+   "running_eur_per_km": 0.12,
+   "margin_pct": 8.0,
+   "l_per_100km_per_tonne": 0.4,
+   "rigid_l_per_100km_empty": 27.0,
+   "artic_l_per_100km_empty": 23.6,
+   "winter_months": [
+    11,
+    12,
+    1,
+    2,
+    3
+   ],
+   "winter_consumption_uplift_pct": 8.0,
+   "thaw_months": [
+    3,
+    4
+   ],
+   "complete": false
+  }
  },
  "horizon": {
   "from_month": 9,
