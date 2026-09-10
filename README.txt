@@ -1,114 +1,128 @@
-rbe-lookahead-calendar-weeks-0910.zip
-=====================================
-Delivered 2026-09-10 (afternoon). Extract over the repo root, ON TOP of
-rbe-lookahead-feedback-0910.zip. Seventeen files. ⚠️ ONE new pip dependency
-(pillow — reportlab already pulls it in; now pinned). NO schema change.
-⚠️ The MEANING of a week changes (point 1) — read that before deploying.
+rbe-costing-fuel-0910.zip
+=========================
+Delivered 2026-09-10 (evening). Extract over the repo root, ON TOP of
+rbe-lookahead-calendar-weeks-0910.zip (which HEAD already has — README.txt at
+HEAD began with that name when this was cut). Seventeen files. NO new pip
+dependency. ONE new table (fuel_index — global, see point 4). No route or
+week column changes. factors.json is NOT in this zip.
 
-YOUR SIX POINTS, AS BUILT
--------------------------
-1. "Mon–Fri shows but starts from Tuesday; should always start from Monday."
-   Not a display bug: forecast weeks were days-of-month buckets (1–7, 8–14,
-   15–21, 22–end — the Week 1 build list's rule). 1 Sep 2026 is a Tuesday, so
-   this week's bucket was Tue 8 – Mon 14, and Mon–Fri-only showed Tue, Wed,
-   Thu, Fri, then NEXT week's Monday. You chose calendar weeks:
-     • A week is Monday–Sunday and belongs to the month that holds its
-       THURSDAY (ISO 8601 — the week numbers on Estonian calendars).
-     • A month has FOUR or FIVE weeks. Sep 2026: 4 (31 Aug–6, 7–13, 14–20,
-       21–27). Oct 2026: 5 (28 Sep–4 Oct … 26 Oct–1 Nov). Dec 2026: 5.
-     • A month's forecast splits over ITS weeks: ÷4 or ÷5. Derived weeks
-       refresh to the new share on the next read; edited/confirmed hold.
-     • week_index keeps its meaning (k-th week of the month), so every
-       existing forecast_weeks row keeps its identity — only its DATES move,
-       by at most six days. Your confirmed September week and typed actuals
-       stay attached to "week 2", which is now 7–13 Sep (was 8–14).
-     • Day rows are keyed by date, so the days you typed keep their figures.
-       A day that changed bucket (Mon 14 Sep: week 2 → week 3) is re-stamped
-       on the next read. If you had EDITED that day, week 3's DAYS ≠ WEEK
-       flag may fire — that is the truth, not a fault.
-     • The Horizon grid now has 4 or 5 columns per month, headed with each
-       week's Mon–Sun dates; the server says how many (nothing in the
-       browser assumes four).
-   Nothing to migrate. First read after deploy does the re-stamping.
+WHAT YOU ASKED FOR, AND WHAT THIS IS
+------------------------------------
+You asked for a planned / fair delivery price on the Look-ahead that could later
+drive the whole forecast, and attached Grok's fuel-index note. You chose "both,
+target rate then fuel". So, in that order:
 
-2. "A full actual map would be preferred."
-   The schematic you got was MY bug: the PDF read only MAPBOX_TOKEN, which
-   Render does not have, while the app itself falls back to the public token
-   in main.py. One source now — config.mapbox_token() — for the browser map,
-   the new Commit map and the PDF's Mapbox Static image. ⚠️ Still not run
-   against api.mapbox.com from here (the sandbox cannot reach it); the fetch
-   is exercised with a stub, the token/URL are asserted, and the caption
-   still says which it drew. Open the first PDF: "map © Mapbox" or
-   "schematic … Mapbox could not be reached". If the latter, send the Render
-   log line for that request.
+1. TARGET RATE (the planned price where a route has no rate)
+   Config -> "Costing · fuel" tab -> € per load / € per tonne / € per km, saved
+   with the admin token. Every route WITHOUT a rate of its own now prices at
+   this on the Look-ahead (Commit days, the week, the KPI, the Account rows,
+   both exports), and every such figure is marked "target". A route with ANY
+   rate typed on its route form prices from that ALONE — the target is never
+   mixed in (a typed €/t contract must not gain the target's €/km). Nothing is
+   seeded: until you type a target, everything reads "rate not set" exactly
+   as before.
 
-3. "The table: Mon–Fri individual, origin and destination coordinates, clear
-    columns and rows, landscape, more pages if needed."
-   The PDF is now landscape A4, the map full width on page 1, then ONE ROW
-   PER LINE: Route · Origin (name + lat, lon) · Destination (name + lat, lon)
-   · IPT/WS · Material · Vehicle · Mon · Tue · Wed · Thu · Fri · Week ·
-   km/trip · € (when any rate is typed). Each day cell = qty / trips · veh;
-   today's column tinted; † marks a typed day; a TOTAL row closes the table.
-   The header row repeats on every page; flags and the footer follow. The
-   collapse rule ("MON–FRI EACH DAY") is gone. Coordinates are the location's
-   own WGS84 lat, lon from the Locations page.
+2. FUEL INDEX + BAF (Grok's note, "price + BAF on an existing quote")
+   - The server fetches https://eurooilwatch.com/api/v1/prices (EU Weekly Oil
+     Bulletin, Estonia, automotive diesel with taxes; verified 10 Sep: 1.922,
+     bulletin 2026-09-07) and stores ONE row. The browser never calls it.
+   - A widget (one component, three mounts: Commit KPI strip right of t·km,
+     top of the Account view, Config) shows "Diesel EE €1.922 / L · bulletin
+     7 Sep 2026", a "stale" chip when the bulletin is older than 8 days, and
+     "Index unavailable — type a price" when there is no row.
+   - Two typed settings on the widget (planner or admin): Yard €/L (optional,
+     what the haulier pays — for cost-plus LATER; never replaces the index) and
+     Fuel share % (empty = no BAF).
+   - The BAF base is LOCKED by the first "Confirm week" that finds an index
+     row and no base. Later confirms never move it. Admin resets it on Config.
+   - BAF % = (index now ÷ base − 1) × share. Every quote then gets a SECOND
+     figure, "+ BAF € …", beside it — on days, weeks, the KPI, the Account
+     rows, the XLSX ("€ + BAF" column) and the PDF (under the quote). The quote
+     itself is never replaced, and € var on Account still compares the actual
+     against the QUOTE.
+   - No quote (no route rate, no target) ⇒ diesel only, no € invented.
 
-4. "Stock held with consumption input → Account page, simpler."
-   Account view now has a Stockpiles block for the ACCOUNT week only — one
-   row per stockpile: opening · in · OUT [one box] · closing · capacity ·
-   remaining. That is the only place consumption is typed. The W1–W4 × two
-   months grid at the bottom of Horizon is gone (its component deleted).
-   Consequence you agreed: no planned consumption for future weeks any more —
-   the STOCKPILE OVER forecast is opening + planned inbound.
-
-5. "Stock held on Commit → Dashboard; replace with this week's movements map."
-   Dashboard gets a read-only "Stock held" panel (this month + next, balance
-   at each week's end, over-capacity in red). The Commit view's card is
-   replaced by a small LIVE Mapbox map of this week's lines — the baked
-   loaded leg per line, coloured by IPT (palette C), origin/destination dots,
-   hover for the week's qty and trips. It is NOT the public map in a frame
-   (that loads zones, restrictions and months of matrix): it makes one small
-   read, GET /api/lookahead/geometry?ids=…, and never touches the page read,
-   so the grid is no slower. Created once, kept while Look-ahead is open.
-   Unbaked routes are listed under it, never drawn as straight lines.
-
-6. "Always stockpile, not pile."
-   Every user-visible string, the flag code (PILE_OVER → STOCKPILE_OVER, rail
-   label "STOCKPILE OVER"), comments and tests. A source-level assertion now
-   fails if "pile" appears on its own anywhere in index.html.
-
-FILES
------
-  backend/weeks.py         calendar weeks: iso_weeks_of_month, weeks_in_month,
-                           week_span, week_of_date, prev_week; ÷n split
-  backend/days.py          bucket_dates from week_span; bucket re-stamp
-  backend/stockpiles.py    week_index bound = the month's own count
-  backend/clashes.py       STOCKPILE_OVER; prev_week from weeks.py
-  backend/lookahead.py     account_stock(), week_geometry(), horizon week spans
-  backend/main.py          GET /api/lookahead/geometry; token via config
-  backend/config.py        MAPBOX_TOKEN_DEFAULT + mapbox_token()
-  backend/export.py        the landscape PDF; shared geometry read; token
-  backend/network.py       wording only
-  backend/requirements.txt + pillow==12.2.0
-  frontend/index.html      CommitMap, DashboardStock, Account stockpile block,
-                           Horizon columns from the server, Stockpiles grid
-                           removed, wording
-  backend/tests/test_week1.py     315 -> 317 (calendar-week arithmetic)
-  backend/tests/test_lookahead.py 214 -> 242 (section 13; the PDF; Mapbox stub)
-  backend/tests/parse_frontend.js 305 -> 314 · render_frontend.js 49 -> 51
-  backend/tests/fixtures/lookahead_page.json (regenerated)
-  README.txt
-
-WHAT WAS NOT TESTED
+ACTION ON YOUR SIDE
 -------------------
-The Mapbox Static fetch against the real API (stubbed here — the sandbox has
-no path to api.mapbox.com). The Commit map in a real browser (mapbox-gl is
-not loadable here; parsed and Babel-compiled only). The migration against
-YOUR Postgres rows — exercised on SQLite with a stale bucket number.
+a. Deploy; the boot creates fuel_index (CREATE TABLE IF NOT EXISTS, no
+   migration). Nothing to seed.
+b. Open Config -> Costing · fuel. Press "Fetch the bulletin now" with the
+   admin token, or just open the Look-ahead — the widget's first read starts
+   a background fetch when the row is older than 12 h. ⚠️ UNVERIFIED: whether
+   Render's outbound can reach eurooilwatch.com. The sandbox could (through
+   its proxy); Render should. If the widget stays on "Index unavailable",
+   read the Render log for "fuel-index-refresh" or GET /api/fuel-index and
+   look at index.last_error. Fallback that always works: type the index on
+   Config ("Use this index") — it is stored as source 'manual'.
+c. Type a target rate if you want every unpriced line to show a planned €.
+   Type a fuel share (and, optionally, the yard price) on the widget.
+d. Confirm a week: that locks the BAF base. From the NEXT bulletin on,
+   "+ BAF" figures appear beside the quotes.
 
-SUITE
------
-2,575 / 0 on a fresh clone with every zip applied (1,586 py + 989 js).
-Eleven deliberate regressions, eleven caught (one by the defensive
-"unreachable" assertion in week_of_date rather than a named test; one
-exposed a crashable assertion, since fixed).
+THINGS TO KNOW
+--------------
+- One BAF base per tenant, not per haulier or per route (Grok's lock K1/K6).
+  Hauliers who quoted on different dates share one base. If that bites, the
+  base becomes a route column — say so and it is a small slice.
+- The feed does not say "with taxes". €1.922 can only be the taxed figure
+  (ex-tax diesel is ~€1.0), so the widget's attribution says which series it
+  is taken to be. If the Commission's own XLSX ever disagrees, type it over.
+- The supplier's XLSX gains a "Fuel" sheet (index, bulletin date, base, share,
+  BAF %) and the PDF a footer line naming the index and the formula. The yard
+  price and the target rates are NOT on the supplier's sheet — they are yours.
+- The widget has NOT been seen in a browser (the sandbox cannot load the CDNs;
+  it renders under the harness with a populated fixture and Babel-compiles).
+  First look: Look-ahead -> Commit -> the fifth KPI card; Account -> the strip
+  above the KPIs; Config -> Costing · fuel.
+- GET /api/lookahead never waits for the feed: it reads the stored row only
+  (two extra statements per page read, asserted). The widget's own GET
+  /api/fuel-index returns the stored row at once and refreshes in a thread.
+- Admin endpoints are still open while ADMIN_TOKEN is unset (C11, unchanged).
+
+FILES (17)
+----------
+backend/costing.py                 NEW — target rates, fuel settings, BAF formula (config key 'costing')
+backend/fuel.py                    NEW — the feed, the global row, refresh in a thread, manual index
+backend/db.py                      init_costing_db(): fuel_index (untenanted, by decision)
+backend/main.py                    7 endpoints: GET /api/costing · PUT /api/admin/costing/target ·
+                                   GET /api/fuel-index · POST /api/admin/fuel-index/refresh ·
+                                   PUT /api/fuel-index/settings · PUT /api/admin/fuel-index/manual ·
+                                   POST /api/admin/fuel-index/reset-base; init order; imports
+backend/weeks.py                   confirm_week() locks the BAF base once (and ONLY confirm — see tests)
+backend/derived.py                 rate_source / route_rates / baf_pct on context; eur_adj on days,
+                                   weeks, totals; eur_target_lines; response.costing
+backend/lookahead.py               account rows: rate_source, planned_eur_adj; page.costing
+backend/export.py                  XLSX: "€ source", "€ + BAF" columns + a Fuel sheet; PDF: target
+                                   mark, +BAF under the quote, a diesel footer line, footer wording
+backend/tests/test_costing.py      NEW — 106 assertions (see below)
+backend/tests/test_lookahead.py    reset_db() creates fuel_index; the sheet list gained "Fuel"
+backend/tests/test_tenant_audit.py fuel_index registered as untenanted with its reason (30 -> 31)
+backend/tests/parse_frontend.js    +16 (314 -> 330)
+backend/tests/render_frontend.js   +16 (51 -> 67)
+backend/tests/fixtures/lookahead_page_fuel.json  NEW — written by test_costing.py, read by render
+backend/tests/fixtures/lookahead_page.json       rewritten by test_lookahead.py (adds costing block)
+frontend/index.html                FuelWidget (×3), CostingTab, Quote + BAF on Commit/Account, copy
+README.txt                         this file
+
+SUITE — every figure watched print, on a FRESH clone with this zip applied
+--------------------------------------------------------------------------
+test_costing 106 · test_lookahead 242 · test_phase2 160 · test_phase25a 104 ·
+test_phase3 154 · test_phase4 220 · test_phase45 144 · test_phase5a 215 ·
+test_tenant_audit 31 · test_week1 317 = 1,693 py
+parse_frontend 330 · parse_map 484 · render_frontend 67 · test_ipt_overlay 140 = 1,021 js
+TOTAL 2,714 / 0 (was 2,575 at HEAD).
+
+Run the .py files before the .js ones — two fixtures are written by them.
+
+NOT TESTED (say it plainly)
+---------------------------
+- eurooilwatch.com from Render (the fetch is exercised against a stub; the
+  parser against a payload captured on 10 Sep).
+- The widget in a real browser (harness-rendered only).
+- Postgres: fuel_index is CREATE TABLE IF NOT EXISTS with TEXT/REAL columns —
+  the same shapes every other table uses — but no Postgres branch runs here.
+- Two deliberate regressions were run and caught by the right assertions
+  (mixing the target into a typed route; BAF replacing the quote). And one
+  REAL bug was caught while building: the base-lock hook first landed in the
+  week EDIT function (its tail is identical to confirm's) — an assertion now
+  pins that editing a week never locks the base.
