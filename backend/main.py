@@ -53,6 +53,7 @@ MONTH_COUNT = 60           # 5-year horizon
 # overwrites at import time — and test_week1.py asserts the two agree.
 stockpiles.START_YEAR = START_YEAR
 days.START_YEAR = START_YEAR        # Look-ahead v2 slice 1: the day layer reads the same origin
+weeks.START_YEAR = START_YEAR       # 10 Sep: calendar weeks need the month's year to count them
 
 
 # ------------------------------------------------------------------ startup
@@ -296,8 +297,7 @@ def meta():
         # flat maps kept for the map + dashboard, derived from the taxonomy
         "factors": conversions.flat_factors(factors),
         "seasonal_restrictions": factors.get("seasonal_restrictions", []),
-        "mapbox_token": os.getenv("MAPBOX_TOKEN",
-            "pk.eyJ1IjoiamdkMjMwNDE5OTAiLCJhIjoiY21xbnJzaTRrMDYyOTJxcXowczRxNTlxdyJ9.xujuSc3O8RcgKIitWNGIWg"),
+        "mapbox_token": config.mapbox_token(),
     }
 
 
@@ -842,6 +842,22 @@ def lookahead_page(bucket: str = "commit", route_id: Optional[str] = None,
                           route_id=route_id, acc=acc, with_tark_tee=bool(tark_tee))
 
 
+@app.get("/api/lookahead/geometry")
+def lookahead_geometry(ids: str = "", vehicles: str = ""):
+    """
+    10 Sep — the Commit view's week map. `ids` = comma-separated route ids (the lines the
+    caller already sees), `vehicles` = the matching vehicle types, aligned by position and
+    optional. Returns each route's baked loaded geometry and both ends with coordinates;
+    an unbaked route comes back with geometry null. Any staff code. Deliberately NOT a
+    page read — the map must never make the grid slower.
+    """
+    _require_access()
+    id_list = [x.strip() for x in ids.split(",") if x.strip()]
+    veh_list = [x.strip() for x in vehicles.split(",")] if vehicles else []
+    veh = {rid: v for rid, v in zip(id_list, veh_list) if v}
+    return {"routes": lookahead.week_geometry(id_list, veh)}
+
+
 @app.get("/api/forecast-weeks/tark-tee")
 def forecast_week_tark_tee(bucket: str = "commit", route_id: Optional[str] = None):
     """
@@ -937,7 +953,7 @@ def set_forecast_day_actual(body: DayActual):
 
 # --------------------------------------------- stockpiles (Week 1, Task D2)
 class CapacityIn(BaseModel):
-    # None CLEARS the capacity — "we do not know how big this pile is" is a real state
+    # None CLEARS the capacity — "we do not know how big this stockpile is" is a real state
     # and is not zero. See stockpiles.set_capacity().
     capacity_qty: Optional[float] = None
     capacity_unit: Optional[str] = None
@@ -978,8 +994,8 @@ def list_stockpiles(from_month: int = Query(1, ge=1, le=MONTH_COUNT),
     A read model — nothing here is stored. Inbound comes from typed week ACTUALS, so a
     week nobody has reported shows inbound 0 rather than a quarter of the forecast.
     """
-    # Task F: any valid code. ⚠️ NOT filtered by IPT — a pile has no IPT, and inferring
-    # one from the routes that feed it would be a guess. An IPT code sees every pile.
+    # Task F: any valid code. ⚠️ NOT filtered by IPT — a stockpile has no IPT, and inferring
+    # one from the routes that feed it would be a guess. An IPT code sees every stockpile.
     _require_access()
     out = stockpiles.balances(from_month, to_month, location_id=location_id)
     out["storage_types"] = list(stockpiles.STORAGE_TYPES)
@@ -1158,9 +1174,9 @@ def public_month_kpis(month: int = Query(..., ge=1, le=MONTH_COUNT),
 def public_stockpile_timeline(from_: int = Query(1, alias="from", ge=1, le=MONTH_COUNT),
                               to: int = Query(MONTH_COUNT, ge=1, le=MONTH_COUNT)):
     """
-    2026-09-02 (§8). Per location, per month: is the pile over capacity at the END of
+    2026-09-02 (§8). Per location, per month: is the stockpile over capacity at the END of
     that month, and by how much. Read from the same balance read model the Look-ahead
-    uses; nothing stored, nothing new computed. Only piles with a recorded capacity can
+    uses; nothing stored, nothing new computed. Only stockpiles with a recorded capacity can
     be over, so only those appear. No week detail — the public map stays monthly.
     """
     lo, hi = min(from_, to), max(from_, to)

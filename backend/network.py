@@ -107,7 +107,7 @@ def _coord_or_none(v):
 #               rule, and the two must agree or the public map's origin filter and the
 #               route authoring disagree about the same location.
 #   Stockpile   a DESTINATION by default. It can be switched to 'both' in the form —
-#               a pile that feeds onward hauls is an origin too — but a pile nobody
+#               a stockpile that feeds onward hauls is an origin too — but a stockpile nobody
 #               has thought about is somewhere material lands.
 #
 # This is a DEFAULT for a newly created location, not a constraint: role is a column
@@ -815,7 +815,7 @@ def public_map_data(profile=None):
     # on a page load is 27 passes over forecast_weeks for a two-number string.
     #
     # ⚠️ Both numbers or neither. The popup prints 'Stock 1 240 t / 3 000 t' only when a
-    # capacity has been recorded — half that sentence reads as a pile with no limit.
+    # capacity has been recorded — half that sentence reads as a stockpile with no limit.
     stock = {}
     try:
         import datetime as _dt

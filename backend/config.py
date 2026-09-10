@@ -24,8 +24,22 @@ whether 18 t is the right payload. That stays with the person editing.
 """
 import datetime
 import json
+import os
 
 import db
+
+# The Mapbox PUBLIC token (pk.…). Public by design — it is in every browser's
+# view-source — and read from MAPBOX_TOKEN on Render when set. ONE place for it since
+# 10 Sep: the browser map, the Commit week map and the PDF's static map all use
+# mapbox_token(); the PDF used to read only the env var and fell back to a schematic
+# on Render, where the env var was never set.
+MAPBOX_TOKEN_DEFAULT = ("pk.eyJ1IjoiamdkMjMwNDE5OTAiLCJhIjoiY21xbnJzaTRrMDYyOTJxcXowczRxNTlxdyJ9"
+                        ".xujuSc3O8RcgKIitWNGIWg")
+
+
+def mapbox_token():
+    return (os.getenv("MAPBOX_TOKEN") or "").strip() or MAPBOX_TOKEN_DEFAULT
+
 
 KEY = "factors"
 # a small in-process cache so the many load_factors() calls inside one request do not

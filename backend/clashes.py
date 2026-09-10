@@ -7,7 +7,7 @@ be reached — Tark Tee. Nothing here is stored, nothing here refuses a confirm.
 
     SHORTAGE        last week's actual < planned and calibrate has not carried it
     DAYS_NE_WEEK    sum(day planned) ≠ week planned      (slice 1's flag, surfaced)
-    PILE_OVER       the destination pile's forecast balance at week end > capacity
+    STOCKPILE_OVER       the destination stockpile's forecast balance at week end > capacity
     ROUTE_CAP       max_vehicles_per_day typed on the route and the vehicles that day
                     on that route_id — across EVERY IPT — exceed it
     IPT_SHARE       two or more IPTs with quantity the same day on the same route_id,
@@ -40,7 +40,7 @@ import restrictions
 import stockpiles
 import weeks
 
-CODES = ("SHORTAGE", "DAYS_NE_WEEK", "PILE_OVER", "ROUTE_CAP", "IPT_SHARE", "TARK_TEE",
+CODES = ("SHORTAGE", "DAYS_NE_WEEK", "STOCKPILE_OVER", "ROUTE_CAP", "IPT_SHARE", "TARK_TEE",
          "UNBAKED", "PARENT_CHANGED")
 
 #: The 98 % band (brief L5): a line "holds" when actual ≥ 98 % of planned.
@@ -188,16 +188,15 @@ def ipt_share(lines):
 # --------------------------------------------------------------------------- #
 def stock_forecast(lines, month_index, week_index):
     """
-    Per pile: opening (balance at the end of the previous week, from actuals), planned
+    Per stockpile: opening (balance at the end of the previous week, from actuals), planned
     inbound this week (the commit week's PLANNED quantities of every line into it, in the
-    pile's unit), typed consumption for the week, and the forecast balance. Over when
-    forecast > capacity. Piles with no capacity are listed with `over` False.
+    stockpile's unit), typed consumption for the week, and the forecast balance. Over when
+    forecast > capacity. Stockpiles with no capacity are listed with `over` False.
     """
     import conversions
     factors = conversions.load_factors()
     bal = stockpiles.balances(1, int(month_index))
-    pm, pw = (int(month_index), int(week_index) - 1) if int(week_index) > 1 \
-        else (int(month_index) - 1, weeks.WEEKS_PER_MONTH)
+    pm, pw = weeks.prev_week(month_index, week_index)
     out = []
     for sp in bal["stockpiles"]:
         wk = {(w["month_index"], w["week_index"]): w for w in sp["weeks"]}
@@ -232,15 +231,15 @@ def stock_forecast(lines, month_index, week_index):
     return out
 
 
-def pile_over(lines, stock):
-    """PILE_OVER on every line whose destination pile forecasts over capacity."""
+def stockpile_over(lines, stock):
+    """STOCKPILE_OVER on every line whose destination stockpile forecasts over capacity."""
     over = {s["location_id"]: s for s in stock if s.get("over")}
     out = []
     for l in lines:
         c = l.get("context") or {}
         s = over.get(c.get("dest_id"))
         if s:
-            out.append(_flag("PILE_OVER", l,
+            out.append(_flag("STOCKPILE_OVER", l,
                              f"{s['name']} forecasts {s['forecast']:g} / {s['capacity_qty']:g} {s['unit']} at week end — OVER by {s['over_by']:g}",
                              location_id=s["location_id"], over_by=s["over_by"]))
     return out
@@ -301,7 +300,7 @@ def compute(all_lines, visible_keys, account_rows, month_index, week_index,
     flags += per_line(all_lines, account_rows)
     flags += route_cap(all_lines)
     flags += ipt_share(all_lines)
-    flags += pile_over(all_lines, stock)
+    flags += stockpile_over(all_lines, stock)
     # the STORED check — a DB read, so it is always on. `with_tark_tee=False` is for a
     # caller that wants the rail without it (none today).
     tt_source = {"status": "off", "checked_at": None, "unchecked": [], "routes": []}

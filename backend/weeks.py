@@ -18,10 +18,10 @@ THE FOUR RULES THAT MATTER
 
 2. **`derived` refreshes, `edited` and `confirmed` do not.** That is the whole reason
    `status` is three values and not a boolean. A re-approved month rewrites its
-   derived weeks to quantity/4 and leaves the others exactly as somebody left them.
+   derived weeks to quantity/n (n = the month's weeks) and leaves the others exactly as somebody left them.
 
 3. **`parent_qty` is what makes "parent month changed" truthful.** See db.py's note on
-   the column. An edited week always differs from parent/4, so the flag cannot be
+   the column. An edited week always differs from parent/n, so the flag cannot be
    derived by comparison — it needs the parent value as at the last write.
 
 4. **Saving an actual NEVER calibrates.** Calibration is a separate button, writes
@@ -29,19 +29,30 @@ THE FOUR RULES THAT MATTER
    actual that silently rewrote next week's plan is the behaviour the build list
    singles out to avoid, and it is one line away from happening by accident.
 
-WEEK BUCKETS
-------------
-Week 1 = days 1-7, week 2 = 8-14, week 3 = 15-21, week 4 = 22 to the end of the month.
-No holiday calendar, no ISO weeks, and deliberately no fifth bucket: a 31-day month's
-last ten days are all week 4. That is a planning convention, not a calendar fact, and
-it is the one the build list specifies.
+WEEK BUCKETS — CALENDAR WEEKS SINCE 10 SEP 2026
+-----------------------------------------------
+A week is Monday to Sunday. It belongs to the month that holds its THURSDAY — the ISO
+8601 rule, the numbering printed on Estonian calendars — so a month has four or five
+weeks and no week belongs to two months. Week 1 of September 2026 is Mon 31 Aug – Sun
+6 Sep; October 2026 has five weeks (its Thursdays are the 1st, 8th, 15th, 22nd, 29th).
+A month's forecast splits over ITS number of weeks, ÷4 or ÷5.
+
+Until 10 Sep the buckets were days 1–7 / 8–14 / 15–21 / 22–end of the month (the Week 1
+build list's convention, "no ISO weeks"). The human's rule "Monday to Friday only,
+always starting from Monday" cannot be met by that definition in a month that does not
+begin on a Monday — 1 Sep 2026 is a Tuesday, and the commit grid opened on Tue 8 with
+Mon 14 at its end. `week_index` keeps its meaning (the k-th week of the month) so every
+existing forecast_weeks row keeps its identity; only the dates it covers moved, by at
+most six days. The old WEEKS_PER_MONTH constant is gone: use `weeks_in_month()`.
 """
+import calendar
 import datetime
 
 import db
 
 WEEK_STATUSES = ("derived", "edited", "confirmed")
-WEEKS_PER_MONTH = 4
+#: Set by main.py at import, exactly as stockpiles.START_YEAR and days.START_YEAR are.
+START_YEAR = 2026
 FLAG_FIELDS = ("weather", "wetness", "traffic", "other")
 
 # Columns a caller may read back. Kept as a list rather than SELECT * so a new column
@@ -61,58 +72,96 @@ def _now():
 # --------------------------------------------------------------------------- #
 #  Week arithmetic                                                             #
 # --------------------------------------------------------------------------- #
-def week_of_day(day):
+def _month_of(month_index, start_year=None):
+    """(year, month) for an absolute month_index. 1 = January of START_YEAR."""
+    sy = int(start_year if start_year is not None else START_YEAR)
+    mi = int(month_index) - 1
+    return sy + mi // 12, mi % 12 + 1
+
+
+def month_index_of(date, start_year=None):
+    """Absolute month_index for a date. 1 = January of start_year."""
+    sy = int(start_year if start_year is not None else START_YEAR)
+    return (date.year - sy) * 12 + date.month
+
+
+def iso_weeks_of_month(year, month):
     """
-    Which bucket a day-of-month falls in. 1-7, 8-14, 15-21, 22-end.
-
-    Clamped at 4 rather than allowed to reach 5: day 29 would otherwise be week 5 and
-    there is no week 5 row to write to. The clamp is the definition, not a guard.
+    [(monday, sunday), …] of every Mon–Sun week whose Thursday falls in (year, month).
+    Four or five entries; consecutive months' lists never overlap and never leave a gap.
     """
-    d = int(day)
-    if d < 1:
-        return 1
-    return min(WEEKS_PER_MONTH, (d - 1) // 7 + 1)
+    first = datetime.date(year, month, 1)
+    d = first - datetime.timedelta(days=first.weekday())        # the Monday on/before the 1st
+    out = []
+    while True:
+        thu = d + datetime.timedelta(days=3)
+        if (thu.year, thu.month) == (year, month):
+            out.append((d, d + datetime.timedelta(days=6)))
+        elif out:
+            break
+        d += datetime.timedelta(days=7)
+    return out
 
 
-def next_week(month_index, week_index):
+def weeks_in_month(month_index, start_year=None):
+    """4 or 5 — how many weeks this month owns, and what its forecast is split over."""
+    return len(iso_weeks_of_month(*_month_of(month_index, start_year)))
+
+
+def week_span(month_index, week_index, start_year=None):
+    """(monday, sunday) of the k-th week of a month. Raises on a week the month lacks."""
+    ws = iso_weeks_of_month(*_month_of(month_index, start_year))
+    w = int(week_index)
+    if not 1 <= w <= len(ws):
+        raise ValueError(f"month {month_index} has {len(ws)} weeks, not week {week_index}")
+    return ws[w - 1]
+
+
+def week_of_date(date, start_year=None):
+    """
+    (month_index, week_index) of the week containing `date` — the week's month is the one
+    holding its Thursday, which is not always the date's own month (Mon 31 Aug 2026 is
+    week 1 of September).
+    """
+    thu = date - datetime.timedelta(days=date.weekday()) + datetime.timedelta(days=3)
+    mi = month_index_of(thu, start_year)
+    for k, (mon, sun) in enumerate(iso_weeks_of_month(thu.year, thu.month), 1):
+        if mon <= date <= sun:
+            return mi, k
+    raise AssertionError("unreachable: every date is in exactly one ISO week")
+
+
+def next_week(month_index, week_index, start_year=None):
     """
     The week after this one, as (month_index, week_index).
 
-    Past week 4, the next week is week 1 of the NEXT month — which is why calibration
-    can reach across a month boundary and why it has to look the parent line up again
-    when it does.
+    Past a month's last week, the next week is week 1 of the NEXT month — which is why
+    calibration can reach across a month boundary and why it has to look the parent line
+    up again when it does.
     """
-    if int(week_index) >= WEEKS_PER_MONTH:
+    if int(week_index) >= weeks_in_month(month_index, start_year):
         return int(month_index) + 1, 1
     return int(month_index), int(week_index) + 1
 
 
-def month_index_of(date, start_year):
-    """Absolute month_index for a date. 1 = January of start_year."""
-    return (date.year - int(start_year)) * 12 + date.month
+def prev_week(month_index, week_index, start_year=None):
+    """The week before this one; week 1 steps back to the previous month's last week."""
+    if int(week_index) <= 1:
+        return int(month_index) - 1, weeks_in_month(int(month_index) - 1, start_year)
+    return int(month_index), int(week_index) - 1
 
 
-def editable_week(start_year, today=None):
+def editable_week(start_year=None, today=None):
     """
     The week the look-ahead lets you edit and confirm — "next week" in the build
-    list's wording: *the week bucket that contains today, inside the current month.*
+    list's wording: *the week bucket that contains today.*
 
     ⚠️ That wording is worth keeping verbatim, because it is not what "next week"
     normally means. The editable bucket is the one TODAY is in, not the one after it.
-    The build list's fallback — "if today is past week 4 of this month, next week =
-    week 1 of next month" — cannot be reached while week 4 runs to the end of the
-    month, so it is implemented defensively and never fires today.
-
-    Returns (month_index, week_index), or (None, None) if the date sits outside the
-    forecast horizon, which callers must render as "outside the horizon" rather than
-    silently editing month 1.
+    Its month is the week's month (the Thursday rule), not necessarily today's.
     """
     d = today or datetime.date.today()
-    mi = month_index_of(d, start_year)
-    wi = week_of_day(d.day)
-    if wi > WEEKS_PER_MONTH:          # unreachable with the buckets above; kept honest
-        mi, wi = mi + 1, 1
-    return mi, wi
+    return week_of_date(d, start_year)
 
 
 # --------------------------------------------------------------------------- #
@@ -224,7 +273,7 @@ def _insert_week(route_id, month_index, discipline, section_id, week_index,
 
 def materialise_line(route_id, discipline, section_id, month_index=None):
     """
-    Create or refresh the four weeks of one forecast LINE.
+    Create or refresh the weeks of one forecast LINE — four or five, the month's own.
 
     Called when a line is approved, and lazily on read. Only Approved months are
     materialised — a Pending month has nothing to plan against yet.
@@ -244,14 +293,15 @@ def materialise_line(route_id, discipline, section_id, month_index=None):
         rows = [r for r in rows if r["month_index"] == int(month_index)]
 
     for p in rows:
-        share = float(p["quantity"] or 0) / WEEKS_PER_MONTH
+        n_weeks = weeks_in_month(p["month_index"])
+        share = float(p["quantity"] or 0) / n_weeks
         have = {r["week_index"]: r for r in db.query(
             "SELECT week_index, status, planned_qty, unit, parent_qty FROM forecast_weeks WHERE tenant_id = ? "
             "AND route_id = ? AND month_index = ? AND discipline = ? "
             "AND section_id = ?",
             (db.current_tenant(), p["route_id"], p["month_index"],
              p["discipline"] or "", p["section_id"] or ""))}
-        for w in range(1, WEEKS_PER_MONTH + 1):
+        for w in range(1, n_weeks + 1):
             cur = have.get(w)
             if cur is None:
                 _insert_week(p["route_id"], p["month_index"], p["discipline"],

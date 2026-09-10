@@ -8,12 +8,13 @@ same numbers the screen shows; nothing is recomputed here.
     build_xlsx(page)   sheet 1  day × line (the export mock's columns + € where set)
                        sheet 2  stock at week end
                        sheet 3  clashes
-    build_pdf(page)    the one-pager: a map of the week's routes, then the lines grouped
-                       by origin (carrier is not a field yet — brief item 7 — so the
-                       "then by carrier" grouping is by origin only), the collapse rule
-                       where every weekday of a line is identical, flags (not a stop),
-                       and the three honest-gap footer lines. Payloads are planning
-                       figures; km from HERE unless marked ‡.
+    build_pdf(page)    LANDSCAPE, as many pages as it takes (10 Sep, the human): the
+                       week's routes on a map, then ONE ROW PER LINE with Mon…Fri as
+                       five separate columns (no collapse rule any more), origin and
+                       destination with their coordinates, a week total, flags (not a
+                       stop) and the honest-gap footer lines. Header row repeats on
+                       every page. Payloads are planning figures; km from HERE unless
+                       marked ‡.
 
 2026-09-10, on the human's feedback: **Mon–Fri only** (weekend rows are dropped from
 both files — the days still exist at 0 in the database), **no stockpile section** (the
@@ -47,13 +48,18 @@ except Exception as e:                                   # pragma: no cover
     MISSING["xlsx"] = str(e)
 try:
     from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
     from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, KeepTogether, LongTable,
+                                    PageTemplate, Paragraph, Spacer, TableStyle)
 except Exception as e:                                   # pragma: no cover
     rl_canvas = None
     MISSING["pdf"] = str(e)
+
+import config
 
 NAVY = "0B1B45"
 NAVY_RGB = (0x0B / 255, 0x1B / 255, 0x45 / 255)
@@ -65,8 +71,10 @@ BAND = (0xEF / 255, 0xF6 / 255, 0xFF / 255)
 FOOTER = ("€ not printed where no contract rate is typed on the route.",
           "Vignette is time-based in Estonia and is not on this sheet. Payloads are planning "
           "figures, not plated. Km from the baked HERE route unless marked ‡.",
-          "Mon–Fri only. Road restrictions are Tark Tee's stored check as of its own date, "
-          "not re-read for this sheet.",
+          "Mon–Fri only, one row per line; each day cell is qty / trips · vehicles; † = a typed day "
+          "that no longer follows the week ÷ 5. Coordinates are "
+          "the location's own (WGS84). Road restrictions are Tark Tee's stored check as of its own "
+          "date, not re-read for this sheet.",
           )
 
 
@@ -216,37 +224,29 @@ def _thin(coords, n=120):
 
 def route_geometries(page):
     """[(route_id, origin_name, dest_name, [(lon, lat), …])] for the lines on the page —
-    the loaded alt-0 geometry for the line's own vehicle, else any baked profile."""
-    seen, out = set(), []
-    for l in page.get("commit", {}).get("lines", []):
-        rid = l.get("route_id")
-        if rid in seen:
-            continue
-        seen.add(rid)
-        c = l.get("context") or {}
-        rows = db.query(
-            "SELECT vehicle_profile, geometry FROM route_geometry WHERE tenant_id = ? AND route_id = ? "
-            "AND leg = 'loaded' AND alt_index = 0 AND geometry IS NOT NULL",
-            (db.current_tenant(), rid))
-        rows.sort(key=lambda r: 0 if r["vehicle_profile"] == c.get("vehicle_type") else 1)
-        if not rows:
-            continue
-        try:
-            coords = [(float(p[0]), float(p[1])) for p in json.loads(rows[0]["geometry"])]
-        except Exception:
-            continue
-        if len(coords) >= 2:
-            out.append((rid, c.get("origin_name") or c.get("origin_id") or "", c.get("dest_name") or c.get("dest_id") or "", coords))
+    the loaded alt-0 geometry for the line's own vehicle, else any baked profile. Since
+    10 Sep this is lookahead.week_geometry(), the same read the Commit view's map makes
+    (three queries for the whole page, not two per route). Unbaked routes are absent."""
+    import lookahead
+    lines = page.get("commit", {}).get("lines", [])
+    out = []
+    for g in lookahead.week_geometry([l.get("route_id") for l in lines],
+                                     {l.get("route_id"): (l.get("context") or {}).get("vehicle_type") for l in lines}):
+        if g.get("geometry") and len(g["geometry"]) >= 2:
+            out.append((g["route_id"], g["origin"]["name"], g["dest"]["name"],
+                        [(float(p[0]), float(p[1])) for p in g["geometry"]]))
     return out
 
 
-def mapbox_static_png(routes, size="900x450", timeout=12):
+def mapbox_static_png(routes, size="1200x600", timeout=12, token=None):
     """
-    A PNG of the routes over Mapbox's light style, or None. Needs MAPBOX_TOKEN and a
-    network path to api.mapbox.com — neither exists in the build sandbox, so this path
-    has NOT been exercised there; the caller falls back to a schematic.
+    A PNG of the routes over Mapbox's light style, or None. Uses config.mapbox_token()
+    — MAPBOX_TOKEN on Render when set, else the same public token the browser map
+    uses (until 10 Sep this read only the env var, which Render never had, so every
+    PDF fell back to the schematic). Needs a network path to api.mapbox.com; the build
+    sandbox has none, so the fetch itself is exercised only through a stub.
     """
-    token = (os.getenv("MAPBOX_TOKEN") or "").strip()
+    token = config.mapbox_token() if token is None else token
     if not token or not routes:
         return None
     overlays = []
@@ -325,183 +325,235 @@ def draw_route_map(c, page, x, y, w, h):
 
 
 # --------------------------------------------------------------------------- #
-#  PDF one-pager                                                               #
+#  PDF — landscape, one row per line, Mon…Fri as columns, as many pages as needed #
 # --------------------------------------------------------------------------- #
-def _collapse(days_rows):
-    """
-    The collapse rule: when every WEEKDAY row of a line is identical in qty/trips/veh,
-    return that one row; else None. Weekend rows (0) are printed separately.
-    """
-    wd = [r for r in days_rows if datetime.date.fromisoformat(r["date"]).weekday() <= 4]
-    if len(wd) < 2:
-        return None
-    sig = {(r["qty"], r["trips"], r["veh"]) for r in wd}
-    return wd[0] if len(sig) == 1 else None
+class _MapFlowable(Flowable):
+    """The route map as a platypus flowable: Mapbox static when it can be had, else the
+    schematic. Records which one it drew in `kind` for the caption that follows it."""
+    def __init__(self, page, width, height):
+        Flowable.__init__(self)
+        self.page, self.width, self.height, self.kind = page, width, height, None
+
+    def wrap(self, aw, ah):
+        return self.width, self.height
+
+    def draw(self):
+        self.kind = draw_route_map(self.canv, self.page, 0, 0, self.width, self.height)
+
+
+def _coord(lat, lon):
+    return f"{lat:.5f}, {lon:.5f}" if lat is not None and lon is not None else "no coordinates"
+
+
+def _pdf_rows(page):
+    """One entry per line: the context, the five weekday cells (Mon..Fri in order), and
+    the week's totals. Sorted by origin, then route, then WS — the supplier reads by
+    where the material leaves from."""
+    import lookahead
+    lines = page.get("commit", {}).get("lines", [])
+    ends = {g["route_id"]: g for g in lookahead.week_geometry(
+        [l.get("route_id") for l in lines],
+        {l.get("route_id"): (l.get("context") or {}).get("vehicle_type") for l in lines})}
+    out = []
+    for l in lines:
+        c = l.get("context") or {}
+        wd = sorted([d for d in l.get("days", []) if _is_weekday(d["day_date"])], key=lambda d: d["day_date"])
+        g = ends.get(l.get("route_id")) or {}
+        out.append({"line": l, "ctx": c, "days": wd, "geo": g,
+                    "origin": c.get("origin_name") or c.get("origin_id") or "—",
+                    "dest": c.get("dest_name") or c.get("dest_id") or "—",
+                    "wk": l.get("week_derived") or {}})
+    out.sort(key=lambda r: (r["origin"], r["line"].get("route_id") or "", r["ctx"].get("section_id") or ""))
+    return out
 
 
 def build_pdf(page):
     if rl_canvas is None:
         raise RuntimeError("reportlab is not installed: " + MISSING.get("pdf", ""))
     buf = io.BytesIO()
-    W, H = A4
-    c = rl_canvas.Canvas(buf, pagesize=A4, pageCompression=0)
-    c.setTitle(f"Alliance 1 · {_week_title(page)}")
-    lm, rm = 16 * mm, W - 16 * mm
-    y = H - 14 * mm
+    W, H = landscape(A4)
+    lm = rm = 10 * mm
+    top, bottom = 20 * mm, 12 * mm
+    usable = W - lm - rm
+    lines = page.get("commit", {}).get("lines", [])
+    confirmed_all = bool(lines) and all(((l.get("week") or {}).get("status") == "confirmed") for l in lines)
+    title = f"Alliance 1 · {_week_title(page)}"
 
-    def line_h(n=1):
-        nonlocal y
-        y -= 4.6 * mm * n
-        if y < 22 * mm:
-            c.showPage()
-            y = H - 16 * mm
+    def on_page(c, doc):
+        c.saveState()
+        c.setStrokeColorRGB(*NAVY_RGB); c.setLineWidth(2)
+        c.line(lm, H - 8 * mm, W - rm, H - 8 * mm)
+        c.setFont("Helvetica-Bold", 14); c.setFillColorRGB(*NAVY_RGB)
+        c.drawString(lm, H - 14 * mm, title)
+        c.setFont("Helvetica-Bold", 9)
+        c.setFillColorRGB(*(NAVY_RGB if confirmed_all else RED_RGB))
+        c.drawRightString(W - rm, H - 14 * mm, "CONFIRMED" if confirmed_all else "DRAFT — not confirmed")
+        c.setFont("Helvetica", 7.5); c.setFillColorRGB(*GREY)
+        c.drawString(lm, H - 18 * mm, "Commitment sheet · not a delivery note · planning payloads, not plated · Mon–Fri only")
+        c.drawRightString(W - rm, 7 * mm, f"page {doc.page}")
+        c.restoreState()
 
-    def text(x, s, size=9, bold=False, rgb=(0, 0, 0)):
-        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        c.setFillColorRGB(*rgb)
-        c.drawString(x, y, s)
+    doc = BaseDocTemplate(buf, pagesize=(W, H), leftMargin=lm, rightMargin=rm, topMargin=top,
+                          bottomMargin=bottom, title=title, pageCompression=0)
+    doc.addPageTemplates([PageTemplate(id="p", frames=[Frame(lm, bottom, usable, H - top - bottom, id="f",
+                                                                leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)],
+                                       onPage=on_page)])
 
-    def rtext(x, s, size=9, bold=False, rgb=(0, 0, 0)):
-        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        c.setFillColorRGB(*rgb)
-        c.drawRightString(x, y, s)
+    st = ParagraphStyle("b", fontName="Helvetica", fontSize=7.5, leading=9)
+    st_sm = ParagraphStyle("s", parent=st, fontSize=6.5, leading=7.5, textColor=colors.Color(*GREY))
+    st_h = ParagraphStyle("h", parent=st, fontName="Helvetica-Bold", fontSize=7, leading=8.5, textColor=colors.white)
+    st_hc = ParagraphStyle("hc", parent=st_h, alignment=1)
+    st_r = ParagraphStyle("r", parent=st, alignment=2)
+    st_c = ParagraphStyle("c", parent=st, alignment=1)
+    st_grey = ParagraphStyle("g", parent=st, fontSize=8, leading=10, textColor=colors.Color(*GREY))
+    st_navy = ParagraphStyle("n", parent=st, fontName="Helvetica-Bold", fontSize=10, leading=12, textColor=colors.Color(*NAVY_RGB))
+    st_red = ParagraphStyle("rd", parent=st, fontSize=8, leading=10, textColor=colors.Color(*RED_RGB))
 
-    # top rule + title
-    c.setStrokeColorRGB(*NAVY_RGB)
-    c.setLineWidth(2)
-    c.line(lm, H - 8 * mm, rm, H - 8 * mm)
-    confirmed_all = all(((l.get("week") or {}).get("status") == "confirmed")
-                        for l in page.get("commit", {}).get("lines", [])) and page.get("commit", {}).get("lines")
-    text(lm, f"Alliance 1 · {_week_title(page)}", 15, True, NAVY_RGB)
-    rtext(rm, "CONFIRMED" if confirmed_all else "DRAFT — not confirmed", 9, True, NAVY_RGB if confirmed_all else RED_RGB)
-    line_h(1.3)
-    text(lm, "Commitment sheet · not a delivery note · planning payloads, not plated", 9, False, GREY)
-    line_h(2)
+    def P(txt, style=st):
+        return Paragraph(str(txt), style)
 
-    # the week's routes on a map (10 Sep — in place of the stock list the supplier did not need)
-    map_h = 62 * mm
-    kind = draw_route_map(c, page, lm, y - map_h, rm - lm, map_h)
-    y -= map_h
-    line_h(0.9)
-    n_routes = len({l.get("route_id") for l in page.get("commit", {}).get("lines", [])})
-    text(lm, f"Routes this week: {n_routes}" + (" · schematic from the baked geometry (no map tiles)" if kind == "schematic" else " · map © Mapbox"), 7.5, False, GREY)
-    line_h(1.6)
+    def E(v):
+        """Data into markup: escape it. The markup itself (<b>, <br/>, <font>) is ours."""
+        return str(v if v is not None else "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    cols = [("DATE", lm, "l"), ("IPT / WS", lm + 22 * mm, "l"), ("DEST", lm + 48 * mm, "l"),
-            ("MATERIAL", lm + 82 * mm, "l"), ("QTY", lm + 118 * mm, "r"), ("TRIPS", lm + 132 * mm, "r"),
-            ("VEH", lm + 144 * mm, "r"), ("KM/TRIP", lm + 160 * mm, "r"), ("t·km", rm, "r")]
-    if (page.get("commit", {}).get("totals") or {}).get("eur") is not None:
-        cols = cols[:-1] + [("t·km", lm + 172 * mm, "r"), ("€", rm, "r")]
+    story = []
+    # 1. the map, full width
+    map_h = 92 * mm
+    mp = _MapFlowable(page, usable, map_h)
+    story.append(mp)
+    story.append(_Caption(page, mp, st_grey))
+    story.append(Spacer(1, 3 * mm))
 
-    rows = _line_rows(page)
-    by_origin = {}
+    # 2. the table
+    rows = _pdf_rows(page)
+    dates = sorted({d["day_date"] for r in rows for d in r["days"]})[:5]
+    priced = (page.get("commit", {}).get("totals") or {}).get("eur") is not None
+    today = page.get("today")
+    head = [P("ROUTE", st_h), P("ORIGIN<br/><font size=6>name · lat, lon</font>", st_h),
+            P("DESTINATION<br/><font size=6>name · lat, lon</font>", st_h), P("IPT / WS", st_h),
+            P("MATERIAL", st_h), P("VEHICLE", st_h)]
+    for iso in dates:
+        d = datetime.date.fromisoformat(iso)
+        head.append(P(f"{d.strftime('%a %-d %b').upper()}{' · TODAY' if iso == today else ''}"
+                      f"<br/><font size=6>qty / trips · veh</font>", st_hc))
+    head += [P("WEEK<br/><font size=6>qty · trips · t·km</font>", st_hc), P("KM/TRIP", st_hc)]
+    if priced:
+        head.append(P("€ WEEK", st_hc))
+    data = [head]
+    tot = {"t": 0.0, "trips": 0, "tkm": 0.0, "eur": 0.0, "eur_any": False}
     for r in rows:
-        by_origin.setdefault(r["origin"] or "—", []).append(r)
+        c, g, wk, l = r["ctx"], r["geo"], r["wk"], r["line"]
+        o, d = g.get("origin") or {}, g.get("dest") or {}
+        by_date = {x["day_date"]: x for x in r["days"]}
+        row = [P(f"<b>{E(l.get('route_id'))}</b>", st),
+               P(f"<b>{E(r['origin'])}</b><br/><font size=6.5 color='#64748B'>{_coord(o.get('lat'), o.get('lon'))}</font>", st),
+               P(f"<b>{E(r['dest'])}</b><br/><font size=6.5 color='#64748B'>{_coord(d.get('lat'), d.get('lon'))}</font>", st),
+               P(f"{E(c.get('ipt') or '—')}<br/>{E(c.get('section_id') or '')}", st),
+               P(E(c.get("material_type") or "—"), st),
+               P(f"{E(c.get('vehicle_short') or c.get('vehicle_type') or '—')}"
+                 + ("" if c.get("baked") else "<br/><font size=6 color='#B45309'>not baked</font>"), st)]
+        for iso in dates:
+            x = by_date.get(iso)
+            if not x:
+                row.append(P("—", st_c)); continue
+            f = x.get("derived") or {}
+            qty = f"{_n(x.get('planned_qty'))} {c.get('unit') or ''}".strip()
+            sub = (f"{_n(f.get('trips'))} tr · {_n(f.get('vehicles')) if c.get('baked') else '—'} veh"
+                   if x.get("planned_qty") else "0")
+            mark = " †" if x.get("status") == "edited" else ""       # Helvetica has no ✎
+            row.append(P(f"<b>{qty}</b>{mark}<br/><font size=6.5 color='#64748B'>{sub}</font>", st_c))
+        wq = (l.get("week") or {}).get("planned_qty")
+        row.append(P(f"<b>{_n(wq)} {c.get('unit') or ''}</b><br/><font size=6.5 color='#64748B'>{_n(wk.get('trips'))} tr · "
+                     f"{_n(wk.get('tonne_km')) if c.get('baked') else '—'} t·km</font>", st_c))
+        row.append(P((_n(c.get("km_trip")) + (c.get("cycle_mark") or "")) if c.get("baked") else "—", st_c))
+        if priced:
+            row.append(P(_n(wk.get("eur")) if wk.get("eur") is not None else "—", st_c))
+        data.append(row)
+        tot["t"] += float(wk.get("tonnes") or 0)
+        tot["trips"] += int(wk.get("trips") or 0)
+        tot["tkm"] += float(wk.get("tonne_km") or 0)
+        if wk.get("eur") is not None:
+            tot["eur"] += float(wk["eur"]); tot["eur_any"] = True
 
-    if not rows:
-        text(lm, "No approved forecast line in this commit week.", 10, False, GREY)
-        line_h()
+    if rows:
+        n_fixed = 6
+        ndays = len(dates)
+        day_w = 19 * mm
+        widths = [13 * mm, 33 * mm, 33 * mm, 15 * mm, 22 * mm, 18 * mm] + [day_w] * ndays + [27 * mm, 13 * mm]
+        if priced:
+            widths.append(14 * mm)
+        # whatever is left after the fixed columns goes to origin / destination
+        spare = usable - sum(widths)
+        widths[1] += spare / 2; widths[2] += spare / 2
+        total_row = [P("<b>TOTAL</b>", st), P(f"{len(rows)} line(s)", st), "", "", "", ""] + [""] * ndays + [
+            P(f"<b>{_n(tot['t'])} t</b><br/><font size=6.5 color='#64748B'>{_n(tot['trips'])} tr · {_n(tot['tkm'])} t·km</font>", st_c), ""]
+        if priced:
+            total_row.append(P(f"<b>{_n(tot['eur'])}</b>" if tot["eur_any"] else "—", st_c))
+        data.append(total_row)
+        t = LongTable(data, colWidths=widths, repeatRows=1)
+        style = [("BACKGROUND", (0, 0), (-1, 0), colors.Color(*NAVY_RGB)),
+                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                 ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.Color(0.85, 0.87, 0.9)),
+                 ("LINEAFTER", (0, 0), (-2, -1), 0.3, colors.Color(0.9, 0.92, 0.95)),
+                 ("BOX", (0, 0), (-1, -1), 0.6, colors.Color(0.75, 0.78, 0.83)),
+                 ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+                 ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                 ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.Color(0.97, 0.98, 0.99)]),
+                 ("BACKGROUND", (0, -1), (-1, -1), colors.Color(*BAND)),
+                 ("LINEABOVE", (0, -1), (-1, -1), 0.8, colors.Color(*NAVY_RGB))]
+        if today in dates:
+            ci = n_fixed + dates.index(today)
+            style.append(("BACKGROUND", (ci, 1), (ci, -2), colors.Color(0.94, 0.97, 1.0)))
+        t.setStyle(TableStyle(style))
+        story.append(t)
+    else:
+        story.append(P("No approved forecast line in this commit week.", st_grey))
+    story.append(Spacer(1, 4 * mm))
 
-    for origin, rs in by_origin.items():
-        text(lm, f"Origin: {origin}", 11, False, NAVY_RGB)
-        line_h()
-        text(lm, "Forward this block to the railhead / haulier.", 8.5, False, GREY)
-        line_h(1.2)
-        # header band
-        c.setFillColorRGB(*NAVY_RGB)
-        c.rect(lm, y - 1.5 * mm, rm - lm, 5.5 * mm, stroke=0, fill=1)
-        for title, x, al in cols:
-            (rtext if al == "r" else text)(x, title, 7.5, False, (1, 1, 1))
-        line_h(1.3)
-        # per line within the origin
-        by_line = {}
-        for r in rs:
-            by_line.setdefault(r["route_id"] + "|" + r["ws"] + "|" + r["discipline"], []).append(r)
-        tot = {"t": 0.0, "trips": 0, "veh": 0, "tkm": 0.0, "eur": 0.0, "eur_any": False}
-        for key, drs in by_line.items():
-            drs.sort(key=lambda r: r["date"])
-            col = _collapse(drs)
-            wk = [r for r in drs if datetime.date.fromisoformat(r["date"]).weekday() <= 4]
-            we = [r for r in drs if datetime.date.fromisoformat(r["date"]).weekday() > 4]
-            printed = ([("MON–FRI EACH DAY", col)] if col else [(_day_label(r["date"]), r) for r in wk])
-            for lab, r in printed:
-                if col:
-                    c.setFillColorRGB(*NAVY_RGB)
-                    c.rect(lm, y - 1.5 * mm, rm - lm, 5.5 * mm, stroke=0, fill=1)
-                    text(lm, lab, 7.5, True, (1, 1, 1))
-                    prov = "HERE" if r["baked"] and not r["cycle_mark"] else ("‡" if r["baked"] else "not baked")
-                    text(lm + 48 * mm, f"{r['dest']} · {r['material']} · {_n(r['qty'])} {r['unit']} · "
-                                       f"{_n(r['trips'])} trips · {_n(r['veh'])} veh · {_n(r['km_trip'])} km · {prov}",
-                         7.5, False, (1, 1, 1))
-                else:
-                    today = page.get("today")
-                    rgb = BLUE_RGB if r["date"] == today else (0, 0, 0)
-                    text(lm, lab, 8.5, False, rgb)
-                    text(lm + 22 * mm, f"{r['ipt']} · {r['ws']}", 8.5)
-                    text(lm + 48 * mm, (r["dest"] or "")[:22], 8.5)
-                    text(lm + 82 * mm, (r["material"] or "")[:22], 8.5)
-                    rtext(lm + 118 * mm, f"{_n(r['qty'])} {r['unit'] or ''}", 8.5)
-                    rtext(lm + 132 * mm, _n(r["trips"]), 8.5)
-                    rtext(lm + 144 * mm, _n(r["veh"]), 8.5)
-                    rtext(lm + 160 * mm, (_n(r["km_trip"]) + (r["cycle_mark"] or "")) if r["baked"] else "—", 8.5)
-                    rtext(cols[-2][1] if len(cols) == 10 else rm, _n(r["tonne_km"]) if r["baked"] else "—", 8.5)
-                    if len(cols) == 10:
-                        rtext(rm, _n(r["eur"]) if r["eur"] is not None else "—", 8.5)
-                line_h()
-            # weekend rows are not printed (Mon–Fri only, 10 Sep); `we` is empty by
-            # construction and kept so the collapse rule's weekday filter reads plainly
-            for r in we:
-                pass
-            for r in drs:
-                tot["t"] += float(r["tonnes"] or 0)
-                tot["trips"] += int(r["trips"] or 0)
-                tot["veh"] = max(tot["veh"], int(r["veh"] or 0))
-                tot["tkm"] += float(r["tonne_km"] or 0)
-                if r["eur"] is not None:
-                    tot["eur"] += float(r["eur"]); tot["eur_any"] = True
-        # total band
-        c.setFillColorRGB(*BAND)
-        c.rect(lm, y - 1.5 * mm, rm - lm, 5.5 * mm, stroke=0, fill=1)
-        s = (f"{origin} total  {_n(tot['t'])} t · {_n(tot['trips'])} trips · {tot['veh']} veh peak · "
-             f"{_n(tot['tkm'])} t·km" + (f" · € {_n(tot['eur'])}" if tot["eur_any"] else ""))
-        text(lm + 2 * mm, s, 9, False, NAVY_RGB)
-        line_h(2)
-
-    # flags
+    # 3. flags
     flags = (page.get("clashes") or {}).get("flags") or []
-    text(lm, "Flags (not a stop)", 11)
-    line_h()
+    fl = [P("Flags (not a stop)", st_navy)]
     if flags:
-        c.setFillColorRGB(1, 0.95, 0.95)
-        c.rect(lm, y - (len(flags[:8]) * 4.6 - 3) * mm, rm - lm, (len(flags[:8]) * 4.6 + 1.5) * mm, stroke=0, fill=1)
-        for f in flags[:8]:
-            text(lm + 2 * mm, f"{f['code']}: {f['text']}"[:120], 8.5, False, RED_RGB)
-            line_h()
-        if len(flags) > 8:
-            text(lm + 2 * mm, f"+{len(flags) - 8} more on the XLSX", 8, False, RED_RGB)
-            line_h()
+        for f in flags[:12]:
+            fl.append(P(E(f"{f['code']}: {f['text']}"[:160]), st_red))
+        if len(flags) > 12:
+            fl.append(P(f"+{len(flags) - 12} more on the XLSX", st_red))
     else:
         tt = ((page.get("clashes") or {}).get("sources") or {}).get("tark_tee")
-        text(lm, "none" + (" · Tark Tee unavailable, restrictions not checked" if tt == "unavailable" else ""), 8.5, False, GREY)
-        line_h()
-    line_h(0.6)
+        fl.append(P("none" + (" · Tark Tee unavailable, restrictions not checked" if tt == "unavailable" else ""), st_grey))
+    story.append(KeepTogether(fl))
+    story.append(Spacer(1, 3 * mm))
 
-    # no stock section (10 Sep): the sheet is the supplier's; stock is the planner's
-    line_h(0.6)
-    c.setStrokeColorRGB(0.85, 0.85, 0.85)
-    c.setLineWidth(0.5)
-    c.line(lm, y + 2 * mm, rm, y + 2 * mm)
-    line_h(0.4)
-    for f in FOOTER:
-        text(lm, f, 8, False, GREY)
-        line_h()
+    # 4. footer lines + the confirmation stamp
     stamp = None
-    for l in page.get("commit", {}).get("lines", []):
-        w = l.get("week") or {}
-        if w.get("confirmed_at"):
-            stamp = w.get("confirmed_at")
-    text(lm, (f"Confirmed {stamp}. " if stamp else "Not yet confirmed. ")
-         + "Re-open the week in Look-ahead to change the plan.", 8, False, GREY)
-    c.showPage()
-    c.save()
+    for l in lines:
+        if (l.get("week") or {}).get("confirmed_at"):
+            stamp = l["week"]["confirmed_at"]
+    ft = [P(E(f), st_grey) for f in FOOTER]
+    ft.append(P((f"Confirmed {stamp}. " if stamp else "Not yet confirmed. ") + "Re-open the week in Look-ahead to change the plan.", st_grey))
+    story.append(KeepTogether(ft))
+    doc.build(story)
     return buf.getvalue()
+
+
+class _Caption(Flowable):
+    """The line under the map — written AFTER the map has drawn, so it can say which
+    map it was (Mapbox tiles or the schematic)."""
+    def __init__(self, page, map_flowable, style):
+        Flowable.__init__(self)
+        self.page, self.mp, self.style = page, map_flowable, style
+        self.height = 4.5 * mm
+
+    def wrap(self, aw, ah):
+        self.width = aw
+        return aw, self.height
+
+    def draw(self):
+        n_routes = len({l.get("route_id") for l in self.page.get("commit", {}).get("lines", [])})
+        kind = self.mp.kind
+        txt = f"Routes this week: {n_routes}" + (
+            " · schematic from the baked geometry (no map tiles — Mapbox could not be reached)"
+            if kind == "schematic" else " · map © Mapbox © OpenStreetMap")
+        self.canv.setFont("Helvetica", 7.5)
+        self.canv.setFillColorRGB(*GREY)
+        self.canv.drawString(0, 1 * mm, txt)

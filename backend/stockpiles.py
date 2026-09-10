@@ -133,8 +133,9 @@ def consume(location_id, month_index, week_index, consumed_qty=None, unit=None,
                     (db.current_tenant(), location_id)):
         return {"error": "location not found"}
     wi = int(week_index)
-    if not 1 <= wi <= weeks_mod.WEEKS_PER_MONTH:
-        return {"error": f"week_index must be 1-{weeks_mod.WEEKS_PER_MONTH}"}
+    n_weeks = weeks_mod.weeks_in_month(month_index)
+    if not 1 <= wi <= n_weeks:
+        return {"error": f"week_index must be 1-{n_weeks} for month {month_index}"}
     q = _num(consumed_qty)
     u = (unit or DEFAULT_CAPACITY_UNIT)
     have = db.query(
@@ -267,7 +268,7 @@ def balances(from_month, to_month, location_id=None):
         running = opening
         rows = []
         for m in range(1, hi + 1):
-            for w in range(1, weeks_mod.WEEKS_PER_MONTH + 1):
+            for w in range(1, weeks_mod.weeks_in_month(m) + 1):
                 inb = inbound.get((m, w), 0.0)
                 con = used.get((m, w), 0.0)
                 running = running + inb - con

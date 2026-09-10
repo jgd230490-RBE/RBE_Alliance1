@@ -15,7 +15,7 @@ into it) it wraps the weeks.py function and adds the day half after it.
 THE RULES THAT MATTER
 ---------------------
 1. **Days exist ONLY for the commit week, and ONLY for Approved lines.** The commit week
-   is the server's `weeks.editable_week()` — the bucket that contains today. Weeks 2-4
+   is the server's `weeks.editable_week()` — the bucket that contains today. Later weeks
    of the horizon never get days. A Pending month never gets days. Nothing here creates
    a day outside that bucket, and the read path materialises nothing else either.
 
@@ -97,18 +97,12 @@ def month_of(month_index, start_year=None):
 
 def bucket_dates(month_index, week_index, start_year=None):
     """
-    Every calendar date in one week bucket.
-
-    Weeks 1-3 are seven days. Week 4 runs from the 22nd to the END of the month — eight,
-    nine or ten days — because that is what weeks.week_of_day() says the bucket is, and
-    the day layer must agree with the week layer about which days a week owns.
+    Every calendar date in one week — Monday to Sunday, seven days, since 10 Sep 2026
+    (weeks.week_span; the Thursday rule). A week's first or last days can lie in the
+    neighbouring calendar month: they are still THIS week's, keyed under this month_index.
     """
-    y, m = month_of(month_index, start_year)
-    last = calendar.monthrange(y, m)[1]
-    w = int(week_index)
-    first_day = (w - 1) * 7 + 1
-    last_day = last if w >= weeks.WEEKS_PER_MONTH else min(w * 7, last)
-    return [datetime.date(y, m, d) for d in range(first_day, last_day + 1)]
+    mon, sun = weeks.week_span(month_index, week_index, start_year)
+    return [mon + datetime.timedelta(days=i) for i in range((sun - mon).days + 1)]
 
 
 def weekdays_in(dates):
@@ -292,17 +286,30 @@ def materialise_week_days(route_id, month_index, discipline, section_id, week_in
             # had just read cost 45 writes per page for nothing. Same figures ⇒ kept.
             if (abs(float(cur.get("planned_qty") or 0) - float(shares[d])) < 1e-9
                     and cur.get("parent_week_qty") is not None
-                    and abs(float(cur["parent_week_qty"]) - wq) < 1e-9):
+                    and abs(float(cur["parent_week_qty"]) - wq) < 1e-9
+                    and int(cur.get("parent_week_index") or 0) == int(week_index)):
                 kept += 1
                 continue
+            # parent_week_index is re-stamped too: on 10 Sep the weeks moved to the
+            # calendar, and a day written under the old bucket (Mon 14 Sep was week 2,
+            # it is now week 3) would otherwise keep saying which bucket it USED to be in.
             db.execute(
                 "UPDATE forecast_days SET planned_qty = ?, parent_week_qty = ?, "
-                "updated_at = ? WHERE tenant_id = ? AND route_id = ? AND month_index = ? "
-                "AND discipline = ? AND section_id = ? AND day_date = ?",
-                (shares[d], wq, _now(), db.current_tenant(), route_id, int(month_index),
-                 discipline or "", section_id or "", _iso(d)))
+                "parent_week_index = ?, updated_at = ? WHERE tenant_id = ? AND route_id = ? "
+                "AND month_index = ? AND discipline = ? AND section_id = ? AND day_date = ?",
+                (shares[d], wq, int(week_index), _now(), db.current_tenant(), route_id,
+                 int(month_index), discipline or "", section_id or "", _iso(d)))
             refreshed += 1
         else:
+            # edited / confirmed: the figure and stamp hold; only a stale bucket number
+            # from before the calendar-week change is corrected (nothing else moves).
+            if int(cur.get("parent_week_index") or 0) != int(week_index):
+                db.execute(
+                    "UPDATE forecast_days SET parent_week_index = ? WHERE tenant_id = ? "
+                    "AND route_id = ? AND month_index = ? AND discipline = ? "
+                    "AND section_id = ? AND day_date = ?",
+                    (int(week_index), db.current_tenant(), route_id, int(month_index),
+                     discipline or "", section_id or "", _iso(d)))
             kept += 1
     return {"created": created, "refreshed": refreshed, "kept": kept}
 
@@ -356,7 +363,7 @@ def set_day(route_id, month_index, discipline, section_id, day_date, planned_qty
     Type one day's planned quantity.
 
     The day goes to `edited`. If its week was still `derived`, the week goes to `edited`
-    too — a planner has now touched this week's plan, and the ÷4 refresh must stop
+    too — a planner has now touched this week's plan, and the ÷n refresh must stop
     overwriting it. A confirmed week refuses: after confirm, planned cells are read-only
     (L6). Sat/Sun are typeable — the 0 is a default, not a rule.
     """
