@@ -1,75 +1,65 @@
-rbe-lookahead-hotfix3-db-pool-0909.zip
-======================================
-Delivered 2026-09-09 (night). Extract over the repo root, ON TOP of slices 3-6,
-hotfix 1 (blank page) and hotfix 2 (Tark Tee). Four files. No schema change.
-No new dependency (psycopg2's own pool).
+rbe-lookahead-feedback-0910.zip
+===============================
+Delivered 2026-09-10. Extract over the repo root, ON TOP of everything through
+hotfix 3. Ten files. ⚠️ THREE new nullable columns on routes (no new table),
+added by the same init_lookahead_db() ALTER on first boot.
 
-⚠️ hotfix 2's backend/main.py was NOT on the running server when I checked
-(/api/forecast-weeks/tark-tee returned 404). Make sure hotfix 2 landed too.
+YOUR THREE POINTS, AS BUILT
+---------------------------
+1. "Tark Tee takes too long to load."
+   The live check no longer runs on any page read. It runs ON DEMAND, in a
+   background thread, and the result is STORED on each route
+   (routes.restrictions_hits / _checked_at / _status). The Look-ahead and the
+   export read the stored result instantly and print its date. Under the rail:
+     "Road restrictions (Tark Tee): checked 2026-09-10 08:41 UTC · re-check"
+   or, before any check: "NOT checked for these routes — that is not the same
+   as 'no restrictions' · check now". Pressing it starts the check; the page
+   polls and re-reads itself when it finishes (a minute on a cold cache).
+   A re-baked route loses its stored check (named as "not checked since
+   baking") until the next re-check. A failed check writes nothing.
+   New: POST /api/forecast-weeks/tark-tee/refresh (any staff code).
 
-WHAT WAS MEASURED, FROM YOUR OWN SESSION
-----------------------------------------
-Signed in on the browser pane on your machine:
-  /api/forecast-days                    200 in 17.7 s   (ONE approved line)
-  /api/lookahead?tark_tee=0             still running at 25 s (aborted)
-So the freeze is not (only) Tark Tee. It is the ordinary read.
+2. "Export takes too long; no stockpile list on it; routes map instead."
+   The export reads the stored Tark Tee result, so it is now as fast as the
+   page. The Stock sheet and the "Stock at week end" section are gone from
+   both files. The PDF carries a MAP of the week's routes in its place, drawn
+   from the baked geometry: a Mapbox static image when MAPBOX_TOKEN is set on
+   Render and api.mapbox.com answers, otherwise a schematic (lines + labelled
+   ends) — the PDF says which. ⚠️ The Mapbox path has NOT run anywhere: the
+   sandbox has no token and no network. The first PDF you download tells us;
+   if it says "schematic", send me the Render log line for that request.
+   Stock stays on the Commit view (Stock held card) for the planner; a
+   Look-ahead dashboard for it is noted as a follow-up, not built.
 
-THE CAUSE
----------
-db.query() and db.execute() each opened a NEW Postgres connection
-(psycopg2.connect: TLS handshake + auth) for ONE statement, then closed it.
-The one-line /api/forecast-days read issues 91 statements -- 46 reads and 45
-WRITES, because the lazy materialisation rewrote every derived week and day it
-had just read, on every read. 91 x ~190 ms per connect = 17.3 s. Yours: 17.7 s.
-SQLite in the sandbox does the same read in 85 ms, so no test saw it. Every
-endpoint has always paid this; the Look-ahead is the first to make enough
-statements for it to become tens of seconds. This is the freeze.
-
-THE FIX
--------
-1. backend/db.py: Postgres connections come from a small pool
-   (psycopg2.pool.ThreadedConnectionPool, size DB_POOL_MAX, default 6) and are
-   RETURNED on close() -- every existing call site is unchanged. A connection
-   returned mid-transaction is rolled back first; one the server dropped while
-   idle is discarded and the statement retried once on a fresh connection. A
-   statement error is never retried. DB_POOL=0 (env) restores the old
-   one-connection-per-statement behaviour if anything about the pool misbehaves.
-2. backend/weeks.py, backend/days.py: a derived week/day is rewritten ONLY when
-   its figure moved. A second read of a settled week now makes 0 writes (was 45
-   for three lines). A week whose month moved still refreshes -- asserted.
-
-Expected effect: the same reads drop from ~90 network round trips WITH a
-connect each to ~46 (days) / ~102 (page) round trips WITHOUT one. On Render's
-internal network that should be well under 2 s. If it is still slow, it is
-now query count, and I will batch the remaining reads next.
-
-WHAT WAS NOT TESTED
--------------------
-psycopg2 is not installed in the sandbox, so the pool has NOT run against a
-real Postgres. The proxy (return-to-pool, rollback-before-reuse, dead-
-connection discard) and the retry (once, only on a dead connection, never on
-bad SQL) are exercised against stand-in objects -- 14 assertions. The first
-real run is your deploy. Watch the boot log for "db: Postgres connection pool
-ready"; if it says "connection pool unavailable" instead, the app still works
-the old (slow) way and I need that log line.
+3. "Keep it as Monday to Friday only."
+   The Commit grid shows five day columns; the XLSX and PDF print weekday
+   rows only. Sat/Sun still exist at 0 in the database (the sum rule and the
+   brief's L1 are unchanged) — they are simply not shown or printed.
 
 FILES
 -----
-  backend/db.py                    the pool, _PooledConn, _run() with retry
-  backend/weeks.py                 no-op refresh skipped (+ reads the fields it compares)
-  backend/days.py                  no-op refresh skipped
-  backend/tests/test_lookahead.py  191 -> 205: statement budget, 0 writes on a
-                                   second read, the pool proxy + retry on stand-ins
+  backend/db.py            +3 routes columns (DDL + ALTER)
+  backend/restrictions.py  store_checks(), stored_checks(), refresh_async(),
+                           refresh_state()
+  backend/network.py       a bake clears the route's stored check
+  backend/clashes.py       TARK_TEE from the store; sources carry its age
+  backend/lookahead.py     tark_tee_status(); page carries the store
+  backend/main.py          GET tark-tee = status; POST tark-tee/refresh
+  backend/export.py        Mon–Fri rows; no stock; the route map
+  frontend/index.html      Mon–Fri grid; the status line + check/re-check
+  backend/tests/test_lookahead.py 205 -> 214
+  backend/tests/parse_frontend.js 303 -> 305 · render_frontend.js unchanged 49
   README.txt
+
+WHAT WAS NOT TESTED
+-------------------
+The Mapbox static map (no token/network here) — the schematic fallback is what
+the tests see. The background thread against Postgres (the pool is thread-safe
+by design; psycopg2 is absent in the sandbox). The live Tark Tee fetch itself,
+as ever.
 
 SUITE
 -----
-2,522 / 0 on a fresh clone with all four zips. Eight deliberate regressions,
-eight caught -- one only after wrapping an assertion that crashed instead of
-failing (lesson 13, third time tonight).
-
-LANDING GREPS
--------------
-  grep -c "ThreadedConnectionPool" backend/db.py   -> 1
-  grep -c "def _run" backend/db.py                  -> 1
-  grep -c "planned_qty, unit, parent_qty FROM forecast_weeks" backend/weeks.py -> 1
+2,534 / 0 on a fresh clone with every zip applied (1,556 py + 978 js). Six deliberate regressions,
+six caught — one after adding the fixture it needed (a fetch that returns an
+errors dict rather than raising).
