@@ -351,6 +351,8 @@ function Dashboard({ meta }){
         </div>
       </div>
 
+      <DashboardStock meta={meta} />
+
       {D.unbaked > 0 && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
           {D.unbaked} forecast line(s) reference a route with no cached geometry for their
@@ -360,6 +362,87 @@ function Dashboard({ meta }){
       )}
 
       <p className="text-xs text-slate-400 px-1">Planning estimates only — no live deliveries or tracking. Distances and durations come from the routed HERE geometry via <code>/api/routes/analysis-batch</code>, the same source as the route analysis panel — this screen no longer estimates its own. Carbon from DEFRA-2025-based factors in backend/factors.json (round trip: loaded out, empty return). Cycle = laden out + empty back + that vehicle's own load and unload time. Trucks = peak demand per day ÷ what one truck can do in a shift.</p>
+    </div>
+  );
+}
+
+
+// ---- 10 Sep: stock held, READ-ONLY, on the Dashboard ---------------------------------
+// The forecast balance of every stockpile, week by week, for this month and the next.
+// Nothing is typed here: consumption goes in on the Look-ahead's Account view (last
+// week, one box per stockpile). In = typed week actuals delivered there; a week nobody
+// reported counts as nothing, not as a share of the forecast. Over capacity is a flag.
+function DashboardStock({ meta }){
+  const { months } = meta;
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const now = new Date();
+  const thisM = Math.max(1, Math.min(months.count, (now.getFullYear() - months.start_year) * 12 + now.getMonth() + 1));
+  const toM = Math.min(months.count, thisM + 1);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/stockpiles?from_month=${thisM}&to_month=${toM}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(j => { if(live) setData(j); })
+      .catch(e => { if(live) setErr(`Couldn't load stock (${e}).`); });
+    return () => { live = false; };
+  }, [thisM, toM]);
+  const sps = (data && data.stockpiles) || [];
+  const cols = [];
+  sps.forEach(sp => (sp.weeks || []).forEach(w => { const k = `${w.month_index}|${w.week_index}`; if(!cols.some(c => c.k === k)) cols.push({ k, m: w.month_index, w: w.week_index }); }));
+  cols.sort((a, b) => a.m - b.m || a.w - b.w);
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-2">
+        <h3 className="text-sm font-bold text-[color:var(--navy-deep)]">Stock held · {monthLabelAbs(thisM, months.start_year)} + {monthLabelAbs(toM, months.start_year)}</h3>
+        <span className="text-[11px] text-slate-400">balance at each week's end · in = typed week actuals delivered there, a week nobody reported counts as nothing · consumption is typed on Look-ahead → Account</span>
+      </div>
+      {err && <div className="text-xs mb-2" style={{ color: "var(--red)" }}>{err}</div>}
+      {!data ? <div className="p-4 text-center text-slate-400 text-sm">Loading…</div>
+        : sps.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 text-center text-slate-500 text-sm">
+          No locations that hold stock yet. Set a type of Stockpile, Site, Compound or Railhead on the Locations page, and give it a capacity there.
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-auto">
+          <table className="text-xs" style={{ minWidth: `${260 + cols.length * 92}px` }}>
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>
+                <th className="px-3 py-2 text-left font-semibold border-r border-slate-200">Stockpile</th>
+                {cols.map(c => <th key={c.k} className="px-2 py-2 text-right font-semibold whitespace-nowrap">{c.w === 1 ? MONTHS[(c.m - 1) % 12] + " " : ""}W{c.w}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {sps.map(sp => (
+                <tr key={sp.location_id} className="border-t border-slate-100 align-top">
+                  <td className="px-3 py-2 border-r border-slate-100 whitespace-nowrap">
+                    <div className="font-medium text-slate-800">{sp.name}</div>
+                    <div className="text-[10px] text-slate-400">{sp.loc_type} · {sp.location_id}</div>
+                    <div className="text-[11px] text-slate-600 tabular-nums">
+                      {/* '—', never 0. No capacity recorded is not zero capacity. */}
+                      max {sp.capacity_qty == null ? "—" : `${fmt(sp.capacity_qty, sp.capacity_unit)} ${sp.capacity_unit === "m3" ? "m³" : sp.capacity_unit}`}
+                      {" · opening "}{fmt(sp.opening_qty || 0, sp.capacity_unit)}
+                    </div>
+                  </td>
+                  {cols.map(c => {
+                    const cell = (sp.weeks || []).find(x => x.month_index === c.m && x.week_index === c.w);
+                    if(!cell) return <td key={c.k} className="px-2 py-2 text-right text-slate-300">—</td>;
+                    return (
+                      <td key={c.k} className={"px-2 py-2 text-right tabular-nums " + (cell.over ? "bg-[rgba(191,46,85,.07)]" : "")}>
+                        <div className="font-semibold" style={{ color: cell.over ? "var(--red)" : "#1e293b" }}>{fmt(cell.balance_end || 0, sp.capacity_unit)}</div>
+                        <div className="text-[10px] text-slate-500 leading-tight">in {fmt(cell.inbound || 0, sp.capacity_unit)} · out {fmt(cell.consumed || 0, sp.capacity_unit)}</div>
+                        <div className="text-[10px] leading-tight" style={{ color: cell.over ? "var(--red)" : "#64748b" }}>
+                          {cell.remaining == null ? "no cap" : cell.over ? `OVER by ${fmt(-cell.remaining, sp.capacity_unit)}` : `rem ${fmt(cell.remaining, sp.capacity_unit)}`}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -1804,8 +1887,16 @@ function ConfigPage({ meta, who, access }){
 // commit_week is the bucket that contains today, and `bucket=next` asks for the one
 // after it — the Thursday process, where next week's plan is confirmed for next week's
 // deliveries. The browser only chooses which of the two to look at.
-const WEEK_NOS = [1, 2, 3, 4];
-const WEEK_DAYS = { 1: "1–7", 2: "8–14", 3: "15–21", 4: "22–end" };
+// 10 Sep: weeks are CALENDAR weeks (Mon–Sun; a week belongs to the month holding its
+// Thursday), so a month has four or five. The server says how many (horizon.weeks_in_month)
+// and what dates each covers (horizon.week_spans) — nothing here assumes four.
+const weekNosOf = (horizon, m) => { const n = ((horizon && horizon.weeks_in_month) || {})[String(m)] || 4; return Array.from({ length: n }, (_, i) => i + 1); };
+const weekSpanLbl = (horizon, m, w) => {
+  const sp = ((horizon && horizon.week_spans) || {})[`${m}|${w}`];
+  if(!sp) return "";
+  const a = new Date(sp.from + "T00:00:00"), b = new Date(sp.to + "T00:00:00");
+  return `${a.getDate()} ${MONTHS[a.getMonth()]} – ${b.getDate()} ${MONTHS[b.getMonth()]}`;
+};
 const wkKey = (r) => `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}|${r.month_index}|${r.week_index}`;
 const lineKeyOf = (r) => `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}|${r.month_index}`;
 const wkBody = (r) => ({ route_id: r.route_id, month_index: r.month_index,
@@ -1879,7 +1970,7 @@ function LaKpi({ value, caption, tone }){
 function LineFlags({ flags }){
   const codes = Array.from(new Set((flags || []).map(f => f.code)));
   const label = { UNBAKED: "NOT BAKED", IPT_SHARE: "SHARE", ROUTE_CAP: "CAP", DAYS_NE_WEEK: "DAYS ≠ WEEK",
-                  PILE_OVER: "PILE OVER", TARK_TEE: "TARK TEE", SHORTAGE: "SHORT", PARENT_CHANGED: "MONTH CHANGED" };
+                  STOCKPILE_OVER: "STOCKPILE OVER", TARK_TEE: "TARK TEE", SHORTAGE: "SHORT", PARENT_CHANGED: "MONTH CHANGED" };
   return (
     <span className="inline-flex flex-col gap-1 items-start">
       {codes.map(c => (
@@ -1968,7 +2059,6 @@ function LookAhead({ meta, who, initialPage, initialView }){
   const rail = (page && page.clashes) || { flags: [], count: 0, sources: {} };
   const ttSrc = rail.sources || {};
   const ttRunning = ttPolling || !!(ttSrc.tark_tee_refresh && ttSrc.tark_tee_refresh.running);
-  const stock = (page && page.stock) || [];
   const today = page ? page.today : null;
   // Mon–Fri only (10 Sep, the human). The weekend days still exist at 0 in the database
   // — the sum rule and the export see them — but the grid does not show them.
@@ -2002,6 +2092,16 @@ function LookAhead({ meta, who, initialPage, initialView }){
       actual_by: who || null };
     if(draft[kc] !== undefined) body.actual_cost_eur = (draft[kc] === "" ? null : numOr(draft[kc], null));
     send("/forecast-weeks/actual", body, "PUT");
+  };
+  // 10 Sep: one stockpile's consumption for the account week. Empty = "not typed" (null),
+  // not zero. The same PUT the old Horizon grid used; nothing new on the server.
+  const saveConsumed = (s) => {
+    const k = `stock|${s.location_id}`;
+    const v = draft[k];
+    if(v === undefined || !account.week) return;
+    send("/stockpiles/consume", { location_id: s.location_id, month_index: account.week.month_index,
+      week_index: account.week.week_index, consumed_qty: (v === "" ? null : numOr(v, null)),
+      unit: s.unit, note: null, updated_by: who || null }, "PUT");
   };
   const doConfirm = async () => {
     // L6: ONE button, the whole week — every line in the bucket, the same four notes
@@ -2259,33 +2359,10 @@ function LookAhead({ meta, who, initialPage, initialView }){
             </div>
           )}
 
-          {/* Stock held — the forecast balance at week end, planned inbound included */}
-          {stock.length > 0 && (
-            <div className="mt-4">
-              <div className="text-sm font-semibold text-slate-700 mb-2">Stock held</div>
-              <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-                {stock.map(s => {
-                  const cap = s.capacity_qty, over = !!s.over;
-                  const pct = cap ? Math.max(0, Math.min(100, (s.forecast / cap) * 100)) : 0;
-                  return (
-                    <div key={s.location_id}>
-                      <div className="font-semibold text-sm" style={{ color: over ? "var(--red)" : "var(--navy-deep)" }}>{s.name}</div>
-                      <div className="text-[11px] tabular-nums" style={{ color: over ? "var(--red)" : "#475569" }}>
-                        {cap == null ? "no capacity recorded" : `max ${grp(cap)} ${s.unit}`} · opening {grp(s.opening)} · inbound planned {grp(s.inbound_planned)} · consume {grp(s.consume)} · forecast {grp(s.forecast)}
-                        {cap == null ? "" : over ? ` · OVER by ${grp(s.over_by)} ${s.unit}` : ` · remaining ${grp(s.remaining)}`}
-                        {s.unconvertible_lines ? <span className="text-amber-700"> · {s.unconvertible_lines} line(s) not convertible to {s.unit}</span> : null}
-                      </div>
-                      {cap != null && (
-                        <div className="h-1.5 rounded-full bg-slate-200 mt-1 w-full max-w-md">
-                          <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: over ? "var(--red)" : "var(--green)" }} />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          {/* 10 Sep: this week's movements on a map, in place of the stock card (now on
+              the Dashboard). Drawn from the baked geometry of the lines on this page;
+              its own small fetch, off the page read, so it cannot slow the grid. */}
+          {lines.length > 0 && !initialPage && <CommitMap meta={meta} bucket={bucket} tick={tick} lines={lines} />}
         </>
       ) : view === "account" ? (
         <>
@@ -2382,6 +2459,57 @@ function LookAhead({ meta, who, initialPage, initialView }){
               </div>
             </div>
           )}
+          {/* 10 Sep: what came OUT of each stockpile in the account week — one box per
+              stockpile. In = the typed week actuals delivered there (a week nobody
+              reported counts as nothing). Over capacity is a flag, never a block. */}
+          {account.week && (account.stock || []).length > 0 && (
+            <div className="mt-4">
+              <div className="text-sm font-semibold text-slate-700 mb-1">Stockpiles · {spanLabel(account.week.from, account.week.to)}</div>
+              <p className="text-[11px] text-slate-400 mb-2">Type what came out of each stockpile this week. Opening = the balance at the end of the week before · in = typed week actuals delivered here (a week nobody reported counts as nothing) · closing = opening + in − out. Empty = not typed, which is not zero.</p>
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <table className="text-sm w-full" style={{ minWidth: 760 }}>
+                  <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wide">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">Stockpile</th>
+                      <th className="px-2 py-2 text-right font-semibold">Opening</th>
+                      <th className="px-2 py-2 text-right font-semibold">In</th>
+                      <th className="px-2 py-2 text-right font-semibold">Out</th>
+                      <th className="px-2 py-2 text-right font-semibold">Closing</th>
+                      <th className="px-2 py-2 text-right font-semibold">Capacity</th>
+                      <th className="px-2 py-2 text-right font-semibold">Remaining</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {account.stock.map(s => {
+                      const k = `stock|${s.location_id}`;
+                      return (
+                        <tr key={s.location_id} className="border-t border-slate-100" style={s.over ? { background: "rgba(191,46,85,.05)" } : {}}>
+                          <td className="px-3 py-2">
+                            <div className="font-semibold text-[color:var(--navy-deep)]">{s.name}</div>
+                            <div className="text-[11px] text-slate-500">{s.loc_type} · {s.location_id}{s.unconvertible_movements ? <span className="text-amber-700"> · {s.unconvertible_movements} movement(s) not convertible to {s.unit}</span> : null}</div>
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums text-slate-600">{grp(s.opening, 1)} {s.unit}</td>
+                          <td className="px-2 py-2 text-right tabular-nums text-slate-600">{grp(s.inbound, 1)}</td>
+                          <td className="px-2 py-2 text-right">
+                            <input className={fld + " max-w-[110px] ml-auto"} inputMode="decimal" placeholder="out —"
+                              title={`What came out of ${s.name} this week, in ${s.unit}. Empty = not typed, which is not zero.`}
+                              value={draft[k] ?? (s.consumed ?? "")}
+                              onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))}
+                              onBlur={() => saveConsumed(s)} />
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums font-semibold" style={{ color: s.over ? "var(--red)" : "var(--navy-deep)" }}>{grp(s.closing, 1)}</td>
+                          <td className="px-2 py-2 text-right tabular-nums text-slate-600">{s.capacity_qty == null ? <span className="text-slate-300">not recorded</span> : grp(s.capacity_qty)}</td>
+                          <td className="px-2 py-2 text-right tabular-nums font-medium" style={{ color: s.over ? "var(--red)" : "var(--green)" }}>
+                            {s.remaining == null ? "—" : s.over ? `OVER by ${grp(-s.remaining, 1)}` : grp(s.remaining, 1)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <>
@@ -2401,7 +2529,7 @@ function LookAhead({ meta, who, initialPage, initialView }){
             });
             const hl = Object.values(g).sort((a, b) => a.route_id.localeCompare(b.route_id) || a.discipline.localeCompare(b.discipline));
             const cols = [];
-            [horizon.from_month, horizon.to_month].forEach(m => WEEK_NOS.forEach(w => cols.push({ m, w })));
+            [horizon.from_month, horizon.to_month].forEach(m => weekNosOf(horizon, m).forEach(w => cols.push({ m, w })));
             const roleOf = (m, w) => { const rr = horizon.roles || {}; return Object.keys(rr).find(k => rr[k][0] === m && rr[k][1] === w) || null; };
             const roleLbl = { account: "ACCOUNT", commit: "COMMIT", "make-ready": "MAKE-READY", "early-warning": "EARLY WARNING" };
             return (
@@ -2419,7 +2547,7 @@ function LookAhead({ meta, who, initialPage, initialView }){
                             <th key={`${m}|${w}`} className="px-2 py-1.5 text-left border-r border-slate-100"
                               style={role === "commit" ? { background: "#eff6ff" } : {}}>
                               <div className={"font-semibold " + (role === "commit" ? "" : "text-slate-600")} style={role === "commit" ? { color: "var(--navy)" } : {}}>
-                                W{w} · {WEEK_DAYS[w]}{w === 1 ? ` ${MONTHS[(m - 1) % 12]}` : ""}
+                                W{w} · {weekSpanLbl(horizon, m, w)}
                               </div>
                               <div className="text-[9px] uppercase tracking-wide text-slate-400">{roleLbl[role] || " "}</div>
                             </th>
@@ -2449,7 +2577,7 @@ function LookAhead({ meta, who, initialPage, initialView }){
                               ? <span style={{ color: short ? "var(--red)" : "var(--green)" }}>actual {grp(r.actual_qty, 1)} · {short ? `+${grp(r.variance, 1)} short${r.calibrated_at ? " · carried" : ""}` : "held"}</span>
                               : r.status === "confirmed" ? <span style={{ color: "var(--green)" }}>confirmed</span>
                               : r.status === "edited" ? <span className="text-amber-700">edited{role === "commit" ? " · open days" : ""}</span>
-                              : <span className="text-slate-400">derived ÷4</span>;
+                              : <span className="text-slate-400">derived ÷{weekNosOf(horizon, m).length}</span>;
                             return (
                               <td key={`${m}|${w}`} className="px-2 py-2 border-r border-slate-100 whitespace-nowrap" style={role === "commit" ? { background: "#eff6ff" } : {}}>
                                 <div className="font-semibold tabular-nums text-slate-800">{grp(r.planned_qty, 1)} {unitLbl(line.unit)}</div>
@@ -2469,7 +2597,6 @@ function LookAhead({ meta, who, initialPage, initialView }){
               </div>
             );
           })()}
-          <Stockpiles meta={meta} who={who} from={horizon.from_month || cw.month_index || 1} to={horizon.to_month || (cw.month_index || 1) + 1} tick={tick} />
         </>
       )}
 
@@ -2498,6 +2625,109 @@ function LookAhead({ meta, who, initialPage, initialView }){
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+
+// ---- 10 Sep: this week's movements on a map (Commit view) ----------------------------
+// A SMALL live Mapbox map of the lines on the page — not the public map in a frame (that
+// loads zones, restrictions and months of matrix, and the human does not want the page
+// slow). One fetch to /api/lookahead/geometry with the route ids the page already has;
+// nothing here reads the page again. The map is created once and kept for the life of
+// the Look-ahead — moving to Account and back does not rebuild it. Lines take the IPT's
+// palette-C colour; ends are dots (navy origin, red destination); hover names the line
+// with its week figures. An unbaked route is listed under the map, not drawn.
+function CommitMap({ meta, bucket, tick, lines }){
+  const mapDiv = useRef(null);
+  const mapObj = useRef(null);
+  const [geo, setGeo] = useState(null);
+  const [err, setErr] = useState("");
+  const [ready, setReady] = useState(false);
+  const ids = lines.map(l => l.route_id).filter((v, i, a) => a.indexOf(v) === i);
+  const idKey = ids.join(",");
+  const byRoute = useMemo(() => {
+    const g = {};
+    lines.forEach(l => (g[l.route_id] || (g[l.route_id] = [])).push(l));
+    return g;
+  }, [lines]);
+
+  useEffect(() => {
+    let live = true;
+    if(!ids.length){ setGeo({ routes: [] }); return; }
+    const vehicles = ids.map(id => ((byRoute[id] || [])[0] || {}).vehicle_type || "");
+    fetch(`${API}/lookahead/geometry?ids=${encodeURIComponent(ids.join(","))}&vehicles=${encodeURIComponent(vehicles.join(","))}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(j => { if(live){ setGeo(j); setErr(""); } })
+      .catch(e => { if(live) setErr(`Couldn't load the week's routes for the map (${e}).`); });
+    return () => { live = false; };
+  }, [idKey, bucket, tick]);
+
+  useEffect(() => {
+    if(mapObj.current || !mapDiv.current || !window.mapboxgl) return;
+    window.mapboxgl.accessToken = meta.mapbox_token;
+    const m = new window.mapboxgl.Map({ container: mapDiv.current, style: "mapbox://styles/mapbox/light-v11",
+                                        center: [24.7, 58.5], zoom: 6.5, attributionControl: true });
+    m.addControl(new window.mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+    m.on("load", () => {
+      m.addSource("la-routes", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      m.addSource("la-ends", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      m.addLayer({ id: "la-routes-casing", type: "line", source: "la-routes",
+                   paint: { "line-color": "#ffffff", "line-width": 6, "line-opacity": 0.9 } });
+      m.addLayer({ id: "la-routes", type: "line", source: "la-routes",
+                   paint: { "line-color": ["get", "color"], "line-width": 3.5 } });
+      m.addLayer({ id: "la-ends", type: "circle", source: "la-ends",
+                   paint: { "circle-radius": 5, "circle-color": ["get", "color"], "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.5 } });
+      const popup = new window.mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
+      m.on("mousemove", "la-routes", (e) => {
+        m.getCanvas().style.cursor = "pointer";
+        const f = e.features && e.features[0];
+        if(f) popup.setLngLat(e.lngLat).setHTML(f.properties.label).addTo(m);
+      });
+      m.on("mouseleave", "la-routes", () => { m.getCanvas().style.cursor = ""; popup.remove(); });
+      setReady(true);
+    });
+    mapObj.current = m;
+  }, []);
+
+  useEffect(() => {
+    const m = mapObj.current;
+    if(!m || !ready || !geo) return;
+    const feats = [], ends = [], b = new window.mapboxgl.LngLatBounds();
+    (geo.routes || []).forEach(r => {
+      const ls = byRoute[r.route_id] || [];
+      const color = IPT_PALETTE_C[iptKey(r.ipt || (ls[0] || {}).ipt)] || "#0B1B45";
+      const wk = ls.map(l => `${grp((l.week || {}).planned_qty, 0)} ${unitLbl(l.unit)} · ${grp((l.week_derived || {}).trips)} trips`).join("<br>");
+      const label = `<div style="font:12px system-ui"><b>${r.route_id}</b> · ${r.origin.name} → ${r.dest.name}<br>${wk}${r.vehicle_as_planned === false ? `<br><i>drawn for ${r.vehicle_profile}, not the planned vehicle</i>` : ""}</div>`;
+      if(r.geometry && r.geometry.length > 1){
+        feats.push({ type: "Feature", properties: { route_id: r.route_id, color, label }, geometry: { type: "LineString", coordinates: r.geometry } });
+        r.geometry.forEach(c => b.extend(c));
+      }
+      [["origin", "#0B1B45"], ["dest", "#BF2E55"]].forEach(([k, c]) => {
+        const e = r[k];
+        if(e && e.lon != null && e.lat != null){
+          ends.push({ type: "Feature", properties: { color: c, name: e.name }, geometry: { type: "Point", coordinates: [e.lon, e.lat] } });
+          b.extend([e.lon, e.lat]);
+        }
+      });
+    });
+    m.getSource("la-routes").setData({ type: "FeatureCollection", features: feats });
+    m.getSource("la-ends").setData({ type: "FeatureCollection", features: ends });
+    if(!b.isEmpty()) m.fitBounds(b, { padding: 40, maxZoom: 12, duration: 0 });
+  }, [geo, ready, byRoute]);
+
+  const unbaked = (geo && geo.routes || []).filter(r => !r.geometry).map(r => r.route_id);
+  return (
+    <div className="mt-4">
+      <div className="text-sm font-semibold text-slate-700 mb-2">This week's movements</div>
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div ref={mapDiv} style={{ height: 380 }} />
+        <div className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100 flex flex-wrap gap-x-3">
+          <span>Baked loaded leg per line, coloured by IPT · navy dot = origin · red dot = destination · hover a line for its week.</span>
+          {unbaked.length > 0 && <span className="text-amber-700">Not drawn (no baked route): {unbaked.join(", ")}</span>}
+          {err && <span style={{ color: "var(--red)" }}>{err}</span>}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2570,120 +2800,9 @@ function RoutePlanning({ route, token, onSaved }){
   );
 }
 
-// ---- Task D2: stock held on a location -----------------------------------------
-// A READ MODEL. Nothing here is stored: inbound is the sum of typed week ACTUALS on
-// routes whose destination is this location, so a week nobody has reported shows 0
-// rather than a quarter of the month forecast. Over capacity is a FLAG, never a block.
-function Stockpiles({ meta, who, from, to, tick }){
-  const { months } = meta;
-  const [data, setData] = useState(null);
-  const [draft, setDraft] = useState({});
-  const [own, setOwn] = useState(0);
-  const [err, setErr] = useState("");
-
-  useEffect(() => {
-    let live = true;
-    fetch(`${API}/stockpiles?from_month=${from}&to_month=${to}`)
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(j => { if(live){ setData(j); setDraft({}); } })
-      .catch(e => { if(live) setErr(`Couldn't load stock (${e}).`); });
-    return () => { live = false; };
-  }, [from, to, tick, own]);
-
-  const saveConsumed = (s, m, w) => {
-    const k = `${s.location_id}|${m}|${w}`;
-    const v = draft[k];
-    if(v === undefined) return;
-    fetch(`${API}/stockpiles/consume`, { method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ location_id: s.location_id, month_index: m, week_index: w,
-        consumed_qty: (v === "" ? null : +v), unit: s.capacity_unit, note: null,
-        updated_by: who || null }) })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(() => setOwn(n => n + 1))
-      .catch(e => setErr(`Couldn't save consumption (${e}).`));
-  };
-
-  const piles = (data && data.stockpiles) || [];
-  const fldS = "w-full border border-slate-300 rounded px-1 py-0.5 text-[11px] text-right tabular-nums outline-none focus:ring-2 focus:ring-[color:var(--blue)]";
-
-  return (
-    <div className="mt-6">
-      <div className="mb-2">
-        <h3 className="text-sm font-bold text-[color:var(--navy-deep)]">Stock held</h3>
-        <p className="text-xs text-slate-500">
-          Type what came out of each pile. In = typed week actuals on routes delivering here — a week with no
-          actual counts as nothing, not as a share of the forecast. Over capacity is flagged, never blocked.
-        </p>
-      </div>
-      {err && <div className="text-xs mb-2" style={{ color: "var(--red)" }}>{err}</div>}
-      {!data ? <div className="p-6 text-center text-slate-400 text-sm">Loading…</div>
-        : piles.length === 0 ? (
-        <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-500 text-sm">
-          No locations that hold stock yet. Set a type of Stockpile, Site, Compound or Railhead on the
-          Locations page, and give it a capacity there.
-        </div>
-      ) : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div className="overflow-auto">
-            <table className="text-xs" style={{ minWidth: "1000px" }}>
-              <thead className="bg-slate-50 text-slate-500">
-                <tr>
-                  <th className="px-3 py-2 text-left font-semibold border-r border-slate-200">Location</th>
-                  {[from, to].map(m => (
-                    <th key={m} colSpan={4} className="px-2 py-1.5 text-center font-semibold border-r border-slate-200">
-                      {monthLabelAbs(m, months.start_year)}
-                    </th>
-                  ))}
-                </tr>
-                <tr>
-                  <th className="px-3 py-1 text-left font-medium text-[10px] uppercase tracking-wide border-r border-slate-200">max · opening</th>
-                  {[from, to].map(m => WEEK_NOS.map(w => (
-                    <th key={`${m}-${w}`} className={"px-2 py-1 text-center font-medium text-[10px] " + (w === 4 ? "border-r border-slate-200" : "")}>W{w}</th>
-                  )))}
-                </tr>
-              </thead>
-              <tbody>
-                {piles.map(s => (
-                  <tr key={s.location_id} className="border-t border-slate-100 align-top">
-                    <td className="px-3 py-2 border-r border-slate-100 whitespace-nowrap">
-                      <div className="font-medium text-slate-800">{s.name}</div>
-                      <div className="text-[10px] text-slate-400">{s.loc_type} · {s.location_id}</div>
-                      <div className="text-[11px] text-slate-600 tabular-nums">
-                        {/* ⭐ '—', never 0. No capacity recorded is not zero capacity. */}
-                        max {s.capacity_qty == null ? "—" : `${fmt(s.capacity_qty, s.capacity_unit)} ${s.capacity_unit === "m3" ? "m³" : s.capacity_unit}`}
-                        {" · opening "}{fmt(s.opening_qty || 0, s.capacity_unit)}
-                      </div>
-                    </td>
-                    {[from, to].map(m => WEEK_NOS.map(w => {
-                      const cell = (s.weeks || []).find(x => x.month_index === m && x.week_index === w) || {};
-                      const k = `${s.location_id}|${m}|${w}`;
-                      return (
-                        <td key={k} className={"px-2 py-2 " + (w === 4 ? "border-r border-slate-100 " : "")
-                              + (cell.over ? "bg-[rgba(191,46,85,.07)]" : "")}>
-                          <input className={fldS} inputMode="decimal" placeholder="out"
-                            value={draft[k] ?? (cell.consumed || "")}
-                            onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))}
-                            onBlur={() => saveConsumed(s, m, w)} />
-                          <div className="mt-1 text-[10px] tabular-nums text-slate-500 text-right leading-tight">
-                            <div>in {fmt(cell.inbound || 0, s.capacity_unit)}</div>
-                            <div>bal {fmt(cell.balance_end || 0, s.capacity_unit)}</div>
-                            <div style={{ color: cell.over ? "var(--red)" : undefined }}>
-                              rem {cell.remaining == null ? "—" : fmt(cell.remaining, s.capacity_unit)}
-                            </div>
-                          </div>
-                        </td>
-                      );
-                    }))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+// ---- Task D2's stock grid (W1–W4 × two months of consumption inputs) was REMOVED on
+// 10 Sep: consumption is typed on the Look-ahead's Account view for the account week
+// (one box per stockpile), and the read-only balances live on the Dashboard.
 
 // ================================================================= Data Management (Phase 1)
 // This is the structural view of the network: every route is drawn the same neutral
@@ -5081,7 +5200,7 @@ function DataManagement({ meta, who, subTab: propSubTab, onSubTab }){
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1.5">
                     Leave max blank if you don't know it — the balance still works and the Look-ahead shows
-                    "—" rather than pretending the pile holds nothing. Opening stock is what was there at the
+                    "—" rather than pretending the stockpile holds nothing. Opening stock is what was there at the
                     start of the horizon. Over capacity is flagged on the Look-ahead, never blocked.
                   </p>
                 </div>
