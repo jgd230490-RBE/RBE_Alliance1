@@ -1911,11 +1911,19 @@ function LookAhead({ meta, who, initialPage, initialView }){
   const [flags, setFlags] = useState({ weather: "", wetness: "", traffic: "", other: "" });
   const pick = (v) => { setView(v); try { localStorage.setItem("rbe_la_view", v); } catch(e){} };
 
-  // Tark Tee road restrictions — LIVE data plus a geometry loop, so it is fetched on its
-  // own AFTER the page has rendered (09 Sep night: on the critical path it froze the
-  // page at "Loading…" the moment a baked line was approved). The rail says "checking"
-  // until it answers, and "unavailable" if it cannot — never a silent clean.
-  const [tt, setTt] = useState({ status: "checking", flags: [] });
+  // Tark Tee road restrictions — the page carries the STORED per-route check (a DB read).
+  // The live check (six services + a geometry loop) froze the page on 09 Sep and took
+  // 30 s+ off the path; it now runs on demand in the background, and this polls its
+  // state while it runs. A route never checked is named, never shown clean.
+  const [tt, setTt] = useState({ status: "unknown", refresh: null });
+  const [ttPolling, setTtPolling] = useState(false);
+  const refreshTarkTee = async () => {
+    try {
+      const r = await fetch(`${API}/forecast-weeks/tark-tee/refresh`, { method: "POST" });
+      if(!r.ok) throw new Error(`${r.status}`);
+      setTtPolling(true);
+    } catch(e){ setErr("Couldn't start the road-restriction check: " + e.message); }
+  };
   useEffect(() => {
     let live = true;
     setErr("");
@@ -1926,15 +1934,20 @@ function LookAhead({ meta, who, initialPage, initialView }){
     return () => { live = false; };
   }, [bucket, tick]);
   useEffect(() => {
-    if(!page || initialPage) return;               // the harness hands the page in; nothing to fetch
+    if(!ttPolling || initialPage) return;
     let live = true;
-    setTt({ status: "checking", flags: [] });
-    fetch(`${API}/forecast-weeks/tark-tee?bucket=${bucket}`)
+    const tickPoll = () => fetch(`${API}/forecast-weeks/tark-tee?bucket=${bucket}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(j => { if(live) setTt({ status: j.status || "ok", flags: j.flags || [] }); })
-      .catch(() => { if(live) setTt({ status: "unavailable", flags: [] }); });
+      .then(j => {
+        if(!live) return;
+        setTt({ status: j.status, refresh: j.refresh });
+        if(j.refresh && j.refresh.running){ setTimeout(tickPoll, 4000); }
+        else { setTtPolling(false); setTick(t => t + 1); }     // done — re-read the page, flags included
+      })
+      .catch(() => { if(live){ setTtPolling(false); } });
+    tickPoll();
     return () => { live = false; };
-  }, [page && page.commit_week && page.commit_week.from, bucket]);
+  }, [ttPolling, bucket]);
 
   const send = (path, body, method) => {
     setBusy(path);
@@ -1952,15 +1965,15 @@ function LookAhead({ meta, who, initialPage, initialView }){
   const totals = commit.totals || {};
   const account = (page && page.account) || { rows: [] };
   const horizon = (page && page.horizon) || { rows: [] };
-  const rail = useMemo(() => {
-    const base = (page && page.clashes) || { flags: [], count: 0, sources: {} };
-    // the page's own flags plus the Tark Tee ones, once they arrive
-    const flags = [...(base.flags || []), ...(tt.flags || [])];
-    return { ...base, flags, count: flags.length, sources: { ...(base.sources || {}), tark_tee: tt.status } };
-  }, [page, tt]);
+  const rail = (page && page.clashes) || { flags: [], count: 0, sources: {} };
+  const ttSrc = rail.sources || {};
+  const ttRunning = ttPolling || !!(ttSrc.tark_tee_refresh && ttSrc.tark_tee_refresh.running);
   const stock = (page && page.stock) || [];
   const today = page ? page.today : null;
-  const dates = lines.length ? lines[0].days.map(d => d.day_date) : [];
+  // Mon–Fri only (10 Sep, the human). The weekend days still exist at 0 in the database
+  // — the sum rule and the export see them — but the grid does not show them.
+  const dates = lines.length ? lines[0].days.map(d => d.day_date).filter(iso => !isWeekend(iso)) : [];
+  const weekdaysOf = (line) => (line.days || []).filter(d => !isWeekend(d.day_date));
   const flagsByLine = useMemo(() => {
     const g = {};
     (rail.flags || []).forEach(f => { const k = lineKeyOf(f); (g[k] || (g[k] = [])).push(f); });
@@ -2035,7 +2048,7 @@ function LookAhead({ meta, who, initialPage, initialView }){
   const subtitle = view === "account"
     ? `Account is last week only · ${spanLabel(account.week && account.week.from, account.week && account.week.to)} · type what actually moved`
     : view === "commit"
-    ? `Commit week is ${spanLabel(cw.from, cw.to)}${bucket === "next" ? " · next week, by the switch" : ""} · Mon–Fri carry the plan · Sat/Sun start at 0`
+    ? `Commit week is ${spanLabel(cw.from, cw.to)}${bucket === "next" ? " · next week, by the switch" : ""} · Mon–Fri only`
     : `Horizon is weeks, not days · ${monthLabelAbs(horizon.from_month || cw.month_index || 1, months.start_year)} + ${monthLabelAbs((horizon.to_month || (cw.month_index || 1) + 1), months.start_year)} · make-ready only`;
 
   return (
@@ -2111,11 +2124,24 @@ function LookAhead({ meta, who, initialPage, initialView }){
               )}
             </div>
           )}
-          {rail.sources && rail.sources.tark_tee === "unavailable" && (
-            <div className="text-[11px] text-amber-700 mb-3">Tark Tee could not be reached — road restrictions were NOT checked for this week. That is not the same as "no restrictions".</div>
-          )}
-          {rail.sources && rail.sources.tark_tee === "checking" && lines.length > 0 && (
-            <div className="text-[11px] text-slate-400 mb-3">checking road restrictions (Tark Tee)…</div>
+          {lines.length > 0 && ttSrc.tark_tee !== "skipped" && (
+            <div className="text-[11px] mb-3 flex flex-wrap items-center gap-2"
+              style={{ color: ttSrc.tark_tee === "ok" ? "#64748b" : "#B45309" }}>
+              <span>
+                {ttRunning ? "checking road restrictions (Tark Tee) — this takes a minute; the page will refresh when it finishes…"
+                 : ttSrc.tark_tee === "ok" ? `Road restrictions (Tark Tee): checked ${(ttSrc.tark_tee_checked_at || "").replace("T", " ").slice(0, 16)} UTC`
+                 : ttSrc.tark_tee === "partial" ? `Road restrictions: ${(ttSrc.tark_tee_unchecked || []).join(", ")} not checked since baking — the rest as of ${(ttSrc.tark_tee_checked_at || "").slice(0, 10)}`
+                 : "Road restrictions (Tark Tee): NOT checked for these routes — that is not the same as \"no restrictions\"."}
+              </span>
+              {!ttRunning && (
+                <button onClick={refreshTarkTee} className="font-semibold underline hover:no-underline">
+                  {ttSrc.tark_tee === "ok" ? "re-check" : "check now"}
+                </button>
+              )}
+              {ttSrc.tark_tee_refresh && ttSrc.tark_tee_refresh.status === "unavailable" && !ttRunning && (
+                <span style={{ color: "var(--red)" }}>· the last check could not reach Tark Tee; the stored result stands</span>
+              )}
+            </div>
           )}
 
           {lines.length === 0 ? (
@@ -2173,7 +2199,7 @@ function LookAhead({ meta, who, initialPage, initialView }){
                               </div>
                             </td>
                             <td className="px-2 py-2 border-r border-slate-100"><LineFlags flags={lf} /></td>
-                            {line.days.map(d => {
+                            {weekdaysOf(line).map(d => {
                               const k = `${lk}|${d.day_date}|p`;
                               const t = d.day_date === today, we = isWeekend(d.day_date);
                               const f = d.derived || {};
@@ -2226,8 +2252,8 @@ function LookAhead({ meta, who, initialPage, initialView }){
                 </table>
               </div>
               <div className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100">
-                Editable cells = this week, while status is not confirmed. Confirm locks Mon–Sun as the haulier sheet. Weekend
-                columns start at 0. Figures are planning, not plated. ✎ = a typed day that no longer follows the week ÷ 5.
+                Editable cells = this week, while status is not confirmed. Confirm locks the week as the haulier sheet.
+                Mon–Fri only — Sat/Sun are held at 0 and not shown. Figures are planning, not plated. ✎ = a typed day that no longer follows the week ÷ 5.
                 {busy && <span className="ml-2 text-slate-500">saving…</span>}
               </div>
             </div>
