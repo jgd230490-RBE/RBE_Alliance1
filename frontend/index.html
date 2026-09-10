@@ -1660,7 +1660,7 @@ function Forecasts({ meta, who, access, onEdit, onChanged }){
 // once here, never seeded, saved with the admin token because one number moves every
 // unpriced line. Saved on their own endpoint, not inside the factors document, so the
 // Save button above (which sends the whole factors doc) does not carry them.
-function CostingTab({ who, access, token, setToken }){
+function CostingTab({ who, access, token, setToken, doc, upd, fileDoc }){
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState({});
   const [msg, setMsg] = useState(null);
@@ -1714,6 +1714,81 @@ function CostingTab({ who, access, token, setToken }){
         <div className="text-sm font-semibold text-slate-700 mb-1">Diesel index and fuel surcharge (BAF)</div>
         <FuelWidget mode="config" who={who} access={access} initial={data && data.summary} onChanged={load} />
       </div>
+      <FairPriceSection doc={doc} upd={upd} fileDoc={fileDoc} summary={data && data.summary && data.summary.fair} />
+    </div>
+  );
+}
+
+// ---- 10 Sep night: the fair-price model's coefficients -------------------------------
+// Seeded from factors.json's `fair_price` block (public benchmarks, each with its source in
+// the file) by the human's decision; edited HERE inside the factors document, so the page's
+// Save button (admin token) carries them. A config row saved before the block existed has
+// no fair_price: the server prices from the file's block until this is saved once, and the
+// inputs below show the file's values until the first edit copies the block in.
+const FAIR_FIELDS = [["driver_eur_per_h", "Driver € / h", "Statistics Estonia Q2 2026 + employer taxes — see the file"],
+                     ["vehicle_standing_eur_per_h", "Vehicle standing € / h", "ASSUMPTION — from a €190k vehicle, 7 years, insurance, vignette"],
+                     ["running_eur_per_km", "Running € / km", "ASSUMPTION — tyres, maintenance, repairs"],
+                     ["margin_pct", "Margin %", "ASSUMPTION"]];
+function FairPriceSection({ doc, upd, fileDoc, summary }){
+  const fileFp = (fileDoc && fileDoc.fair_price) || {};
+  const fp = (doc && doc.fair_price) || fileFp;
+  const cons = fp.consumption || {};
+  const season = fp.season || {};
+  const inp = "border border-slate-300 rounded-md px-2 py-1 text-sm w-full tabular-nums";
+  const num = (v) => (v === "" || v == null ? null : (isNaN(+v) ? v : +v));
+  // the first edit copies the whole seeded block into the document, sources included
+  const set = (fn) => upd && upd(d => { if(!d.fair_price) d.fair_price = JSON.parse(JSON.stringify(fileFp)); fn(d.fair_price); });
+  const monthsBox = (k, label) => (
+    <label className="block">
+      <span className="text-[11px] uppercase tracking-wide text-slate-400">{label}</span>
+      <div className="flex flex-wrap gap-1 mt-1">
+        {MONTHS.map((m, mi) => (
+          <label key={m} className={"text-[11px] px-1.5 py-0.5 rounded border cursor-pointer " + ((season[k] || []).includes(mi + 1) ? "bg-slate-800 text-white border-slate-800" : "border-slate-200 text-slate-600")}>
+            <input type="checkbox" className="hidden" checked={(season[k] || []).includes(mi + 1)} onChange={e => set(f => {
+              f.season = f.season || {}; const cur = f.season[k] || [];
+              f.season[k] = e.target.checked ? [...cur, mi + 1].sort((a, b) => a - b) : cur.filter(x => x !== mi + 1);
+            })} />{m}
+          </label>
+        ))}
+      </div>
+    </label>
+  );
+  return (
+    <div data-fair-price-section="1">
+      <div className="text-sm font-semibold text-slate-700">Fair price — the model</div>
+      <p className="text-[11px] text-slate-400 mt-0.5 mb-2">€/trip = fuel (litres from the vehicle class, tonnes carried and the live diesel index) + cycle hours × (driver + vehicle standing) + km × running, × (1 + margin). Shown on every baked line as "fair (model)" — a floor for negotiation, never a quote, never mixed with a typed rate. Seeded from public benchmarks; the file names each source. Three are assumptions to replace with your own figures. {!(doc && doc.fair_price) && <span className="text-amber-700">Showing the file's values — the live document has no fair_price block yet; Save once to store it.</span>} Saved with the page's Save button (admin token).</p>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-4xl">
+        {FAIR_FIELDS.map(([k, l, help]) => (
+          <label key={k} className="block">
+            <span className="text-[11px] uppercase tracking-wide text-slate-400">{l}</span>
+            <input className={inp + " mt-1"} inputMode="decimal" value={fp[k] ?? ""} onChange={e => set(f => { f[k] = num(e.target.value); })} />
+            <span className="block text-[11px] text-slate-400 mt-1">{help}</span>
+          </label>
+        ))}
+        <label className="block">
+          <span className="text-[11px] uppercase tracking-wide text-slate-400">L/100 km per tonne carried</span>
+          <input className={inp + " mt-1"} inputMode="decimal" value={cons.l_per_100km_per_tonne ?? ""} onChange={e => set(f => { f.consumption = f.consumption || {}; f.consumption.l_per_100km_per_tonne = num(e.target.value); })} />
+          <span className="block text-[11px] text-slate-400 mt-1">UK DfT payload study: 0.4–0.95; the low end is seeded</span>
+        </label>
+        <label className="block">
+          <span className="text-[11px] uppercase tracking-wide text-slate-400">Rigid, empty L/100 km</span>
+          <input className={inp + " mt-1"} inputMode="decimal" value={(cons.rigid || {}).l_per_100km_empty ?? ""} onChange={e => set(f => { f.consumption = f.consumption || {}; f.consumption.rigid = f.consumption.rigid || {}; f.consumption.rigid.l_per_100km_empty = num(e.target.value); })} />
+          <span className="block text-[11px] text-slate-400 mt-1">Derived from the DEFRA factor in this file — the weakest number</span>
+        </label>
+        <label className="block">
+          <span className="text-[11px] uppercase tracking-wide text-slate-400">Artic, empty L/100 km</span>
+          <input className={inp + " mt-1"} inputMode="decimal" value={(cons.artic || {}).l_per_100km_empty ?? ""} onChange={e => set(f => { f.consumption = f.consumption || {}; f.consumption.artic = f.consumption.artic || {}; f.consumption.artic.l_per_100km_empty = num(e.target.value); })} />
+          <span className="block text-[11px] text-slate-400 mt-1">ICCT 34 laden − 0.4 × 26 t</span>
+        </label>
+        <label className="block">
+          <span className="text-[11px] uppercase tracking-wide text-slate-400">Winter consumption uplift %</span>
+          <input className={inp + " mt-1"} inputMode="decimal" value={season.winter_consumption_uplift_pct ?? ""} onChange={e => set(f => { f.season = f.season || {}; f.season.winter_consumption_uplift_pct = num(e.target.value); })} />
+          <span className="block text-[11px] text-slate-400 mt-1">US DOE: cars ~15 % at −7 °C; HGVs less</span>
+        </label>
+        {monthsBox("winter_months", "Winter months (uplift applies)")}
+        {monthsBox("thaw_months", "Thaw months (flag: 8 t road limits may apply)")}
+      </div>
+      {summary && <p className="text-[11px] text-slate-400 mt-2">In force on the server now: driver €{summary.driver_eur_per_h}/h · standing €{summary.vehicle_standing_eur_per_h}/h · running €{summary.running_eur_per_km}/km · margin {summary.margin_pct} % · {summary.l_per_100km_per_tonne} L/100 km per t · rigid {summary.rigid_l_per_100km_empty} / artic {summary.artic_l_per_100km_empty} L/100 km empty · index {summary.index_eur_per_l == null ? "missing — no fair price until the bulletin is fetched" : `€${summary.index_eur_per_l}/L`}.</p>}
     </div>
   );
 }
@@ -1728,9 +1803,10 @@ function ConfigPage({ meta, who, access }){
   const [token, setToken] = useState(() => { try { return localStorage.getItem("rbe_admin_token") || ""; } catch(e){ return ""; } });
   const [raw, setRaw] = useState("");
   const [rawErr, setRawErr] = useState("");
+  const [fileDoc, setFileDoc] = useState(null);
 
   const load = () => fetch(`${API}/config/factors`).then(r => r.ok ? r.json() : Promise.reject(r.status))
-    .then(j => { setDoc(j.doc); setOrig(JSON.stringify(j.doc)); setStatus(j.status); setRaw(JSON.stringify(j.doc, null, 2)); setRawErr(""); })
+    .then(j => { setDoc(j.doc); setOrig(JSON.stringify(j.doc)); setStatus(j.status); setRaw(JSON.stringify(j.doc, null, 2)); setRawErr(""); setFileDoc(j.file || null); })
     .catch(e => setMsg({ ok: false, text: `Couldn't load the configuration (${e}).` }));
   useEffect(() => { load(); }, []);
 
@@ -1887,7 +1963,7 @@ function ConfigPage({ meta, who, access }){
             </div>
           )}
 
-          {tab === "costing" && <CostingTab who={who} access={access} token={token} setToken={setToken} />}
+          {tab === "costing" && <CostingTab who={who} access={access} token={token} setToken={setToken} doc={doc} upd={upd} fileDoc={fileDoc} />}
 
           {tab === "seasonal" && (
             <div className="p-4 space-y-3">
@@ -2413,7 +2489,7 @@ function LookAhead({ meta, who, access, initialPage, initialView }){
             <FuelWidget mode="compact" who={who} access={access} initial={page && page.costing} onChanged={() => setTick(t => t + 1)} />
             <LaKpi value={totals.eur == null ? "—" : "€ " + grp(totals.eur)}
               caption={totals.eur == null ? "planned € · no rate typed, no target set"
-                : `planned € · ${totals.eur_lines} of ${totals.lines} lines priced${totals.eur_target_lines ? ` · ${totals.eur_target_lines} at target` : ""}${totals.eur_partial ? " · partial" : ""}${totals.eur_adj != null ? ` · + BAF € ${grp(totals.eur_adj)}` : ""}`} />
+                : `planned € · ${totals.eur_lines} of ${totals.lines} lines priced${totals.eur_target_lines ? ` · ${totals.eur_target_lines} at target` : ""}${totals.eur_partial ? " · partial" : ""}${totals.eur_adj != null ? ` · + BAF € ${grp(totals.eur_adj)}` : ""}${totals.fair_eur != null ? ` · fair € ${grp(totals.fair_eur)} (model, ${totals.fair_lines} of ${totals.lines})` : ""}`} />
             <LaKpi value={account.shortfall > 0 ? `+${grp(account.shortfall)}` : "0"} tone={account.shortfall > 0 ? "red" : undefined} caption="last week shortage" />
             <LaKpi value={account.lines ? `${account.delivered} of ${account.lines} lines` : "—"} caption="last week delivered" />
           </div>
@@ -2548,7 +2624,7 @@ function LookAhead({ meta, who, access, initialPage, initialView }){
                                     {grp(c.km_trip)} km/trip{c.return_baked ? "" : " (outbound only — return not baked)"} · {grp(wd.km)} km/week
                                     · {grp(wd.vehicles_peak)} veh peak · {grp(wd.tonne_km)} t·km ({c.km_basis === "loaded" ? "loaded leg" : "round trip"})
                                     · cycle {grp(c.cycle_min)} min {c.cycle_source === "here" ? "HERE" : "HERE‡ (return estimated)"}
-                                    · {c.cycles_per_vehicle_day} cycles/veh/day · {wd.eur == null ? "rate not set" : `€ ${grp(wd.eur)}${c.rate_source === "target" ? " (target rate)" : ""}${wd.eur_partial ? " (per-km term missing)" : ""} this week${wd.eur_adj != null ? ` · + BAF € ${grp(wd.eur_adj)}` : ""}`}
+                                    · {c.cycles_per_vehicle_day} cycles/veh/day · {wd.eur == null ? "rate not set" : `€ ${grp(wd.eur)}${c.rate_source === "target" ? " (target rate)" : ""}${wd.eur_partial ? " (per-km term missing)" : ""} this week${wd.eur_adj != null ? ` · + BAF € ${grp(wd.eur_adj)}` : ""}`}{wd.fair_eur != null && c.fair && <span title={`fair (model): € ${grp(c.fair.eur_trip)} / trip · € ${grp(c.fair.eur_per_t, 2)} / t · ${grp(c.fair.litres_trip, 1)} L / trip at €${c.fair.index_eur_per_l} · fuel ${grp(c.fair.fuel_share_pct)} % of cost${c.fair.flags.length ? " · " + c.fair.flags.join(", ") : ""}`}> · <span className="text-[color:var(--navy)] font-semibold">fair € {grp(wd.fair_eur)}</span> (model{c.fair.flags.includes("WINTER") ? ", winter" : ""}{c.fair.flags.includes("THAW") ? ", thaw restrictions may apply" : ""})</span>}
                                   </>
                                 ) : (
                                   <span className="text-amber-700">km — until the route is baked · trips still from {grp(c.payload_t, 1)} t planning payload{c.payload_fallback ? ` (${c.payload_fallback} fallback)` : ""}{wd.eur != null ? ` · € ${grp(wd.eur)}${c.rate_source === "target" ? " (target rate)" : ""}${wd.eur_partial ? " without the per-km term" : ""}${wd.eur_adj != null ? ` · + BAF € ${grp(wd.eur_adj)}` : ""}` : ""}</span>
@@ -2590,7 +2666,7 @@ function LookAhead({ meta, who, access, initialPage, initialView }){
           ) : (
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               <div className="overflow-auto">
-                <table className="text-sm w-full" style={{ minWidth: 1100 }}>
+                <table className="text-sm w-full" style={{ minWidth: 1220 }}>
                   <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wide">
                     <tr>
                       <th className="px-3 py-2 text-left font-semibold">Line</th>
@@ -2598,6 +2674,7 @@ function LookAhead({ meta, who, access, initialPage, initialView }){
                       <th className="px-2 py-2 text-right font-semibold">Actual</th>
                       <th className="px-2 py-2 text-right font-semibold">Variance</th>
                       <th className="px-2 py-2 text-right font-semibold">Planned €</th>
+                      <th className="px-2 py-2 text-right font-semibold" title="The fair-price model: vehicle, distance, tonnage, month and the live diesel index. Never a quote.">Fair € <span className="normal-case tracking-normal text-slate-400">(model)</span></th>
                       <th className="px-2 py-2 text-right font-semibold">Actual €</th>
                       <th className="px-2 py-2 text-right font-semibold">€ var</th>
                       <th className="px-2 py-2 text-left font-semibold">Note</th>
@@ -2634,6 +2711,10 @@ function LookAhead({ meta, who, access, initialPage, initialView }){
                               <div>€ {grp(r.planned_eur)}{r.rate_source === "target" && <span className="ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full text-slate-600 bg-slate-100" title="No rate on this route — priced at the target rate from Config">target</span>}</div>
                               {r.planned_eur_adj != null && <div className="text-[10px] text-slate-500" title="Quote × (1 + BAF). The quote above is unchanged.">+ BAF € {grp(r.planned_eur_adj)}</div>}
                             </>}
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums" style={{ color: "var(--navy)" }}>
+                            {r.planned_fair_eur == null ? <span className="text-slate-300" title="No fair price: the route is not baked for this vehicle, or the diesel index is missing">—</span>
+                              : <>€ {grp(r.planned_fair_eur)}{(r.fair_flags || []).includes("WINTER") && <span className="ml-1 text-[9px] text-slate-400" title="winter consumption uplift applied">winter</span>}{(r.fair_flags || []).includes("THAW") && <span className="ml-1 text-[9px] text-amber-700" title="Spring load restrictions (8 t) may apply on gravel and municipal roads — permits are free">thaw</span>}</>}
                           </td>
                           <td className="px-2 py-2 text-right">
                             <input className={fld + " max-w-[110px] ml-auto"} inputMode="decimal" placeholder="€ —"
@@ -2673,7 +2754,7 @@ function LookAhead({ meta, who, access, initialPage, initialView }){
                 <div>Variance = planned − actual. Green = held (within the 98 % band) or over-delivered. Red = short. Empty actual is not zero — it is "not reported".
                   Calibrate never fires on save; only the navy button writes the commit week, and only if that week is not already confirmed.</div>
                 <div>"Spread on this week" divides the shortage not yet carried across the remaining weekdays of the commit week (all of Mon–Fri when that week has not started). Sat/Sun stay 0 unless you type them. A second press carries only what the first did not.</div>
-                <div>Planned € is the route's own rates, or the target rate from Config where the route has none (marked "target"). "+ BAF" is the same quote with the fuel surcharge; the quote is never replaced. € var compares the actual against the quote, not the surcharged figure.{account.eur_target_lines ? ` ${account.eur_target_lines} line${account.eur_target_lines === 1 ? "" : "s"} at the target rate.` : ""}</div>
+                <div>Planned € is the route's own rates, or the target rate from Config where the route has none (marked "target"). "+ BAF" is the same quote with the fuel surcharge; the quote is never replaced. € var compares the actual against the quote, not the surcharged figure. "Fair € (model)" is what the job should cost from the vehicle, distance, tonnage, month and the live diesel index at the coefficients on Config — a floor for negotiation, never a quote.{account.eur_target_lines ? ` ${account.eur_target_lines} line${account.eur_target_lines === 1 ? "" : "s"} at the target rate.` : ""}</div>
                 {busy && <span className="text-slate-500">saving…</span>}
               </div>
             </div>
