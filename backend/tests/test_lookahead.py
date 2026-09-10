@@ -902,9 +902,9 @@ ok("⭐ stock forecast: opening + planned inbound of every line into the pile �
    st["L2"]["over"] is True and abs(st["L2"]["inbound_planned"] - exp_in) < 1e-6
    and abs(st["L2"]["forecast"] - (100.0 + exp_in)) < 1e-6 and abs(st["L2"]["over_by"] - (100.0 + exp_in - 1000.0)) < 1e-6)
 ok("🔴 PILE_OVER on every line into the over-capacity pile", codes.get("PILE_OVER") == 3)
-# 🔴 09 Sep night: the live Tark Tee fetch + geometry loop was on the page's critical
-# path and froze the Look-ahead on its first Approved line. Reversed: the page read must
-# NOT consult Tark Tee; a separate read does, and only for the routes on the page.
+# 🔴 09 Sep night: the live Tark Tee fetch + geometry loop was on the page's critical path
+# and froze the Look-ahead; off the path it still took 30 s+ per read. 10 Sep: the check is
+# RUN ON DEMAND (or cleared by a bake) and STORED on the route; the page reads the store.
 import restrictions as _rx
 _calls = {"fetch": 0, "check": []}
 _orig_fetch, _orig_check = _rx.fetch_all, _rx.check_route
@@ -913,32 +913,57 @@ def _fake_fetch(*a, **k):
     return {"type": "FeatureCollection", "features": [{"geometry": None, "properties": {}}], "errors": {}}
 def _fake_check(rid, profile=None, layers=None, _fc=None):
     _calls["check"].append(rid)
-    return {"route_id": rid, "hits": ([{"headline": "3.5 m limit"}] if rid == "R3" else [])}
+    return {"route_id": rid, "baked": True, "hits": ([{"headline": "3.5 m limit"}] if rid == "R3" else [])}
 _rx.fetch_all, _rx.check_route = _fake_fetch, _fake_check
 try:
     _pg_page = lookahead.page(bucket="commit")
-    ok("🔴 the page read never touches Tark Tee — the rail says 'pending', no TARK_TEE flag",
-       _calls["fetch"] == 0 and _calls["check"] == [] and _pg_page["clashes"]["sources"]["tark_tee"] == "pending"
+    ok("🔴 the page read never touches live Tark Tee — before any refresh the rail says 'unchecked', no flag",
+       _calls["fetch"] == 0 and _calls["check"] == []
+       and _pg_page["clashes"]["sources"]["tark_tee"] == "unchecked"
+       and set(_pg_page["clashes"]["sources"]["tark_tee_unchecked"]) == {"R1", "R3"}
        and _pg_page["clashes"]["by_code"].get("TARK_TEE") is None)
-    _tt = lookahead.tark_tee_flags(bucket="commit")
-    ok("⭐ the tark-tee read fetches once and checks ONLY the routes on the page — not all routes",
-       _calls["fetch"] == 1 and sorted(_calls["check"]) == ["R1", "R3"] and _tt["routes_checked"] == ["R1", "R3"]
-       and _tt["status"] == "ok")
-    ok("...and raises TARK_TEE on the line whose route hit, with the headline",
-       _tt["count"] == 1 and _tt["flags"][0]["route_id"] == "R3" and "3.5 m limit" in _tt["flags"][0]["text"])
+    _st = _rx.refresh_async(sync=True)
+    ok("⭐ a refresh fetches Tark Tee ONCE, checks every route, and stores the result on each",
+       _calls["fetch"] == 1 and sorted(set(_calls["check"])) == ["R1", "R2", "R3"] and _st["running"] is False
+       and _st["status"] == "ok" and _st["routes"] == 3 and _st["hits"] == 1
+       and all(x["checked_at"] for x in _rx.stored_checks(["R1", "R3"]).values()))
+    _pg_page = lookahead.page(bucket="commit")
+    ok("⭐ ...after which the page carries TARK_TEE from the STORE — instantly, no fetch, with the headline and its age",
+       _calls["fetch"] == 1 and _pg_page["clashes"]["by_code"].get("TARK_TEE") == 1
+       and _pg_page["clashes"]["sources"]["tark_tee"] == "ok" and _pg_page["clashes"]["sources"]["tark_tee_checked_at"]
+       and any("3.5 m limit" in f["text"] and f["route_id"] == "R3" for f in _pg_page["clashes"]["flags"]))
+    _tt = lookahead.tark_tee_status(bucket="commit")
+    ok("...and the status read agrees, and reports the refresh state",
+       _tt["status"] == "ok" and _tt["count"] == 1 and _tt["refresh"]["running"] is False and _tt["routes"] == ["R1", "R3"])
+    # a re-bake clears the stored check for THAT route only
+    network._upsert_geom("R3", V8, "[[24,58.5],[24.4,58.6]]", 31.0, 0.7, None, leg="loaded", alt_index=0)
+    _pg_page = lookahead.page(bucket="commit")
+    ok("🔴 re-baking a route CLEARS its stored check — the page says 'partial' and names R3, and R3's flag is gone",
+       _pg_page["clashes"]["sources"]["tark_tee"] == "partial"
+       and _pg_page["clashes"]["sources"]["tark_tee_unchecked"] == ["R3"]
+       and _pg_page["clashes"]["by_code"].get("TARK_TEE") is None
+       and _rx.stored_checks(["R1"])["R1"]["checked_at"])
+    _rx.refresh_async(sync=True)
+    ok("...and a refresh fills it again", lookahead.page(bucket="commit")["clashes"]["sources"]["tark_tee"] == "ok")
     _calls["fetch"] = 0
     _rx.fetch_all = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
-    _tt2 = lookahead.tark_tee_flags(bucket="commit")
-    ok("🔴 a Tark Tee outage reads 'unavailable' with no flags — never a silent clean",
-       _tt2["status"] == "unavailable" and _tt2["count"] == 0)
+    _st2 = _rx.refresh_async(sync=True)
+    ok("🔴 a Tark Tee outage during a refresh writes NOTHING — the stored checks stay, status says unavailable",
+       _st2["status"] == "unavailable" and lookahead.page(bucket="commit")["clashes"]["sources"]["tark_tee"] == "ok")
+    # the other failure shape: every layer errored, so fetch_all returns no features and an errors dict
+    _before = _rx.stored_checks(["R1", "R3"])
+    _rx.fetch_all = lambda *a, **k: {"type": "FeatureCollection", "features": [], "errors": {"restrictions_mass": "timeout"}}
+    _st3 = _rx.refresh_async(sync=True)
+    ok("🔴 ...and so does a fetch that returned NO features with errors — never stored as 'no hits'",
+       _st3["status"] == "unavailable" and _rx.stored_checks(["R1", "R3"]) == _before
+       and _rx.stored_checks(["R3"])["R3"]["hits"] == [{"headline": "3.5 m limit"}])
 finally:
     _rx.fetch_all, _rx.check_route = _orig_fetch, _orig_check
-ok("...and with the real (unreachable) source the sandbox reads unavailable, not ok",
-   lookahead.tark_tee_flags(bucket="commit")["status"] in ("unavailable",))
 main_src2 = open(os.path.join(BACKEND, "main.py"), encoding="utf-8").read()
-ok("🔴 /api/lookahead defaults tark_tee to 0 and /api/forecast-weeks/tark-tee exists",
-   re.search(r'def lookahead_page\([^)]*tark_tee: int = 0', main_src2) is not None
-   and '"/api/forecast-weeks/tark-tee"' in main_src2)
+ok("🔴 the refresh has its own POST endpoint and the page read defaults to the store",
+   '"/api/forecast-weeks/tark-tee/refresh"' in main_src2
+   and re.search(r'def lookahead_page\([^)]*tark_tee: int = 1', main_src2) is not None
+   and "restrictions.refresh_async" in main_src2)
 ok("no UNBAKED, no DAYS_NE_WEEK, no SHORTAGE on a fresh derived week",
    not any(c in codes for c in ("UNBAKED", "DAYS_NE_WEEK", "SHORTAGE")))
 ok("flags are ordered by the brief's code order", [f["code"] for f in flags] == sorted([f["code"] for f in flags], key=lambda c: clashes.CODES.index(c)))
@@ -1077,20 +1102,22 @@ ok("the XLSX builds", isinstance(xb, bytes) and xb[:2] == b"PK")
 import io
 import openpyxl as _ox
 wb = _ox.load_workbook(io.BytesIO(xb))
-ok("...with four sheets: Commit week, Stock, Clashes, About",
-   wb.sheetnames == ["Commit week", "Stock", "Clashes", "About"])
+# 10 Sep, the human: the sheet is the SUPPLIER's — Mon–Fri only, and no stockpile list
+ok("...with three sheets: Commit week, Clashes, About — NO Stock sheet (10 Sep)",
+   wb.sheetnames == ["Commit week", "Clashes", "About"])
 ws = wb["Commit week"]
-ok("...sheet 1 is day × line: one row per day per visible line, headers from the export mock",
-   ws.max_row - 1 == 3 * len(DATES) and [c.value for c in ws[1]][:6] == ["Date", "Route", "Origin", "Destination", "IPT", "WS"])
-ok("...a priced row carries €, a weekend row carries 0 qty and 0 trips",
-   any(ws.cell(row=i, column=18).value not in (None, "") for i in range(2, ws.max_row + 1))
-   and any(ws.cell(row=i, column=10).value == 0 and ws.cell(row=i, column=13).value == 0 for i in range(2, ws.max_row + 1)))
+ok("⭐ ...sheet 1 is WEEKDAY × line: one row per Mon–Fri day per visible line, headers from the export mock",
+   ws.max_row - 1 == 3 * NWD and [c.value for c in ws[1]][:6] == ["Date", "Route", "Origin", "Destination", "IPT", "WS"])
+ok("🔴 ...and no Saturday or Sunday row at all",
+   all(datetime.date.fromisoformat(str(ws.cell(row=i, column=1).value)[:10]).weekday() <= 4 for i in range(2, ws.max_row + 1)))
+ok("...a priced row carries €",
+   any(ws.cell(row=i, column=18).value not in (None, "") for i in range(2, ws.max_row + 1)))
 # .get-style access: a renamed sheet must FAIL these, not crash the report (lesson 13)
 _sh = lambda n: wb[n] if n in wb.sheetnames else None
-ok("...the Stock sheet has the pile and says OVER",
-   _sh("Stock") is not None and _sh("Stock").max_row == 2 and _sh("Stock").cell(row=2, column=9).value == "yes")
 ok("...the Clashes sheet has every flag the rail has",
    _sh("Clashes") is not None and _sh("Clashes").max_row - 1 == pg["clashes"]["count"])
+ok("...the About sheet says Mon–Fri only",
+   _sh("About") is not None and any("Mon–Fri only" in str(_sh("About").cell(row=i, column=2).value or "") for i in range(1, _sh("About").max_row + 1)))
 pb = export.build_pdf(pg)
 ok("the PDF builds", isinstance(pb, bytes) and pb[:5] == b"%PDF-")
 ptxt = pb.decode("latin-1")
@@ -1101,6 +1128,17 @@ ok("...and carries the disclaimer, the origin grouping, the flags heading and th
 ok("...the collapse rule prints MON" + "–FRI EACH DAY where every weekday is identical",
    "FRI EACH DAY" in ptxt)
 ok("...a draft week says so, never CONFIRMED", "not confirmed" in ptxt and "CONFIRMED" not in ptxt.replace("not confirmed", ""))
+ok("🔴 the PDF has NO stock section and NO weekend row (10 Sep)",
+   "Stock at week end" not in ptxt and re.search(r"\b(Sat|Sun) \d", ptxt) is None)
+ok("⭐ ...and carries the route map — the schematic here, since the sandbox has no Mapbox token or network",
+   "Routes this week: 2" in ptxt and "schematic from the baked geometry" in ptxt)
+_geoms = export.route_geometries(pg)
+ok("...drawn from the lines' own baked geometry, one per route, the line's vehicle first",
+   sorted(g[0] for g in _geoms) == ["R1", "R3"] and all(len(g[3]) >= 2 for g in _geoms))
+ok("the polyline encoder round-trips a known point (Google's own example)",
+   export._encode_polyline([(-120.2, 38.5), (-120.95, 40.7), (-126.453, 43.252)]) == "_p~iF~ps|U_ulLnnqC_mqNvxq`@")
+ok("without a token the Mapbox static path is skipped, not attempted",
+   export.mapbox_static_png(_geoms) is None)
 ok("no email, no upload anywhere in the export or the endpoints",
    "smtp" not in open(os.path.join(BACKEND, "export.py"), encoding="utf-8").read().lower()
    and "UploadFile" not in open(os.path.join(BACKEND, "main.py"), encoding="utf-8").read())

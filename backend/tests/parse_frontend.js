@@ -375,19 +375,28 @@ ok("the Commit KPI strip carries the mock's cards: planned, trips, vehicles peak
 ok("🔴 the word PPC is printed nowhere (L5)", !/\bPPC\b/.test(code));
 ok("⭐ the clash rail is ONE row with '+N more', not a stack",
   _laBody.includes("rail.flags.slice(0, 3)") && _laBody.includes("more`") && !_laBody.includes("dismiss"));
-ok("...and a Tark Tee outage is said, not rendered as 'no restrictions'",
-  _laBody.includes('rail.sources.tark_tee === "unavailable"') && _laBody.includes("were NOT checked"));
-// 🔴 09 Sep night: Tark Tee froze the page when it was on the critical path. The page
-// read must not ask for it; a second fetch does, after render, and the rail merges it.
-ok("🔴 the page read does not ask for Tark Tee, and the restrictions come from their own fetch after render",
-  !/lookahead\?bucket=\$\{bucket\}&tark_tee=1/.test(_laBody)
+// 🔴 09 Sep night: the LIVE Tark Tee check froze the page on the critical path, and off
+// it still took 30 s+. 10 Sep: the page reads the STORED per-route check (the rail carries
+// it), and the live check runs on demand in the background — a "check now / re-check"
+// button that polls until it finishes. A route never checked is named, never shown clean.
+ok("🔴 the page never fetches live Tark Tee — the refresh is a POST the person triggers, then a poll",
+  !/lookahead\?bucket=\$\{bucket\}&tark_tee=0/.test(_laBody)
+  && _laBody.includes('fetch(`${API}/forecast-weeks/tark-tee/refresh`, { method: "POST" })')
   && /fetch\(`\$\{API\}\/forecast-weeks\/tark-tee\?bucket=\$\{bucket\}`\)/.test(_laBody)
-  && _laBody.includes('setTt({ status: "checking", flags: [] })')
-  && _laBody.includes("checking road restrictions"));
-ok("...and the Tark Tee flags are merged into the rail rather than shown as a second rail",
-  /const flags = \[\.\.\.\(base\.flags \|\| \[\]\), \.\.\.\(tt\.flags \|\| \[\]\)\]/.test(_laBody));
-ok("today's column carries the wash and the '· today' suffix; weekends read '0 default'",
-  _laBody.includes('" · today"') && _laBody.includes('"0 default"') && _laBody.includes('#eff6ff'));
+  && _laBody.includes("setTimeout(tickPoll, 4000)"));
+ok("...the status line says checked-when, partial-with-names, or NOT checked — never a silent clean",
+  _laBody.includes("Road restrictions (Tark Tee): checked") && _laBody.includes("not checked since baking")
+  && _laBody.includes("NOT checked for these routes") && _laBody.includes("check now"));
+ok("...and the rail's flags come from the page read alone (no second rail, no client-side merge)",
+  /const rail = \(page && page\.clashes\) \|\| \{ flags: \[\], count: 0, sources: \{\} \};/.test(_laBody)
+  && !_laBody.includes("...(tt.flags || [])"));
+// Mon–Fri only (10 Sep, the human)
+ok("⭐ the Commit grid shows Mon–Fri only — weekend days are filtered out of the columns and the cells",
+  /\.filter\(iso => !isWeekend\(iso\)\)/.test(_laBody) && _laBody.includes("const weekdaysOf = (line) =>")
+  && _laBody.includes("{weekdaysOf(line).map(d => {") && !_laBody.includes("{line.days.map(d => {"));
+ok("...and the footer says so", _laBody.includes("Mon–Fri only — Sat/Sun are held at 0 and not shown"));
+ok("today's column carries the wash and the '· today' suffix",
+  _laBody.includes('" · today"') && _laBody.includes('#eff6ff'));
 ok("the expanded row prints km/trip, km/week, t·km, cycle and € or 'rate not set'",
   _laBody.includes("km/trip") && _laBody.includes("t·km (") && _laBody.includes("cycle {grp(c.cycle_min)} min")
   && _laBody.includes('"rate not set"'));

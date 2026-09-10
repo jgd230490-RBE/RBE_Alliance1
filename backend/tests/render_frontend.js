@@ -194,8 +194,9 @@ if (loaded) {
     ok("...with the KPI strip, the clash rail and one row per line",
       commitOut.includes("planned this week") && commitOut.includes("+" + (fixture.clashes.count - 3) + " more")
       && (commitOut.match(/▶/g) || []).length === fixture.commit.lines.length);
-    ok("...the day headers name today and the weekend default",
-      commitOut.includes("· today") && commitOut.includes("0 default"));
+    ok("...the day headers name today, and there are exactly five day columns — Mon–Fri only (10 Sep)",
+      commitOut.includes("· today") && !commitOut.includes("0 default")
+      && (commitOut.match(/qty · tr · veh/gi) || []).length === 5);
     ok("...every weekday cell carries trips and vehicles (baked fixture)",
       (commitOut.match(/ tr · /g) || []).length >= fixture.commit.lines.length * 5);
     ok("...the stock card says the pile is OVER", commitOut.includes("Stock held") && commitOut.includes("OVER by"));
