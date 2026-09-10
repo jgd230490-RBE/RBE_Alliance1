@@ -24,6 +24,7 @@ import json
 import re
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -203,30 +204,46 @@ ok("forecast_weeks gained actual_source, and it is in the DDL (or the rebuild dr
 # =========================================================================== #
 #  1. Bucket arithmetic — pure functions, explicit dates                       #
 # =========================================================================== #
+def _raises(fn):
+    try:
+        fn()
+    except Exception as e:
+        return e
+    return None
+
 ok("month_of: index 1 is January of START_YEAR", days.month_of(1, 2026) == (2026, 1))
 ok("month_of: index 13 rolls into the next year", days.month_of(13, 2026) == (2027, 1))
-d_w2 = days.bucket_dates(9, 2, 2026)         # Sep 2026, days 8-14
-ok("week 2 is the 8th to the 14th, seven days",
-   [d.day for d in d_w2] == [8, 9, 10, 11, 12, 13, 14] and d_w2[0].month == 9)
-d_w4 = days.bucket_dates(10, 4, 2026)        # Oct 2026 has 31 days: 22..31
-ok("⭐ week 4 of a 31-day month is TEN days, 22nd to the 31st",
-   [d.day for d in d_w4] == list(range(22, 32)))
-ok("...and week 4 of February 2027 is 22nd to the 28th",
-   [d.day for d in days.bucket_dates(14, 4, 2026)] == list(range(22, 29)))
+# 10 Sep: CALENDAR weeks. 1 Sep 2026 is a Tuesday; week 2 of September is Mon 7 – Sun 13.
+d_w2 = days.bucket_dates(9, 2, 2026)
+ok("⭐ week 2 of Sep 2026 is Mon 7 to Sun 13 — seven days, starting on a MONDAY",
+   [d.day for d in d_w2] == [7, 8, 9, 10, 11, 12, 13] and d_w2[0].weekday() == 0 and d_w2[0].month == 9)
+d_w1 = days.bucket_dates(9, 1, 2026)
+ok("⭐ week 1 of Sep 2026 starts on Mon 31 AUGUST — a week's first days may lie in the month before",
+   d_w1[0] == datetime.date(2026, 8, 31) and d_w1[-1] == datetime.date(2026, 9, 6))
+d_w5 = days.bucket_dates(10, 5, 2026)
+ok("⭐ October 2026 has a FIFTH week, Mon 26 Oct – Sun 1 Nov",
+   d_w5[0] == datetime.date(2026, 10, 26) and d_w5[-1] == datetime.date(2026, 11, 1))
+ok("...and asking September for a fifth week is refused, not silently empty",
+   isinstance(_raises(lambda: days.bucket_dates(9, 5, 2026)), ValueError))
+ok("every bucket is exactly seven days and starts on a Monday, two years through",
+   all(len(days.bucket_dates(m, w, 2026)) == 7 and days.bucket_dates(m, w, 2026)[0].weekday() == 0
+       for m in range(1, 25) for w in range(1, weeks.weeks_in_month(m, 2026) + 1)))
 ok("weekdays_in counts Mon-Fri only",
-   len(days.weekdays_in(d_w2)) == 5 and len(days.weekdays_in(d_w4)) == 7)
+   len(days.weekdays_in(d_w2)) == 5 and len(days.weekdays_in(d_w5)) == 5)
 sp = days.split_week(1000.0, d_w2)
 ok("⭐ L1: Mon-Fri each get week/5 and Sat/Sun get 0",
    all(abs(sp[d] - 200.0) < 1e-9 for d in d_w2 if d.weekday() <= 4)
    and all(sp[d] == 0.0 for d in d_w2 if d.weekday() > 4))
 ok("...and the split sums back to the week", abs(sum(sp.values()) - 1000.0) < 1e-9)
-sp4 = days.split_week(700.0, d_w4)
-ok("week 4 of a 31-day month is still weekday-weighted: 7 weekdays x 100, 3 weekend days x 0",
-   sum(1 for v in sp4.values() if abs(v - 100.0) < 1e-9) == 7
-   and sum(1 for v in sp4.values() if v == 0.0) == 3)
+sp4 = days.split_week(500.0, d_w5)
+ok("the fifth week splits the same way: 5 weekdays x 100, 2 weekend days x 0",
+   sum(1 for v in sp4.values() if abs(v - 100.0) < 1e-9) == 5
+   and sum(1 for v in sp4.values() if v == 0.0) == 2)
 ok("commit_bucket with an explicit today matches weeks.editable_week",
    days.commit_bucket(2026, today=datetime.date(2026, 9, 10)) == (9, 2)
-   and days.commit_bucket(2026, today=datetime.date(2026, 10, 25)) == (10, 4))
+   and days.commit_bucket(2026, today=datetime.date(2026, 10, 25)) == (10, 4)
+   and days.commit_bucket(2026, today=datetime.date(2026, 10, 30)) == (10, 5)
+   and days.commit_bucket(2026, today=datetime.date(2026, 8, 31)) == (9, 1))
 
 # =========================================================================== #
 #  2. Materialisation — commit week only, Approved only                       #
@@ -541,6 +558,7 @@ ok("days.py imports weeks and does not reimplement its writes",
 #   R2/WS2  tonnes, NOT baked            -> trips + tonnes only, UNBAKED flag
 #   R3/WS3  unit=vehicles, loaded only   -> trips = qty, return estimated (‡), km_trip = loaded
 #   R1/WS4  a vehicle factors.json does not know -> V07 fallback, same as month-kpis
+import config  # noqa: E402
 import derived  # noqa: E402
 reset_db()
 _as("planner123")
@@ -898,10 +916,10 @@ ok("the empty cap on R3 raises no ROUTE_CAP — no 40-trip constant anywhere",
    and "40" not in open(os.path.join(BACKEND, "clashes.py"), encoding="utf-8").read().replace("40-trip", ""))
 st = {s["location_id"]: s for s in pg["stock"]}
 exp_in = sum(float(L[w]["week"]["planned_qty"]) for w in ("WS1", "WS2", "WS3"))
-ok("⭐ stock forecast: opening + planned inbound of every line into the pile − consume, over when > capacity",
+ok("⭐ stock forecast: opening + planned inbound of every line into the stockpile − consume, over when > capacity",
    st["L2"]["over"] is True and abs(st["L2"]["inbound_planned"] - exp_in) < 1e-6
    and abs(st["L2"]["forecast"] - (100.0 + exp_in)) < 1e-6 and abs(st["L2"]["over_by"] - (100.0 + exp_in - 1000.0)) < 1e-6)
-ok("🔴 PILE_OVER on every line into the over-capacity pile", codes.get("PILE_OVER") == 3)
+ok("🔴 STOCKPILE_OVER on every line into the over-capacity stockpile", codes.get("STOCKPILE_OVER") == 3)
 # 🔴 09 Sep night: the live Tark Tee fetch + geometry loop was on the page's critical path
 # and froze the Look-ahead; off the path it still took 30 s+ per read. 10 Sep: the check is
 # RUN ON DEMAND (or cleared by a bake) and STORED on the route; the page reads the store.
@@ -978,7 +996,7 @@ ok("⭐ IPT1 sees one line, its own ROUTE_CAP and IPT_SHARE flags — the other 
    and all(f["ipt"] == "IPT1" for f in pg1["clashes"]["flags"])
    and pg1["clashes"]["by_code"].get("ROUTE_CAP") == NWD and pg1["clashes"]["by_code"].get("IPT_SHARE", 0) >= NWD
    and pg1["commit"]["totals"]["lines"] == 1)
-ok("...and the stock read is not IPT-scoped (C10), so IPT1 still sees the pile forecast", len(pg1["stock"]) == 1)
+ok("...and the stock read is not IPT-scoped (C10), so IPT1 still sees the stockpile forecast", len(pg1["stock"]) == 1)
 for _v in ("IPT1_CODE", "IPT2_CODE", "IPT3_CODE", "PLANNER_CODE", "ADMIN_CODE"):
     os.environ.pop(_v, None)
 _as("planner123")
@@ -1065,7 +1083,7 @@ def _scrub(o):
 _fix = _scrub(lookahead.page(bucket="commit"))
 with open(os.path.join(_fix_dir, "lookahead_page.json"), "w", encoding="utf-8") as _fh:
     _fh.write(_json.dumps(_fix, indent=1, ensure_ascii=False))
-ok("the render fixture is written with three lines, a rail, a pile and an account week",
+ok("the render fixture is written with three lines, a rail, a stockpile and an account week",
    len(_fix["commit"]["lines"]) == 3 and _fix["clashes"]["count"] > 3 and len(_fix["stock"]) == 1
    and len(_fix["account"]["rows"]) == (3 if pm >= 1 else 0))
 
@@ -1121,24 +1139,70 @@ ok("...the About sheet says Mon–Fri only",
 pb = export.build_pdf(pg)
 ok("the PDF builds", isinstance(pb, bytes) and pb[:5] == b"%PDF-")
 ptxt = pb.decode("latin-1")
-ok("...and carries the disclaimer, the origin grouping, the flags heading and the footer lines",
-   # reportlab escapes parentheses inside PDF strings, so the heading is matched without them
-   "not a delivery note" in ptxt and "Origin: Pit" in ptxt and "not a stop" in ptxt
-   and "Vignette is time-based" in ptxt and "Re-open the week" in ptxt)
-ok("...the collapse rule prints MON" + "–FRI EACH DAY where every weekday is identical",
-   "FRI EACH DAY" in ptxt)
-ok("...a draft week says so, never CONFIRMED", "not confirmed" in ptxt and "CONFIRMED" not in ptxt.replace("not confirmed", ""))
-ok("🔴 the PDF has NO stock section and NO weekend row (10 Sep)",
-   "Stock at week end" not in ptxt and re.search(r"\b(Sat|Sun) \d", ptxt) is None)
-ok("⭐ ...and carries the route map — the schematic here, since the sandbox has no Mapbox token or network",
-   "Routes this week: 2" in ptxt and "schematic from the baked geometry" in ptxt)
+ok("🔴 the PDF is LANDSCAPE A4 (10 Sep, the human)", re.search(r"/MediaBox \[ 0 0 841\.\d+ 595\.\d+ \]", ptxt) is not None, ptxt[ptxt.find("/MediaBox"):ptxt.find("/MediaBox") + 40])
+_txt = subprocess.run(["pdftotext", "-layout", "-", "-"], input=pb, capture_output=True).stdout.decode("utf-8") if shutil.which("pdftotext") else ptxt
+ok("...and carries the disclaimer, the flags heading, the footer lines and a page number",
+   "not a delivery note" in _txt and "not a stop" in _txt and "Vignette is time-based" in _txt
+   and "Re-open the week" in _txt and "page 1" in _txt)
+ok("⭐ one row per LINE with Mon…Fri as five separate columns — no collapse rule",
+   "FRI EACH DAY" not in _txt and all(k in _txt for k in ("MON 7 SEP", "TUE 8 SEP", "WED 9 SEP", "THU 10 SEP", "FRI 11 SEP"))
+   and _txt.count("Small aggregate") == 3)
+ok("⭐ origin and destination carry their coordinates from the locations table",
+   "58.50000, 24.00000" in _txt and "58.60000, 24.40000" in _txt and "ORIGIN" in _txt and "DESTINATION" in _txt)
+ok("...today's column is named, the week column totals, and a TOTAL row closes the table",
+   "TODAY" in _txt and "WEEK" in _txt and "TOTAL" in _txt and "3 line(s)" in _txt)
+ok("...a draft week says so, never CONFIRMED", "not confirmed" in _txt and "CONFIRMED" not in _txt.replace("not confirmed", ""))
+ok("🔴 the PDF has NO stock section and NO weekend column (10 Sep)",
+   "Stock at week end" not in _txt and re.search(r"\b(SAT|SUN) \d", _txt) is None)
+ok("⭐ ...and carries the route map — the schematic here, because Mapbox cannot be reached from the sandbox",
+   "Routes this week: 2" in _txt and "schematic from the baked geometry" in _txt)
+# the Mapbox branch, with the fetch stubbed: the PNG is placed and the caption says Mapbox
+# a REAL 8×4 PNG (Pillow writes it; reportlab needs Pillow to place a PNG — it is on
+# Render because reportlab pulls it in, and it is asserted below)
+import io as _io
+from PIL import Image as _Img
+_pb = _io.BytesIO(); _Img.new("RGB", (8, 4), (200, 210, 230)).save(_pb, format="PNG"); _png = _pb.getvalue()
+class _Resp:
+    def __init__(self, b): self.b = b
+    def read(self): return self.b
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+_orig_open = export.urllib.request.urlopen
+export.urllib.request.urlopen = lambda req, timeout=0: _Resp(_png)
+try:
+    pb2 = export.build_pdf(pg)
+    _txt2 = subprocess.run(["pdftotext", "-layout", "-", "-"], input=pb2, capture_output=True).stdout.decode("utf-8") if shutil.which("pdftotext") else pb2.decode("latin-1")
+    ok("⭐ when Mapbox answers, the PDF carries the image and the caption says so — the branch Render will take",
+       "map © Mapbox" in _txt2 and "schematic" not in _txt2 and b"/Subtype /Image" in pb2)
+    ok("...and the request carries the SAME public token the browser map uses when MAPBOX_TOKEN is unset",
+       export.mapbox_static_png(export.route_geometries(pg)) == _png and config.mapbox_token() == config.MAPBOX_TOKEN_DEFAULT)
+    _seen = {}
+    export.urllib.request.urlopen = lambda req, timeout=0: (_seen.setdefault("url", req.full_url), _Resp(_png))[1]
+    export.mapbox_static_png(export.route_geometries(pg))
+    ok("...the URL is a Static Images request over light-v11 with a path overlay per route",
+       _seen.get("url", "").startswith("https://api.mapbox.com/styles/v1/mapbox/light-v11/static/") and _seen.get("url", "").count("path-") == 2
+       and "access_token=" + config.MAPBOX_TOKEN_DEFAULT in _seen.get("url", ""), _seen.get("url", "no request made"))
+    export.urllib.request.urlopen = lambda req, timeout=0: _Resp(b"<html>rate limited</html>")
+    ok("🔴 a non-PNG answer is not drawn as a map — None, and the schematic takes over", export.mapbox_static_png(export.route_geometries(pg)) is None)
+finally:
+    export.urllib.request.urlopen = _orig_open
+# many lines: several pages, the header row on each
+import copy as _copy
+_big = _copy.deepcopy(pg)
+_big["commit"]["lines"] = [_copy.deepcopy(pg["commit"]["lines"][i % 3]) for i in range(40)]
+pb3 = export.build_pdf(_big)
+_txt3 = subprocess.run(["pdftotext", "-layout", "-", "-"], input=pb3, capture_output=True).stdout.decode("utf-8") if shutil.which("pdftotext") else pb3.decode("latin-1")
+_npages = pb3.count(b"/Type /Page\n")
+ok("⭐ forty lines run over several pages, and the column headers repeat on every page",
+   _npages >= 3 and _npages - 1 <= _txt3.count("DESTINATION") <= _npages and "40 line(s)" in _txt3,   # the last page may hold only the flags + footer
+   f"{_npages} pages, {_txt3.count('DESTINATION')} headers")
 _geoms = export.route_geometries(pg)
 ok("...drawn from the lines' own baked geometry, one per route, the line's vehicle first",
    sorted(g[0] for g in _geoms) == ["R1", "R3"] and all(len(g[3]) >= 2 for g in _geoms))
 ok("the polyline encoder round-trips a known point (Google's own example)",
    export._encode_polyline([(-120.2, 38.5), (-120.95, 40.7), (-126.453, 43.252)]) == "_p~iF~ps|U_ulLnnqC_mqNvxq`@")
-ok("without a token the Mapbox static path is skipped, not attempted",
-   export.mapbox_static_png(_geoms) is None)
+ok("with an EMPTY token the Mapbox static path is skipped, not attempted",
+   export.mapbox_static_png(_geoms, token="") is None)
 ok("no email, no upload anywhere in the export or the endpoints",
    "smtp" not in open(os.path.join(BACKEND, "export.py"), encoding="utf-8").read().lower()
    and "UploadFile" not in open(os.path.join(BACKEND, "main.py"), encoding="utf-8").read())
@@ -1259,6 +1323,88 @@ ok("get_conn() on Postgres borrows from the pool, and DB_POOL=0 turns it off",
    "ThreadedConnectionPool" in db_src and 'os.getenv("DB_POOL", "1")' in db_src and "return _PooledConn(pool, conn)" in db_src)
 ok("query() and execute() both go through the retrying _run()",
    db_src.count("return _run(sql, params, fetch=True)") == 1 and db_src.count("_run(sql, params, fetch=False)") == 1)
+
+
+# =========================================================================== #
+#  13. 10 SEP — calendar weeks in the data, stock on Account, the week map       #
+# =========================================================================== #
+# (state as left by section 12: three lines on R1/R2/R3, L2 holding stock, MI/WI commit)
+_as("planner123")
+pg13 = lookahead.page(bucket="commit")
+hz13 = pg13["horizon"]
+ok("the horizon says how many weeks each month has, and where each one runs — nothing assumes four",
+   set(hz13["weeks_in_month"]) == {str(MI), str(MI + 1)}
+   and all(int(v) in (4, 5) for v in hz13["weeks_in_month"].values())
+   and all(f"{m}|{w}" in hz13["week_spans"] for m in (MI, MI + 1) for w in range(1, weeks.weeks_in_month(m) + 1))
+   and all(datetime.date.fromisoformat(v["from"]).weekday() == 0 for v in hz13["week_spans"].values()))
+ok("⭐ every week span on the horizon starts on a MONDAY and is seven days",
+   all((datetime.date.fromisoformat(v["to"]) - datetime.date.fromisoformat(v["from"])).days == 6
+       for v in hz13["week_spans"].values()))
+ok("the commit week itself starts on a Monday — the human's rule, 10 Sep",
+   datetime.date.fromisoformat(pg13["commit_week"]["from"]).weekday() == 0
+   and datetime.date.fromisoformat(pg13["commit_week"]["to"]).weekday() == 6)
+
+# the account week's stockpiles: one row per stockpile, the balance arithmetic of
+# stockpiles.balances(), consumed None until typed
+if pm >= 1:
+    st = pg13["account"]["stock"]
+    ok("account.stock has one row per stockpile, with opening / in / out / closing / remaining",
+       len(st) == 1 and st[0]["location_id"] == "L2"
+       and all(k in st[0] for k in ("opening", "inbound", "consumed", "closing", "remaining", "over", "capacity_qty", "unit")))
+    ok("⭐ 'out' is None until typed — not 0 — and closing = opening + in − 0 meanwhile",
+       st[0]["consumed"] is None and abs(st[0]["closing"] - (st[0]["opening"] + st[0]["inbound"])) < 1e-6)
+    ok("...the figures agree with stockpiles.balances() for that week (nothing recomputed)",
+       abs(st[0]["closing"] - [w for w in stockpiles.balances(1, pm)["stockpiles"][0]["weeks"]
+                              if (w["month_index"], w["week_index"]) == (pm, pw)][0]["balance_end"]) < 1e-6)
+    # type 50 out through the same PUT the old grid used
+    main.consume_stockpile(main.ConsumeIn(location_id="L2", month_index=pm, week_index=pw, consumed_qty=50.0, unit="t", note=None, updated_by="t"))
+    st2 = lookahead.page(bucket="commit")["account"]["stock"][0]
+    ok("typing 50 out lowers closing by 50 and reads back as typed",
+       st2["consumed"] == 50.0 and abs(st2["closing"] - (st[0]["closing"] - 50.0)) < 1e-6)
+    ok("...and over/remaining follow the capacity (1 000 t here)",
+       st2["over"] is (st2["closing"] > 1000.0) and abs(st2["remaining"] - (1000.0 - st2["closing"])) < 1e-6)
+    main.consume_stockpile(main.ConsumeIn(location_id="L2", month_index=pm, week_index=pw, consumed_qty=None, unit="t", note=None, updated_by="t"))
+    ok("clearing the box returns 'out' to None, not 0",
+       lookahead.page(bucket="commit")["account"]["stock"][0]["consumed"] is None)
+    ok("a five-week month refuses week 6 and accepts week 5 on the consume PUT",
+       "week_index must be 1-5" in (stockpiles.consume("L2", 10, 6, consumed_qty=1.0, unit="t").get("error") or "")
+       and not stockpiles.consume("L2", 10, 5, consumed_qty=1.0, unit="t").get("error"))
+else:
+    for _ in range(7):
+        ok("(account stock assertions skipped — no previous bucket inside the horizon)", True)
+
+# the week map's read: geometry per route, ends with coordinates, unbaked = null
+db.execute("INSERT INTO routes (id, origin_id, dest_id, ipt) VALUES (?, ?, ?, ?)", ("R9", "L2", "L1", "IPT 4"))   # never baked
+gm = lookahead.week_geometry(["R1", "R3", "R9", "R1"], {"R1": V8, "R3": "Ghost truck"})
+ok("week_geometry returns one entry per DISTINCT route, in the order asked",
+   [g["route_id"] for g in gm] == ["R1", "R3", "R9"])
+ok("⭐ both ends carry name and coordinates from the locations table",
+   gm[0]["origin"]["name"] == "Pit" and gm[0]["origin"]["lat"] == 58.5 and gm[0]["origin"]["lon"] == 24.0
+   and gm[0]["dest"]["name"] == "Site" and gm[0]["dest"]["lat"] == 58.6)
+ok("R1 is drawn for its planned vehicle (baked)", gm[0]["geometry"] == [[24.0, 58.5], [24.4, 58.6]]
+   and gm[0]["vehicle_profile"] == V8 and gm[0]["vehicle_as_planned"] is True and gm[0]["distance_km"] == 30.0)
+ok("⭐ R3 asked for a vehicle it is NOT baked for: drawn for the one that is, and SAYS so",
+   gm[1]["geometry"] is not None and gm[1]["vehicle_profile"] == V8 and gm[1]["vehicle_as_planned"] is False)
+ok("🔴 R9 has no baked geometry: geometry is null — never a straight line pretending to be a road",
+   gm[2]["geometry"] is None and gm[2]["vehicle_profile"] is None and gm[2]["origin"]["name"] == "Site")
+ok("the endpoint parses ids and aligned vehicles, and needs a code",
+   [g["route_id"] for g in main.lookahead_geometry(ids="R1,R2", vehicles=V8 + ",")["routes"]] == ["R1", "R2"])
+_as(None)
+try:
+    main.lookahead_geometry(ids="R1"); ok("...no code, no map data", False)
+except Exception as e:
+    ok("...no code, no map data", getattr(e, "status_code", None) in (401, 403), str(e))
+_as("planner123")
+
+# 🔴 the calendar change: a day written under the OLD bucket number is re-stamped on read
+_d0 = days.bucket_dates(MI, WI)[0].isoformat()
+db.execute("UPDATE forecast_days SET parent_week_index = 99 WHERE tenant_id = ? AND route_id = ? AND day_date = ?",
+           (db.current_tenant(), "R1", _d0))
+main.list_forecast_days()
+_rows = db.query("SELECT parent_week_index, status FROM forecast_days WHERE tenant_id = ? AND route_id = ? AND day_date = ?",
+                 (db.current_tenant(), "R1", _d0))
+ok("⭐ a day whose bucket number is stale (the weeks moved to the calendar) is re-stamped on the next read, whatever its status",
+   len(_rows) >= 1 and all(int(r["parent_week_index"]) == WI for r in _rows), str(_rows))
 
 
 # =========================================================================== #

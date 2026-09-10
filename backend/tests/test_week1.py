@@ -388,12 +388,14 @@ ok("C: ⭐ a Pending line materialises NO weeks",
 main.set_route_status("R1", main.StatusUpdate(status="Approved"),
                       discipline="earthworks", section_id="WS1")
 w = weeks.list_weeks(9, 10)
-ok("C: approving the line creates four weeks per approved month", len(w) == 8, str(len(w)))
-ok("C: ⭐ planned_qty is the month divided by four",
-   all(abs(r["planned_qty"] - 25.0) < 1e-9 for r in w))
+ok("C: approving the line creates the month's weeks — four for Sep 2026, five for Oct", len(w) == 9, str(len(w)))
+ok("C: ⭐ planned_qty is the month divided by ITS number of weeks (÷4 in Sep, ÷5 in Oct)",
+   all(abs(r["planned_qty"] - (25.0 if r["month_index"] == 9 else 20.0)) < 1e-9 for r in w))
 ok("C: the weeks inherit the parent's unit", all(r["unit"] == "t" for r in w))
 ok("C: they start as `derived`", all(r["status"] == "derived" for r in w))
-ok("C: week_index is 1-4", sorted({r["week_index"] for r in w}) == [1, 2, 3, 4])
+ok("C: week_index runs 1-4 in Sep and 1-5 in Oct",
+   sorted({r["week_index"] for r in w if r["month_index"] == 9}) == [1, 2, 3, 4]
+   and sorted({r["week_index"] for r in w if r["month_index"] == 10}) == [1, 2, 3, 4, 5])
 
 # an edit sticks, and moves the row to `edited`
 weeks.set_week("R1", 9, "earthworks", "WS1", 2, planned_qty=40.0)
@@ -436,17 +438,28 @@ ok("C: ...and the edited one still does not",
 ok("C: the confirmed week is flagged as out of step with its parent",
    weeks.get_week("R1", 9, "earthworks", "WS1", 3)["parent_changed"] is True)
 
-# next-week arithmetic: week buckets are days 1-7 / 8-14 / 15-21 / 22-end
-ok("C: day 1 is week 1", weeks.week_of_day(1) == 1)
-ok("C: day 7 is week 1", weeks.week_of_day(7) == 1)
-ok("C: day 8 is week 2", weeks.week_of_day(8) == 2)
-ok("C: day 21 is week 3", weeks.week_of_day(21) == 3)
-ok("C: day 22 is week 4", weeks.week_of_day(22) == 4)
-ok("C: day 31 is week 4 — no fifth bucket", weeks.week_of_day(31) == 4)
+# week arithmetic — CALENDAR weeks since 10 Sep 2026 (Mon–Sun; a week belongs to the
+# month holding its Thursday). 1 Sep 2026 is a Tuesday.
+import datetime as _dt
+ok("C: Tue 1 Sep 2026 is in week 1 of September", weeks.week_of_date(_dt.date(2026, 9, 1), 2026) == (9, 1))
+ok("C: ⭐ Mon 31 Aug 2026 is ALSO week 1 of September (its Thursday is 3 Sep)",
+   weeks.week_of_date(_dt.date(2026, 8, 31), 2026) == (9, 1))
+ok("C: Sun 6 Sep is still week 1; Mon 7 Sep is week 2",
+   weeks.week_of_date(_dt.date(2026, 9, 6), 2026) == (9, 1) and weeks.week_of_date(_dt.date(2026, 9, 7), 2026) == (9, 2))
+ok("C: Wed 30 Sep 2026 belongs to OCTOBER week 1 (its Thursday is 1 Oct)",
+   weeks.week_of_date(_dt.date(2026, 9, 30), 2026) == (10, 1))
+ok("C: every week starts on a Monday", all(weeks.week_span(m, w, 2026)[0].weekday() == 0
+   for m in range(1, 25) for w in range(1, weeks.weeks_in_month(m, 2026) + 1)))
+ok("C: September 2026 has four weeks, October five", weeks.weeks_in_month(9, 2026) == 4 and weeks.weeks_in_month(10, 2026) == 5)
+ok("C: months never overlap and never leave a gap",
+   all(weeks.week_span(m + 1, 1, 2026)[0] == weeks.week_span(m, weeks.weeks_in_month(m, 2026), 2026)[1] + _dt.timedelta(days=1)
+       for m in range(1, 24)))
 ok("C: next week inside a month is the following bucket",
    weeks.next_week(month_index=9, week_index=1) == (9, 2))
-ok("C: ⭐ past week 4, next week is week 1 of the NEXT month",
-   weeks.next_week(month_index=9, week_index=4) == (10, 1))
+ok("C: ⭐ past the month's last week, next week is week 1 of the NEXT month",
+   weeks.next_week(month_index=9, week_index=4) == (10, 1) and weeks.next_week(10, 4) == (10, 5) and weeks.next_week(10, 5) == (11, 1))
+ok("C: prev_week steps back into the previous month's LAST week (five in October)",
+   weeks.prev_week(11, 1) == (10, 5) and weeks.prev_week(10, 1) == (9, 4))
 
 # visibility: until Task F, the same as /api/forecasts
 ok("C: the week feed is tenant-scoped like every other read",
@@ -515,7 +528,7 @@ main.set_route_status("R1", main.StatusUpdate(status="Approved"),
 weeks.set_actual("R1", 9, "earthworks", "WS1", 4, actual_qty=5.0, by="foreman")
 weeks.calibrate("R1", 9, "earthworks", "WS1", 4)
 ok("D: ⭐ calibrating week 4 writes week 1 of the NEXT month",
-   weeks.get_week("R1", 10, "earthworks", "WS1", 1)["planned_qty"] == 45.0,
+   weeks.get_week("R1", 10, "earthworks", "WS1", 1)["planned_qty"] == 40.0,   # 100÷5 + 20 short
    str(weeks.get_week("R1", 10, "earthworks", "WS1", 1)["planned_qty"]))
 
 # ⭐ Crossing a month boundary calls materialise_line() for the next month, which is
@@ -564,7 +577,7 @@ ok("D2: ⭐ the three new location columns are in _TENANT_DDL, not only ALTERed"
 db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)",
            ("L1", "Pit", 58.5, 24.0, "Quarry"))
 db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)",
-           ("L2", "North pile", 58.6, 24.4, "Stockpile"))
+           ("L2", "North stockpile", 58.6, 24.4, "Stockpile"))
 db.execute("INSERT INTO routes (id, origin_id, dest_id) VALUES (?, ?, ?)",
            ("R1", "L1", "L2"))
 stockpiles.set_capacity("L2", capacity_qty=3000.0, capacity_unit="t", opening_qty=200.0)
@@ -587,7 +600,7 @@ stockpiles.consume("L2", 9, 1, consumed_qty=100.0, unit="t", note="", by="forema
 w = {r["week_index"]: r for r in
      [s for s in stockpiles.balances(9, 9)["stockpiles"]
       if s["location_id"] == "L2"][0]["weeks"]}
-ok("D2: a week actual on a route INTO the pile becomes inbound", w[1]["inbound"] == 500.0)
+ok("D2: a week actual on a route INTO the stockpile becomes inbound", w[1]["inbound"] == 500.0)
 ok("D2: typed consumption is stored", w[1]["consumed"] == 100.0)
 ok("D2: ⭐ balance = opening + inbound - consumed", w[1]["balance_end"] == 600.0,
    str(w[1]["balance_end"]))
@@ -608,10 +621,10 @@ ok("D2: ⭐ and nothing is blocked — the actual still saved",
 
 # no capacity recorded: the balance still computes, remaining is unknown
 db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)",
-           ("L3", "Unmeasured pile", 58.7, 24.5, "Stockpile"))
+           ("L3", "Unmeasured stockpile", 58.7, 24.5, "Stockpile"))
 L3 = [s for s in stockpiles.balances(9, 9)["stockpiles"]
       if s["location_id"] == "L3"][0]
-ok("D2: ⭐ a pile with no capacity still balances", L3["weeks"][0]["balance_end"] == 0.0)
+ok("D2: ⭐ a stockpile with no capacity still balances", L3["weeks"][0]["balance_end"] == 0.0)
 ok("D2: ...and reports remaining as unknown, not zero",
    L3["weeks"][0]["remaining"] is None and L3["capacity_qty"] is None)
 ok("D2: ...and is never `over`", L3["weeks"][0]["over"] is False)
@@ -720,10 +733,10 @@ reset_db()
 db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)",
            ("L1", "Pit", 58.5, 24.0, "Quarry"))
 db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)",
-           ("L2", "Volume pile", 58.6, 24.4, "Stockpile"))
+           ("L2", "Volume stockpile", 58.6, 24.4, "Stockpile"))
 db.execute("INSERT INTO routes (id, origin_id, dest_id) VALUES (?, ?, ?)",
            ("R1", "L1", "L2"))
-# ⭐ A line entered in m3 delivering into a pile measured in TONNES. Adding those
+# ⭐ A line entered in m3 delivering into a stockpile measured in TONNES. Adding those
 # together untouched would produce a number with no meaning, and it would look right.
 stockpiles.set_capacity("L2", capacity_qty=1000.0, capacity_unit="t", opening_qty=0.0)
 main.save_matrix_row(main.MatrixRow(
@@ -737,13 +750,13 @@ weeks.set_actual("R1", 9, "earthworks", "WS1", 1, actual_qty=100.0, by="foreman"
 _w1 = [s for s in stockpiles.balances(9, 9)["stockpiles"]
        if s["location_id"] == "L2"][0]["weeks"][0]
 # Small aggregate is 1.6 t/m3 in the real factors.json
-ok("⭐ an m3 movement into a tonnes pile is CONVERTED, not added raw",
+ok("⭐ an m3 movement into a tonnes stockpile is CONVERTED, not added raw",
    abs(_w1["inbound"] - 160.0) < 1e-6, str(_w1["inbound"]))
-ok("...and the balance is in the pile's unit", _w1["unit"] == "t")
+ok("...and the balance is in the stockpile's unit", _w1["unit"] == "t")
 _dens = conversions.load_factors()["material_categories"]["Small aggregate"]["density_t_per_m3"]
 ok("...using the density from factors.json, not a constant",
    abs(_w1["inbound"] - 100.0 * _dens) < 1e-6)
-# consumption typed in m3 against the same tonnes pile
+# consumption typed in m3 against the same tonnes stockpile
 stockpiles.consume("L2", 9, 1, consumed_qty=10.0, unit="m3", note="", by="foreman")
 _w1 = [s for s in stockpiles.balances(9, 9)["stockpiles"]
        if s["location_id"] == "L2"][0]["weeks"][0]
@@ -754,7 +767,7 @@ ok("⭐ typed consumption is converted the same way",
 ok("⭐ stockpiles.START_YEAR is set from main, not maintained separately",
    stockpiles.START_YEAR == main.START_YEAR == 2026)
 
-# capacity is clearable — "we do not know how big this pile is" is a real state
+# capacity is clearable — "we do not know how big this stockpile is" is a real state
 stockpiles.set_capacity("L2", capacity_qty=None, capacity_unit=None, opening_qty=0.0)
 _L2 = [s for s in stockpiles.balances(9, 9)["stockpiles"] if s["location_id"] == "L2"][0]
 ok("D2: a capacity can be cleared back to unknown", _L2["capacity_qty"] is None)
@@ -927,7 +940,7 @@ ok("F: ...while the public map feed stays open",
    and isinstance(main.meta(), dict))
 # stockpiles: any code, NOT filtered
 _as("six-secret")
-ok("F: stockpiles are readable by an IPT code and are not IPT-filtered (a pile has no IPT)",
+ok("F: stockpiles are readable by an IPT code and are not IPT-filtered (a stockpile has no IPT)",
    isinstance(main.list_stockpiles(from_month=9, to_month=9)["stockpiles"], list))
 # tidy: back to demo for the rest of the file
 for _v in ("IPT3_CODE", "IPT6_CODE", "PLANNER_CODE", "ADMIN_CODE"):
@@ -941,7 +954,7 @@ ok("F: the ipt column is in _TENANT_DDL as well as ALTERed", "ipt" in db._ddl_co
 # =========================================================================== #
 reset_db()
 db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)", ("L1", "Pit", 58.5, 24.0, "Quarry"))
-db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)", ("L2", "Pile", 58.6, 24.4, "Stockpile"))
+db.execute("INSERT INTO locations (id, name, lat, lon, loc_type) VALUES (?, ?, ?, ?, ?)", ("L2", "Stockpile", 58.6, 24.4, "Stockpile"))
 db.execute("INSERT INTO routes (id, origin_id, dest_id) VALUES (?, ?, ?)", ("R1", "L1", "L2"))
 _as("planner123")
 # three lines in month 9: tonnes on a known vehicle, m3 on a known vehicle, and a
@@ -1005,9 +1018,9 @@ _as(None)
 _st = main.public_stockpile_timeline(9, 10)
 ok("§8: /api/public/stockpile-timeline is open without a code", isinstance(_st, dict))
 _p = [s for s in _st["stockpiles"] if s["location_id"] == "L2"][0]
-ok("§8: ⭐ the pile is over at the end of month 9", _p["months"]["9"]["over"] is True and _p["months"]["9"]["balance_end"] == 150.0)
+ok("§8: ⭐ the stockpile is over at the end of month 9", _p["months"]["9"]["over"] is True and _p["months"]["9"]["balance_end"] == 150.0)
 ok("§8: ...and still over in month 10 with no movement (the balance carries)", _p["months"]["10"]["over"] is True)
-ok("§8: only piles WITH a capacity appear — nothing can be 'over' an unknown limit",
+ok("§8: only stockpiles WITH a capacity appear — nothing can be 'over' an unknown limit",
    (stockpiles.set_capacity("L2", capacity_qty=None, opening_qty=0.0),
     main.public_stockpile_timeline(9, 10)["stockpiles"] == [])[1])
 _as("planner123")
@@ -1034,7 +1047,7 @@ main.set_route_status("R1", main.StatusUpdate(status="Approved"), discipline="ea
 
 imp = network.route_edit_impact("R1")
 ok("2.5b: the impact report names what an edit would touch",
-   imp["forecast_lines"] == 1 and imp["forecast_rows"] == 2 and imp["week_rows"] == 8
+   imp["forecast_lines"] == 1 and imp["forecast_rows"] == 2 and imp["week_rows"] == 9   # Sep 4 + Oct 5
    and imp["baked_profiles"] == ["Rigid 8-wheeler (32t)"])
 
 # material / IPT only: nothing routed changes
@@ -1056,7 +1069,7 @@ ok("2.5b: ⭐ ...clears the baked geometry and returns the profiles to re-bake",
 ok("2.5b: ⭐ ...clears the ORIGIN gate (it belonged to the old location) and keeps the destination's",
    row["origin_gate_id"] is None and row["dest_gate_id"] == "G-dest" and r["gates_cleared"] == ["origin"])
 ok("2.5b: ⭐ ...and leaves the forecast lines and their weeks alone",
-   len(main.list_forecasts(route_id="R1")) == 2 and len(weeks.list_weeks(9, 10, route_id="R1")) == 8)
+   len(main.list_forecasts(route_id="R1")) == 2 and len(weeks.list_weeks(9, 10, route_id="R1")) == 9)
 ok("2.5b: origin == destination is refused",
    "different" in (network.update_route("R1", dest_id="L2", given={"dest_id"}).get("error") or ""))
 ok("2.5b: an unknown location is refused",
@@ -1294,7 +1307,7 @@ db.execute("""
 """)
 db.execute("INSERT INTO locations (id, name, lat, lon, vendor, capacity_qty, "
            "capacity_unit, opening_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-           ("C02", "Legacy pile", 58.9, 24.5, "OU Killustik", 2500.0, "t", 180.0))
+           ("C02", "Legacy stockpile", 58.9, 24.5, "OU Killustik", 2500.0, "t", 180.0))
 ok("upgrade: a pre-4.5 locations table has no tenant_id",
    "tenant_id" not in cols("locations"))
 

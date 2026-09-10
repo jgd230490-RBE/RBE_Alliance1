@@ -395,6 +395,20 @@ ok("⭐ the Commit grid shows Mon–Fri only — weekend days are filtered out o
   /\.filter\(iso => !isWeekend\(iso\)\)/.test(_laBody) && _laBody.includes("const weekdaysOf = (line) =>")
   && _laBody.includes("{weekdaysOf(line).map(d => {") && !_laBody.includes("{line.days.map(d => {"));
 ok("...and the footer says so", _laBody.includes("Mon–Fri only — Sat/Sun are held at 0 and not shown"));
+// calendar weeks (10 Sep): nothing in the browser assumes four weeks a month
+ok("🔴 the four-week constant and the 1–7 / 8–14 labels are gone; the Horizon asks the server",
+  !/const WEEK_NOS = \[1, 2, 3, 4\]/.test(code) && !code.includes('"8–14"')
+  && /const weekNosOf = \(horizon, m\) =>/.test(code) && /weekNosOf\(horizon, m\)\.forEach\(w => cols\.push/.test(_laBody)
+  && /W\{w\} · \{weekSpanLbl\(horizon, m, w\)\}/.test(_laBody) && !_laBody.includes("derived ÷4<"));
+// the Commit week map (10 Sep): its own small read, one map instance, never the public map in a frame
+const _cmBody = code.slice(code.indexOf("function CommitMap("), code.indexOf("function RoutePlanning("));
+ok("the Commit map reads /lookahead/geometry with the page's route ids — never the page again, never /public/map-data",
+  _cmBody.includes("/lookahead/geometry?ids=") && !_cmBody.includes("/lookahead?") && !_cmBody.includes("map-data") && !_cmBody.includes("<iframe"));
+ok("...creates ONE map and keeps it (the guard), and never draws an unbaked route as a line",
+  _cmBody.includes("if(mapObj.current || !mapDiv.current || !window.mapboxgl) return;")
+  && /if\(r\.geometry && r\.geometry\.length > 1\)\{/.test(_cmBody) && _cmBody.includes("Not drawn (no baked route)"));
+ok("...colours lines by IPT from palette C, and is not rendered under the render harness",
+  _cmBody.includes("IPT_PALETTE_C[iptKey(") && _laBody.includes("!initialPage && <CommitMap"));
 ok("today's column carries the wash and the '· today' suffix",
   _laBody.includes('" · today"') && _laBody.includes('#eff6ff'));
 ok("the expanded row prints km/trip, km/week, t·km, cycle and € or 'rate not set'",
@@ -446,20 +460,38 @@ ok("...and no Confirm button lives on the Horizon view",
 ok("the Horizon footer states the weeks-not-days rule and the blue-column rule",
   _laBody.includes("stay week totals so hauliers are not sent a four-week daily spreadsheet") && _laBody.includes("That is the only week that materialises daily rows"));
 
-// ---- 4e. Task D2 — stock held --------------------------------------------------
-ok("the stockpile panel sits under the look-ahead",
-  /<Stockpiles meta=\{meta\}/.test(code) && /function Stockpiles\(/.test(code));
-ok("consumption is typed through /stockpiles/consume", code.includes("/stockpiles/consume"));
+let _dsBody;
+// ---- 4e. Task D2 — stock held (moved on 10 Sep) --------------------------------------
+// The W1–W4 consumption grid is GONE from the Look-ahead. Consumption is typed on the
+// Account view for the account week; the read-only balances are on the Dashboard.
+ok("🔴 the old Stockpiles grid component no longer exists",
+  !/function Stockpiles\(/.test(code) && !/<Stockpiles /.test(code));
+ok("the Dashboard carries the read-only stock panel",
+  /function DashboardStock\(/.test(code) && /<DashboardStock meta=\{meta\} \/>/.test(code)
+  && /function Dashboard\(/.test(code) && code.indexOf("<DashboardStock") > code.indexOf("function Dashboard(")
+  && code.indexOf("<DashboardStock") < code.indexOf("function App("));
+ok("...and it types nothing: no consume call, no input, in that component",
+  !(_dsBody = code.slice(code.indexOf("function DashboardStock("), code.indexOf("function App("))).includes("/stockpiles/consume")
+  && !_dsBody.includes("<input"));
+ok("consumption is typed on the ACCOUNT view through /stockpiles/consume, for the account week",
+  _laBody.includes("/stockpiles/consume") && /month_index: account\.week\.month_index,\s*week_index: account\.week\.week_index/.test(_laBody));
+ok("...one box per stockpile, and an emptied box is null (not typed), not zero",
+  /consumed_qty: \(v === "" \? null : numOr\(v, null\)\)/.test(_laBody) && _laBody.includes("account.stock.map("));
 ok("...and the balance is read from /stockpiles", code.includes("/stockpiles?from_month="));
 // ⭐ no capacity recorded is NOT zero capacity
-ok("⭐ an unset capacity renders '—', never 0",
-  /s\.capacity_qty == null \? "—"/.test(code)
-  && /cell\.remaining == null \? "—"/.test(code));
+ok("⭐ an unset capacity renders '—' / 'not recorded', never 0",
+  /sp\.capacity_qty == null \? "—"/.test(code)
+  && /cell\.remaining == null \? "no cap"/.test(code)
+  && /s\.capacity_qty == null \? <span className="text-slate-300">not recorded<\/span>/.test(_laBody));
 ok("over capacity uses the existing red, not a reserved route colour",
   /cell\.over \? "var\(--red\)"/.test(code)
   && !/cell\.over \? "#039E86"/.test(code));
 ok("the panel says inbound comes from typed actuals only",
-  code.includes("a week with no") && code.includes("actual counts as nothing"));
+  code.includes("a week nobody") && code.includes("reported counts as nothing"));
+ok("🔴 the Commit view's stock card is gone — the week map stands in its place",
+  !_laBody.includes("Stock held") && _laBody.includes("<CommitMap ") && /function CommitMap\(/.test(code));
+ok("🔴 the word 'pile' never appears on its own — always 'stockpile' (the human, 10 Sep)",
+  !/(?<![Ss]tock)\b[Pp]iles?\b/.test(code));
 ok("the capacity fields appear for the four storage types",
   /const STORAGE_TYPES = \["Stockpile", "Site", "Compound", "Railhead"\]/.test(code)
   && /STORAGE_TYPES\.includes\(form\.loc_type\)/.test(code));

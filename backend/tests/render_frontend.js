@@ -199,7 +199,8 @@ if (loaded) {
       && (commitOut.match(/qty · tr · veh/gi) || []).length === 5);
     ok("...every weekday cell carries trips and vehicles (baked fixture)",
       (commitOut.match(/ tr · /g) || []).length >= fixture.commit.lines.length * 5);
-    ok("...the stock card says the pile is OVER", commitOut.includes("Stock held") && commitOut.includes("OVER by"));
+    ok("...no stock card on Commit any more (10 Sep) — and no map either under the render harness (initialPage)",
+      !commitOut.includes("Stock held") && !commitOut.includes("This week's movements"));
     ok("...Export XLSX and the green Confirm week are in the bar",
       commitOut.includes(">Export XLSX<") && commitOut.includes(">Confirm week<"));
     ok("...nothing renders as 'undefined' or 'NaN'", !/undefined|NaN/.test(commitOut));
@@ -219,7 +220,12 @@ if (loaded) {
     ok("...with the role labels on the columns and no Confirm button",
       hzOut.includes("COMMIT") && hzOut.includes("MAKE-READY") && hzOut.includes("EARLY WARNING")
       && !hzOut.includes(">Confirm week<"));
-    ok("...and the stockpile panel under it", hzOut.includes("Stock held") || hzOut.includes("stockpile") || hzOut.includes("Stockpile"));
+    ok("...and NO stockpile grid under it any more (10 Sep)", !hzOut.includes("max · opening") && !hzOut.includes("Type what came out"));
+    ok("...the Account view carries the account week's stockpiles with one 'out' box each",
+      acctOut.includes("Stockpiles · ") && acctOut.includes("Type what came out of each stockpile")
+      && (acctOut.match(/placeholder="out —"/g) || []).length === fixture.account.stock.length && fixture.account.stock.length >= 1);
+    ok("...and says the fixture's stockpile is OVER, with the same figure the server sent",
+      acctOut.includes("OVER by " + Math.round(-fixture.account.stock[0].remaining).toLocaleString("en-US").replace(/,/g, " ")));
 
     // the empty page: no lines, no account, no horizon — every view has an EmptyState
     const empty = { ...fixture, commit: { ...fixture.commit, lines: [], totals: {} }, account: { week: null, rows: [] },
