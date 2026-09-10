@@ -93,6 +93,11 @@ UNTENANTED = {
     "route_geometry_old": "transient, exists only inside the SQLite key rebuild",
     "information_schema.columns": "Postgres catalogue, not application data",
     "sqlite_master": "SQLite catalogue, not application data",
+    # 10 Sep evening. The EU Weekly Oil Bulletin diesel price per COUNTRY — public
+    # national data, one row per country, read by every tenant and written only by the
+    # server's feed fetch or an admin. A tenant's own fuel settings (yard price, share,
+    # the locked BAF base) are in the tenanted `config` table, key 'costing'.
+    "fuel_index": "a national fuel price index, not client data; settings are tenanted in config",
 }
 
 # Statements that may touch a tenanted table with no tenant predicate, each with

@@ -117,7 +117,7 @@ function render(label, node) {
 if (loaded) {
   const h = React.createElement;
   const { Portal, Forecasts, ConfigPage, PageHeader, EmptyState, Dashboard, LookAhead,
-          DataManagement, Matrix } = sandbox;
+          DataManagement, Matrix, CostingTab, FuelWidget } = sandbox;
 
   ok("the new shell components are all defined",
     [Portal, Forecasts, ConfigPage, PageHeader, EmptyState].every(f => typeof f === "function"));
@@ -226,6 +226,48 @@ if (loaded) {
       && (acctOut.match(/placeholder="out —"/g) || []).length === fixture.account.stock.length && fixture.account.stock.length >= 1);
     ok("...and says the fixture's stockpile is OVER, with the same figure the server sent",
       acctOut.includes("OVER by " + Math.round(-fixture.account.stock[0].remaining).toLocaleString("en-US").replace(/,/g, " ")));
+
+    // ---- 10 Sep evening: the fuel widget and Quote + BAF, from test_costing.py's fixture --
+    const fuelFixPath = path.join(__dirname, "fixtures", "lookahead_page_fuel.json");
+    ok("the fuel page fixture exists (written by test_costing.py)", fs.existsSync(fuelFixPath));
+    const fuelFix = fs.existsSync(fuelFixPath) ? JSON.parse(fs.readFileSync(fuelFixPath, "utf8")) : null;
+    if (fuelFix) {
+      const pct = fuelFix.costing.baf_pct;
+      const bafLbl = `BAF ${pct >= 0 ? "+" : ""}${(pct * 100).toFixed(2)} % of quote`;
+      const fOut = render("the Commit view renders with the fuel fixture (target + index + base + share)",
+        h(LookAhead, { meta: laMeta, who: "t", access: planner, initialPage: fuelFix, initialView: "commit" }));
+      ok("...the compact widget is in the KPI strip with the index, its bulletin date and the BAF %",
+        fOut.includes('data-fuel-widget="compact"') && fOut.includes("€" + fuelFix.costing.index_eur_per_l.toFixed(3) + " / L")
+        && fOut.includes("diesel EE · bulletin") && fOut.includes(bafLbl));
+      ok("...the planned € card counts the target-priced lines and prints the + BAF total beside the quote",
+        fOut.includes(`· ${fuelFix.commit.totals.eur_target_lines} at target`) && fOut.includes("+ BAF € ")
+        && fOut.includes("€ " + Math.round(fuelFix.commit.totals.eur).toLocaleString("en-US").replace(/,/g, " ")));
+      ok("...nothing renders as 'undefined' or 'NaN'", !/undefined|NaN/.test(fOut));
+      const fAcct = render("the Account view renders with the fuel fixture",
+        h(LookAhead, { meta: laMeta, who: "t", access: planner, initialPage: fuelFix, initialView: "account" }));
+      const nTarget = fuelFix.account.rows.filter(r => r.rate_source === "target").length;
+      ok("...the strip widget sits above the KPI cards with typeable yard and share boxes for a planner",
+        fAcct.includes('data-fuel-widget="strip"') && fAcct.indexOf('data-fuel-widget="strip"') < fAcct.indexOf("last week delivered · 98% band")
+        && fAcct.includes("Yard €/L") && fAcct.includes("Fuel share %") && (fAcct.match(/inputmode="decimal"/gi) || []).length >= 2);
+      ok("...every target-priced account row carries the 'target' chip and every priced row a + BAF line",
+        (fAcct.match(/>target<\/span>/g) || []).length === nTarget && nTarget >= 1
+        && (fAcct.match(/\+ BAF € /g) || []).length === fuelFix.account.rows.filter(r => r.planned_eur_adj != null).length);
+      const fSub = render("the Account view renders for a SUBMITTER with the fuel fixture",
+        h(LookAhead, { meta: laMeta, who: "t", access: submitter, initialPage: fuelFix, initialView: "account" }));
+      ok("...whose widget shows the yard and share as text, not inputs",
+        fSub.includes('data-fuel-widget="strip"') && !fSub.includes("Yard €/L</span><input"));
+      const fCfg = render("the Costing tab renders (no data yet — useEffect never runs here)",
+        h(CostingTab, { who: "t", access: planner, token: "", setToken: () => {} }));
+      ok("...with the target-rate copy and the config widget's admin controls",
+        fCfg.includes("Target rate") && fCfg.includes('data-fuel-widget="config"') && fCfg.includes("Reset the BAF base")
+        && fCfg.includes("Fetch the bulletin now") && fCfg.includes("Use this index") && !/undefined|NaN/.test(fCfg));
+      const fNone = render("the widget renders with NO data at all", h(FuelWidget, { who: "t", access: planner, mode: "strip", initial: null }));
+      ok("...as 'Index unavailable — type a price' for a planner, and nothing undefined",
+        fNone.includes("Index unavailable — type a price") && !/undefined|NaN/.test(fNone));
+      const fStale = render("the widget renders a stale index", h(FuelWidget, { who: "t", access: planner, mode: "compact",
+        initial: { ...fuelFix.costing, index_eur_per_l: null } }));
+      ok("...a compact card with no index says so instead of a price", fStale.includes("Index unavailable"));
+    }
 
     // the empty page: no lines, no account, no horizon — every view has an EmptyState
     const empty = { ...fixture, commit: { ...fixture.commit, lines: [], totals: {} }, account: { week: null, rows: [] },

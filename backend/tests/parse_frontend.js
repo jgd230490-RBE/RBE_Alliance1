@@ -885,6 +885,52 @@ ok("⭐ no portal page hand-rolls its own heading any more",
   !/<h1 className="text-lg font-bold/.test(code) && !/<h2 className="text-lg font-bold/.test(code));
 ok("there is a shared empty state", code.includes("function EmptyState("));
 
+// ---- 4f. 10 Sep evening — the fuel widget, target rate and Quote + BAF ---------------
+const _fwBody = code.slice(code.indexOf("function FuelWidget("), code.indexOf("function LookAhead("));
+const _ctBody = code.slice(code.indexOf("function CostingTab("), code.indexOf("function ConfigPage("));
+ok("⭐ ONE FuelWidget component, mounted THREE times: Commit (compact), Account (strip), Config (config)",
+  (code.match(/function FuelWidget\(/g) || []).length === 1 && (code.match(/<FuelWidget\b/g) || []).length === 3
+  && /<FuelWidget mode="compact"/.test(_laBody) && /<FuelWidget mode="strip"/.test(_laBody) && /<FuelWidget mode="config"/.test(_ctBody));
+ok("...the widget reads /fuel-index and never the feed host; it names the bulletin in its attribution",
+  _fwBody.includes("fetch(`${API}/fuel-index?lazy=") && !/eurooilwatch\.com/i.test(code)
+  && _fwBody.includes("EU Weekly Oil Bulletin via EuroOilWatch"));
+ok("...settings go to PUT /fuel-index/settings; manual index, refresh and reset-base are ADMIN calls with the token",
+  _fwBody.includes('put("/fuel-index/settings"') && _fwBody.includes('"/admin/fuel-index/manual"')
+  && _fwBody.includes('"/admin/fuel-index/refresh?sync=1"') && _fwBody.includes("/admin/fuel-index/reset-base?")
+  && /token=\$\{encodeURIComponent\(token\)\}/.test(_fwBody));
+ok("...the yard and share boxes are typeable by approvers only, and an emptied box sends null (not 0)",
+  _fwBody.includes("access.can_approve") && /const v = draft\[k\] === "" \? null : numOr\(draft\[k\], null\)/.test(_fwBody));
+ok("...it says 'Index unavailable' with no price, 'stale' after 8 days, and why there is no BAF",
+  _fwBody.includes("Index unavailable") && _fwBody.includes(">stale<") && _fwBody.includes("set a base on Confirm week")
+  && _fwBody.includes("type a fuel share"));
+ok("...and it polls `refresh` while the server's background fetch runs — never blocks on it",
+  _fwBody.includes("rf.running") && _fwBody.includes("setTimeout(() => load(false).then(poll), 3000)"));
+ok("🔴 nothing is seeded in the page: no 25 % share and no €1.9x price as a default",
+  !/share_pct[^\n]{0,40}25\b/.test(_fwBody) && !/1\.9\d/.test(_fwBody) && !/1\.9\d/.test(_ctBody));
+ok("the Commit KPI strip is eight cards with the widget right of t·km, and the planned € caption counts target lines and shows + BAF",
+  _laBody.includes("xl:grid-cols-8") && _laBody.indexOf('caption="t·km · route basis"') < _laBody.indexOf('<FuelWidget mode="compact"')
+  && _laBody.indexOf('<FuelWidget mode="compact"') < _laBody.indexOf("planned € · no rate typed")
+  && _laBody.includes("at target") && _laBody.includes("+ BAF € ${grp(totals.eur_adj)}"));
+ok("...the expanded Commit row and the Account cell print '+ BAF' as a SECOND figure and mark a target-priced line",
+  _laBody.includes("+ BAF € ${grp(wd.eur_adj)}") && _laBody.includes("+ BAF € {grp(r.planned_eur_adj)}")
+  && _laBody.includes('r.rate_source === "target"') && _laBody.includes('c.rate_source === "target"'));
+ok("...and the Account footer says the quote is never replaced and € var is against the quote",
+  _laBody.includes("the quote is never replaced") && _laBody.includes("€ var compares the actual against the quote"));
+ok("the Account strip is mounted above the KPI grid; the widget is passed the page's own costing block",
+  _laBody.indexOf('<FuelWidget mode="strip"') < _laBody.indexOf('caption="last week delivered · 98% band"')
+  && (_laBody.match(/initial=\{page && page\.costing\}/g) || []).length === 2);
+ok("Config has a 'Costing · fuel' tab whose target rate saves to PUT /admin/costing/target with the admin token — not inside the factors document",
+  code.includes('["costing", "Costing · fuel"]') && _ctBody.includes("/admin/costing/target${qs}")
+  && !_ctBody.includes("admin/config/factors") && _ctBody.includes("Save target rate"));
+ok("...three target inputs; a blank sends null (clears), and the copy says target is used ONLY where the route has no rate",
+  (_ctBody.match(/rate_eur_per_(load|t|km)/g) || []).length >= 6 && _ctBody.includes('if(draft[k] === ""){ body[k] = null; return; }')
+  && _ctBody.includes("Used ONLY for routes with no rate typed on the route form"));
+ok("the route form says a typed rate is used alone and never mixed with the target",
+  code.includes("A typed rate here is used ALONE; it is never mixed with the target."));
+ok("LookAhead now receives the role (for the widget's typeable boxes)", /<LookAhead meta=\{meta\} who=\{who\} access=\{role\} \/>/.test(code));
+ok("🔴 no fuel on the public map: map/index.html has no widget, no fuel-index, no BAF",
+  !/FuelWidget|fuel-index|\bBAF\b/.test(fs.readFileSync(path.join(__dirname, "..", "..", "map", "index.html"), "utf8")));
+
 // ---- report ------------------------------------------------------------------
 console.log();
 for (const f of fail) console.log("  FAIL:", f);

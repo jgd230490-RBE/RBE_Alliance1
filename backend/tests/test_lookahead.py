@@ -152,9 +152,12 @@ def reset_db():
     db.init_gates_db()
     db.init_weeks_db()
     db.init_config_db()
+    db.init_costing_db()
     db.init_tenant()
     import config as _cfg
     _cfg.invalidate()
+    import costing as _cst
+    _cst.invalidate()
 
 
 def seed_line(route_id="R1", disc="earthworks", sect="WS1", months=(1, 2, 3),
@@ -1121,8 +1124,8 @@ import io
 import openpyxl as _ox
 wb = _ox.load_workbook(io.BytesIO(xb))
 # 10 Sep, the human: the sheet is the SUPPLIER's — Mon–Fri only, and no stockpile list
-ok("...with three sheets: Commit week, Clashes, About — NO Stock sheet (10 Sep)",
-   wb.sheetnames == ["Commit week", "Clashes", "About"])
+ok("...with four sheets: Commit week, Fuel (10 Sep evening), Clashes, About — NO Stock sheet (10 Sep)",
+   wb.sheetnames == ["Commit week", "Fuel", "Clashes", "About"])
 ws = wb["Commit week"]
 ok("⭐ ...sheet 1 is WEEKDAY × line: one row per Mon–Fri day per visible line, headers from the export mock",
    ws.max_row - 1 == 3 * NWD and [c.value for c in ws[1]][:6] == ["Date", "Route", "Origin", "Destination", "IPT", "WS"])
