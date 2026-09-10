@@ -12,7 +12,7 @@
   "month_index": 9,
   "week_index": 2
  },
- "today": "2026-09-09",
+ "today": "2026-09-10",
  "commit": {
   "commit_week": {
    "month_index": 9,
@@ -29,24 +29,24 @@
   },
   "totals": {
    "planned_t": 3180.0,
-   "trips": 162,
+   "trips": 159,
    "vehicles_peak": 7,
-   "vehicles_peak_date": "2026-09-09",
+   "vehicles_peak_date": "2026-09-10",
    "vehicles_by_day": {
     "2026-09-08": 6,
-    "2026-09-09": 7,
+    "2026-09-09": 6,
     "2026-09-10": 7,
     "2026-09-11": 7,
     "2026-09-12": 0,
     "2026-09-13": 0,
     "2026-09-14": 7
    },
-   "tonne_km": 175800.0,
-   "km": 9720.0,
+   "tonne_km": 176300.0,
+   "km": 9565.0,
    "lines": 3,
    "unbaked_lines": 0,
    "excludes_unbaked": false,
-   "eur": 25355.0,
+   "eur": 24950.0,
    "eur_lines": 3,
    "eur_partial": false
   },
@@ -430,7 +430,7 @@
       "discipline": "earthworks",
       "section_id": "WS2",
       "day_date": "2026-09-09",
-      "planned_qty": 345.0,
+      "planned_qty": 300.0,
       "actual_qty": null,
       "actual_note": null,
       "actual_by": null,
@@ -444,13 +444,13 @@
       "week_planned_now": 1680.0,
       "week_changed": false,
       "derived": {
-       "tonnes": 345.0,
-       "trips": 18,
-       "vehicles": 4,
-       "km_day": 1080.0,
-       "km_per_vehicle": 270.0,
-       "tonne_km": 20700.0,
-       "eur": 3120.0,
+       "tonnes": 300.0,
+       "trips": 15,
+       "vehicles": 3,
+       "km_day": 900.0,
+       "km_per_vehicle": 300.0,
+       "tonne_km": 18000.0,
+       "eur": 2625.0,
        "eur_partial": false
       }
      },
@@ -460,7 +460,7 @@
       "discipline": "earthworks",
       "section_id": "WS2",
       "day_date": "2026-09-10",
-      "planned_qty": 345.0,
+      "planned_qty": 360.0,
       "actual_qty": null,
       "actual_note": null,
       "actual_by": null,
@@ -474,13 +474,13 @@
       "week_planned_now": 1680.0,
       "week_changed": false,
       "derived": {
-       "tonnes": 345.0,
+       "tonnes": 360.0,
        "trips": 18,
        "vehicles": 4,
        "km_day": 1080.0,
        "km_per_vehicle": 270.0,
-       "tonne_km": 20700.0,
-       "eur": 3120.0,
+       "tonne_km": 21600.0,
+       "eur": 3150.0,
        "eur_partial": false
       }
      },
@@ -490,7 +490,7 @@
       "discipline": "earthworks",
       "section_id": "WS2",
       "day_date": "2026-09-11",
-      "planned_qty": 345.0,
+      "planned_qty": 360.0,
       "actual_qty": null,
       "actual_note": null,
       "actual_by": null,
@@ -504,13 +504,13 @@
       "week_planned_now": 1680.0,
       "week_changed": false,
       "derived": {
-       "tonnes": 345.0,
+       "tonnes": 360.0,
        "trips": 18,
        "vehicles": 4,
        "km_day": 1080.0,
        "km_per_vehicle": 270.0,
-       "tonne_km": 20700.0,
-       "eur": 3120.0,
+       "tonne_km": 21600.0,
+       "eur": 3150.0,
        "eur_partial": false
       }
      },
@@ -580,7 +580,7 @@
       "discipline": "earthworks",
       "section_id": "WS2",
       "day_date": "2026-09-14",
-      "planned_qty": 345.0,
+      "planned_qty": 360.0,
       "actual_qty": null,
       "actual_note": null,
       "actual_by": null,
@@ -594,13 +594,13 @@
       "week_planned_now": 1680.0,
       "week_changed": false,
       "derived": {
-       "tonnes": 345.0,
+       "tonnes": 360.0,
        "trips": 18,
        "vehicles": 4,
        "km_day": 1080.0,
        "km_per_vehicle": 270.0,
-       "tonne_km": 20700.0,
-       "eur": 3120.0,
+       "tonne_km": 21600.0,
+       "eur": 3150.0,
        "eur_partial": false
       }
      }
@@ -645,11 +645,11 @@
     },
     "week_derived": {
      "tonnes": 1680.0,
-     "trips": 87,
+     "trips": 84,
      "vehicles_peak": 4,
-     "km": 5220.0,
+     "km": 5040.0,
      "tonne_km": 100800.0,
-     "eur": 15105.0,
+     "eur": 14700.0,
      "eur_partial": false
     }
    },
@@ -718,9 +718,9 @@
        "tonnes": 100.0,
        "trips": 5,
        "vehicles": 1,
-       "km_day": 300.0,
-       "km_per_vehicle": 300.0,
-       "tonne_km": 3000.0,
+       "km_day": 305.0,
+       "km_per_vehicle": 305.0,
+       "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false
       }
@@ -748,9 +748,9 @@
        "tonnes": 100.0,
        "trips": 5,
        "vehicles": 1,
-       "km_day": 300.0,
-       "km_per_vehicle": 300.0,
-       "tonne_km": 3000.0,
+       "km_day": 305.0,
+       "km_per_vehicle": 305.0,
+       "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false
       }
@@ -778,9 +778,9 @@
        "tonnes": 100.0,
        "trips": 5,
        "vehicles": 1,
-       "km_day": 300.0,
-       "km_per_vehicle": 300.0,
-       "tonne_km": 3000.0,
+       "km_day": 305.0,
+       "km_per_vehicle": 305.0,
+       "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false
       }
@@ -808,9 +808,9 @@
        "tonnes": 100.0,
        "trips": 5,
        "vehicles": 1,
-       "km_day": 300.0,
-       "km_per_vehicle": 300.0,
-       "tonne_km": 3000.0,
+       "km_day": 305.0,
+       "km_per_vehicle": 305.0,
+       "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false
       }
@@ -898,9 +898,9 @@
        "tonnes": 100.0,
        "trips": 5,
        "vehicles": 1,
-       "km_day": 300.0,
-       "km_per_vehicle": 300.0,
-       "tonne_km": 3000.0,
+       "km_day": 305.0,
+       "km_per_vehicle": 305.0,
+       "tonne_km": 3100.0,
        "eur": 300.0,
        "eur_partial": false
       }
@@ -925,10 +925,10 @@
      "payload_fallback": null,
      "baked": true,
      "return_baked": true,
-     "distance_km": 30.0,
+     "distance_km": 31.0,
      "return_km": 30.0,
-     "km_trip": 60.0,
-     "cycle_min": 104.0,
+     "km_trip": 61.0,
+     "cycle_min": 101.0,
      "cycle_source": "here",
      "cycle_mark": null,
      "shift_hours": 10.0,
@@ -941,15 +941,15 @@
      },
      "rate_set": true,
      "km_basis": "loaded",
-     "basis_km": 30.0,
+     "basis_km": 31.0,
      "flags": []
     },
     "week_derived": {
      "tonnes": 500.0,
      "trips": 25,
      "vehicles_peak": 1,
-     "km": 1500.0,
-     "tonne_km": 15000.0,
+     "km": 1525.0,
+     "tonne_km": 15500.0,
      "eur": 1500.0,
      "eur_partial": false
     }
@@ -1972,9 +1972,9 @@
     "discipline": "earthworks",
     "section_id": "WS1",
     "ipt": "IPT1",
-    "text": "R1 2026-09-09: 6 veh against a cap of 4",
+    "text": "R1 2026-09-09: 5 veh against a cap of 4",
     "day_date": "2026-09-09",
-    "vehicles": 6,
+    "vehicles": 5,
     "cap": 4
    },
    {
@@ -1984,9 +1984,9 @@
     "discipline": "earthworks",
     "section_id": "WS2",
     "ipt": "IPT2",
-    "text": "R1 2026-09-09: 6 veh against a cap of 4",
+    "text": "R1 2026-09-09: 5 veh against a cap of 4",
     "day_date": "2026-09-09",
-    "vehicles": 6,
+    "vehicles": 5,
     "cap": 4
    },
    {
@@ -2380,13 +2380,25 @@
     ],
     "share": "od",
     "share_id": "L1→L2"
+   },
+   {
+    "code": "TARK_TEE",
+    "route_id": "R3",
+    "month_index": 9,
+    "discipline": "substructure",
+    "section_id": "WS3",
+    "ipt": "IPT3",
+    "text": "Yard → Site crosses 3.5 m limit",
+    "hits": 1,
+    "checked_at": "<ts>"
    }
   ],
-  "count": 33,
+  "count": 34,
   "by_code": {
    "PILE_OVER": 3,
    "ROUTE_CAP": 10,
-   "IPT_SHARE": 20
+   "IPT_SHARE": 20,
+   "TARK_TEE": 1
   },
   "codes": [
    "SHORTAGE",
@@ -2400,7 +2412,18 @@
   ],
   "hold_band": 0.98,
   "sources": {
-   "tark_tee": "unavailable"
+   "tark_tee": "ok",
+   "tark_tee_checked_at": "<ts>",
+   "tark_tee_unchecked": [],
+   "tark_tee_refresh": {
+    "running": false,
+    "started_at": "<ts>",
+    "finished_at": "<ts>",
+    "status": "unavailable",
+    "routes": 0,
+    "hits": 0,
+    "error": "{'restrictions_mass': 'timeout'}"
+   }
   }
  }
 }
