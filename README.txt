@@ -1,128 +1,76 @@
-rbe-costing-fuel-0910.zip
-=========================
-Delivered 2026-09-10 (evening). Extract over the repo root, ON TOP of
-rbe-lookahead-calendar-weeks-0910.zip (which HEAD already has — README.txt at
-HEAD began with that name when this was cut). Seventeen files. NO new pip
-dependency. ONE new table (fuel_index — global, see point 4). No route or
-week column changes. factors.json is NOT in this zip.
+rbe-help-page-0910.zip
+======================
+Delivered 2026-09-10 (evening). Extract over the repo root. No schema change,
+no new dependency, no change to the staff app or the public map. 30 files:
+one new test and the help page with its 27 images — PLUS ONE MANUAL EDIT to
+backend/main.py (below). main.py is deliberately NOT in this zip: a parallel
+session delivered rbe-costing-fuel-0910.zip the same evening, which also
+carries main.py; two zips touching one file are not interchangeable, so the
+four-line mount is left for you to add by hand AFTER whichever zips you apply.
 
-WHAT YOU ASKED FOR, AND WHAT THIS IS
-------------------------------------
-You asked for a planned / fair delivery price on the Look-ahead that could later
-drive the whole forecast, and attached Grok's fuel-index note. You chose "both,
-target rate then fuel". So, in that order:
+THE MANUAL EDIT (backend/main.py, after the /map mount, before @app.get("/"))
+-----------------------------------------------------------------------------
+# User guide at /help/ (frontend/help/index.html + media/). Same no-cache static class
+# as the map. Mounted before the catch-all "/". Not linked from the rail yet.
+app.mount("/help", NoCacheStatic(directory=str(ROOT / "frontend" / "help"), html=True), name="help")
 
-1. TARGET RATE (the planned price where a route has no rate)
-   Config -> "Costing · fuel" tab -> € per load / € per tonne / € per km, saved
-   with the admin token. Every route WITHOUT a rate of its own now prices at
-   this on the Look-ahead (Commit days, the week, the KPI, the Account rows,
-   both exports), and every such figure is marked "target". A route with ANY
-   rate typed on its route form prices from that ALONE — the target is never
-   mixed in (a typed €/t contract must not gain the target's €/km). Nothing is
-   seeded: until you type a target, everything reads "rate not set" exactly
-   as before.
+Until that line is in, test_help.py fails its first three assertions and
+says so ("main.py mounts /help"); everything else in it passes.
 
-2. FUEL INDEX + BAF (Grok's note, "price + BAF on an existing quote")
-   - The server fetches https://eurooilwatch.com/api/v1/prices (EU Weekly Oil
-     Bulletin, Estonia, automotive diesel with taxes; verified 10 Sep: 1.922,
-     bulletin 2026-09-07) and stores ONE row. The browser never calls it.
-   - A widget (one component, three mounts: Commit KPI strip right of t·km,
-     top of the Account view, Config) shows "Diesel EE €1.922 / L · bulletin
-     7 Sep 2026", a "stale" chip when the bulletin is older than 8 days, and
-     "Index unavailable — type a price" when there is no row.
-   - Two typed settings on the widget (planner or admin): Yard €/L (optional,
-     what the haulier pays — for cost-plus LATER; never replaces the index) and
-     Fuel share % (empty = no BAF).
-   - The BAF base is LOCKED by the first "Confirm week" that finds an index
-     row and no base. Later confirms never move it. Admin resets it on Config.
-   - BAF % = (index now ÷ base − 1) × share. Every quote then gets a SECOND
-     figure, "+ BAF € …", beside it — on days, weeks, the KPI, the Account
-     rows, the XLSX ("€ + BAF" column) and the PDF (under the quote). The quote
-     itself is never replaced, and € var on Account still compares the actual
-     against the QUOTE.
-   - No quote (no route rate, no target) ⇒ diesel only, no € invented.
+WHAT THIS IS
+------------
+The User Guide, served inside the app at /help/ so it can be linked from the
+rail later. It is generated from the same content as the Word User Guide
+(RBE_A1_User_Guide_v1.0.docx), so the two cannot drift unless one is edited
+by hand. Sections: Welcome, Getting started, Dashboard, Submitting a
+forecast, Forecasts, the Look-ahead (weeks, rhythm, Commit / Account /
+Horizon, exports), Data pages, the public map, Understanding the numbers,
+Flags and warnings, Troubleshooting, Methods and assumptions, Glossary.
 
-ACTION ON YOUR SIDE
--------------------
-a. Deploy; the boot creates fuel_index (CREATE TABLE IF NOT EXISTS, no
-   migration). Nothing to seed.
-b. Open Config -> Costing · fuel. Press "Fetch the bulletin now" with the
-   admin token, or just open the Look-ahead — the widget's first read starts
-   a background fetch when the row is older than 12 h. ⚠️ UNVERIFIED: whether
-   Render's outbound can reach eurooilwatch.com. The sandbox could (through
-   its proxy); Render should. If the widget stays on "Index unavailable",
-   read the Render log for "fuel-index-refresh" or GET /api/fuel-index and
-   look at index.last_error. Fallback that always works: type the index on
-   Config ("Use this index") — it is stored as source 'manual'.
-c. Type a target rate if you want every unpriced line to show a planned €.
-   Type a fuel share (and, optionally, the yard price) on the widget.
-d. Confirm a week: that locks the BAF base. From the NEXT bulletin on,
-   "+ BAF" figures appear beside the quotes.
+FILES
+-----
+backend/main.py            NOT in the zip — see THE MANUAL EDIT above.
+backend/tests/test_help.py NEW. 17 assertions: the mount exists once and sits between
+                             /map and "/"; the page parses, has a title, >= 10 h1 and
+                             >= 20 h2, an id on every h1; every <img> points at an
+                             existing file under frontend/help/media/ and no media file
+                             is orphaned; alt text on every image; the wording rule
+                             ("stockpile", never a bare "pile"); no internal names
+                             (table / function names) leak; the only external URL is
+                             the Inter font; no <script>. Broken on purpose twice
+                             (renamed mount -> 3 fail; removed an image -> 2 fail).
+frontend/help/index.html   NEW. 66 KB, self-contained apart from the Inter font, with a
+                             fixed left navigation built from the headings; prints
+                             cleanly; collapses to one column under 900 px.
+frontend/help/media/*.png  NEW. 27 images, 1.9 MB: 10 drawn figures (architecture,
+                             lifecycle, haul cycle, calendar weeks, access, delivery,
+                             data model, app map, weekly rhythm, numbers) and 17
+                             screenshot SLOTS (see below).
 
-THINGS TO KNOW
---------------
-- One BAF base per tenant, not per haulier or per route (Grok's lock K1/K6).
-  Hauliers who quoted on different dates share one base. If that bites, the
-  base becomes a route column — say so and it is a small slice.
-- The feed does not say "with taxes". €1.922 can only be the taxed figure
-  (ex-tax diesel is ~€1.0), so the widget's attribution says which series it
-  is taken to be. If the Commission's own XLSX ever disagrees, type it over.
-- The supplier's XLSX gains a "Fuel" sheet (index, bulletin date, base, share,
-  BAF %) and the PDF a footer line naming the index and the formula. The yard
-  price and the target rates are NOT on the supplier's sheet — they are yours.
-- The widget has NOT been seen in a browser (the sandbox cannot load the CDNs;
-  it renders under the harness with a populated fixture and Babel-compiles).
-  First look: Look-ahead -> Commit -> the fifth KPI card; Account -> the strip
-  above the KPIs; Config -> Costing · fuel.
-- GET /api/lookahead never waits for the feed: it reads the stored row only
-  (two extra statements per page read, asserted). The widget's own GET
-  /api/fuel-index returns the stored row at once and refreshes in a thread.
-- Admin endpoints are still open while ADMIN_TOKEN is unset (C11, unchanged).
+WHAT YOU NEED TO KNOW
+---------------------
+1. The screenshot images are placeholders. The desktop link dropped before
+   the capture pass could run, so every "Screenshot Sxx / Mxx" image is a
+   framed slot naming what it should show and the state to capture it in.
+   When the captures exist they replace the files under the same names
+   (S01..S15, M01..M08) and the page is rebuilt — nothing else changes.
+   The Word guides carry the same slots. The list is Appendix C of both.
+2. Not linked from the rail. Deliberate: you said "for a later link". The
+   page is reachable at /help/ once deployed.
+3. The suite at HEAD + this zip + the manual edit: every existing file
+   unchanged (1,586 py + 989 js = 2,575) plus test_help.py 17 = 2,592 / 0.
+   With rbe-costing-fuel-0910.zip applied as well, expect its 2,714 + 17.
+   Run test_help.py from the repo root like the others.
+4. Order with the costing-fuel zip: either order, then the manual edit last.
 
-FILES (17)
+UNVERIFIED
 ----------
-backend/costing.py                 NEW — target rates, fuel settings, BAF formula (config key 'costing')
-backend/fuel.py                    NEW — the feed, the global row, refresh in a thread, manual index
-backend/db.py                      init_costing_db(): fuel_index (untenanted, by decision)
-backend/main.py                    7 endpoints: GET /api/costing · PUT /api/admin/costing/target ·
-                                   GET /api/fuel-index · POST /api/admin/fuel-index/refresh ·
-                                   PUT /api/fuel-index/settings · PUT /api/admin/fuel-index/manual ·
-                                   POST /api/admin/fuel-index/reset-base; init order; imports
-backend/weeks.py                   confirm_week() locks the BAF base once (and ONLY confirm — see tests)
-backend/derived.py                 rate_source / route_rates / baf_pct on context; eur_adj on days,
-                                   weeks, totals; eur_target_lines; response.costing
-backend/lookahead.py               account rows: rate_source, planned_eur_adj; page.costing
-backend/export.py                  XLSX: "€ source", "€ + BAF" columns + a Fuel sheet; PDF: target
-                                   mark, +BAF under the quote, a diesel footer line, footer wording
-backend/tests/test_costing.py      NEW — 106 assertions (see below)
-backend/tests/test_lookahead.py    reset_db() creates fuel_index; the sheet list gained "Fuel"
-backend/tests/test_tenant_audit.py fuel_index registered as untenanted with its reason (30 -> 31)
-backend/tests/parse_frontend.js    +16 (314 -> 330)
-backend/tests/render_frontend.js   +16 (51 -> 67)
-backend/tests/fixtures/lookahead_page_fuel.json  NEW — written by test_costing.py, read by render
-backend/tests/fixtures/lookahead_page.json       rewritten by test_lookahead.py (adds costing block)
-frontend/index.html                FuelWidget (×3), CostingTab, Quote + BAF on Commit/Account, copy
-README.txt                         this file
+- That Starlette serves /help/ on Render. The HTTP layer is stubbed in the
+  sandbox, as for every other harness. Check: open /help/ after deploy; a
+  404 means the mount did not land (partial upload) — compare main.py by
+  content.
+- How the page looks in a real browser. It was rendered from the same
+  content as the .docx (which was rasterised and looked at); the HTML
+  itself has not been opened in Chromium here.
 
-SUITE — every figure watched print, on a FRESH clone with this zip applied
---------------------------------------------------------------------------
-test_costing 106 · test_lookahead 242 · test_phase2 160 · test_phase25a 104 ·
-test_phase3 154 · test_phase4 220 · test_phase45 144 · test_phase5a 215 ·
-test_tenant_audit 31 · test_week1 317 = 1,693 py
-parse_frontend 330 · parse_map 484 · render_frontend 67 · test_ipt_overlay 140 = 1,021 js
-TOTAL 2,714 / 0 (was 2,575 at HEAD).
-
-Run the .py files before the .js ones — two fixtures are written by them.
-
-NOT TESTED (say it plainly)
----------------------------
-- eurooilwatch.com from Render (the fetch is exercised against a stub; the
-  parser against a payload captured on 10 Sep).
-- The widget in a real browser (harness-rendered only).
-- Postgres: fuel_index is CREATE TABLE IF NOT EXISTS with TEXT/REAL columns —
-  the same shapes every other table uses — but no Postgres branch runs here.
-- Two deliberate regressions were run and caught by the right assertions
-  (mixing the target into a typed route; BAF replacing the quote). And one
-  REAL bug was caught while building: the base-lock hook first landed in the
-  week EDIT function (its tail is identical to confirm's) — an assertion now
-  pins that editing a week never locks the base.
+NOTHING TO DELETE. NOTHING TO MERGE.
