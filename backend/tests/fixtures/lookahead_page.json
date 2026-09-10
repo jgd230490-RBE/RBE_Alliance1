@@ -3,8 +3,8 @@
  "commit_week": {
   "month_index": 9,
   "week_index": 2,
-  "from": "2026-09-08",
-  "to": "2026-09-14",
+  "from": "2026-09-07",
+  "to": "2026-09-13",
   "weekdays": 5,
   "days": 7
  },
@@ -17,8 +17,8 @@
   "commit_week": {
    "month_index": 9,
    "week_index": 2,
-   "from": "2026-09-08",
-   "to": "2026-09-14",
+   "from": "2026-09-07",
+   "to": "2026-09-13",
    "weekdays": 5,
    "days": 7
   },
@@ -29,24 +29,24 @@
   },
   "totals": {
    "planned_t": 3180.0,
-   "trips": 159,
+   "trips": 160,
    "vehicles_peak": 7,
    "vehicles_peak_date": "2026-09-10",
    "vehicles_by_day": {
+    "2026-09-07": 6,
     "2026-09-08": 6,
     "2026-09-09": 6,
     "2026-09-10": 7,
     "2026-09-11": 7,
     "2026-09-12": 0,
-    "2026-09-13": 0,
-    "2026-09-14": 7
+    "2026-09-13": 0
    },
    "tonne_km": 176300.0,
-   "km": 9565.0,
+   "km": 9625.0,
    "lines": 3,
    "unbaked_lines": 0,
    "excludes_unbaked": false,
-   "eur": 24950.0,
+   "eur": 25085.0,
    "eur_lines": 3,
    "eur_partial": false
   },
@@ -93,6 +93,36 @@
      "ipt": "IPT1"
     },
     "days": [
+     {
+      "route_id": "R1",
+      "month_index": 9,
+      "discipline": "earthworks",
+      "section_id": "WS1",
+      "day_date": "2026-09-07",
+      "planned_qty": 200.0,
+      "actual_qty": null,
+      "actual_note": null,
+      "actual_by": null,
+      "actual_at": null,
+      "status": "derived",
+      "parent_week_index": 2,
+      "parent_week_qty": 1000.0,
+      "created_at": "<ts>",
+      "updated_at": "<ts>",
+      "variance": null,
+      "week_planned_now": 1000.0,
+      "week_changed": false,
+      "derived": {
+       "tonnes": 200.0,
+       "trips": 10,
+       "vehicles": 2,
+       "km_day": 600.0,
+       "km_per_vehicle": 300.0,
+       "tonne_km": 12000.0,
+       "eur": 1750.0,
+       "eur_partial": false
+      }
+     },
      {
       "route_id": "R1",
       "month_index": 9,
@@ -270,36 +300,6 @@
        "km_per_vehicle": 0.0,
        "tonne_km": 0.0,
        "eur": 0.0,
-       "eur_partial": false
-      }
-     },
-     {
-      "route_id": "R1",
-      "month_index": 9,
-      "discipline": "earthworks",
-      "section_id": "WS1",
-      "day_date": "2026-09-14",
-      "planned_qty": 200.0,
-      "actual_qty": null,
-      "actual_note": null,
-      "actual_by": null,
-      "actual_at": null,
-      "status": "derived",
-      "parent_week_index": 2,
-      "parent_week_qty": 1000.0,
-      "created_at": "<ts>",
-      "updated_at": "<ts>",
-      "variance": null,
-      "week_planned_now": 1000.0,
-      "week_changed": false,
-      "derived": {
-       "tonnes": 200.0,
-       "trips": 10,
-       "vehicles": 2,
-       "km_day": 600.0,
-       "km_per_vehicle": 300.0,
-       "tonne_km": 12000.0,
-       "eur": 1750.0,
        "eur_partial": false
       }
      }
@@ -399,6 +399,36 @@
       "month_index": 9,
       "discipline": "earthworks",
       "section_id": "WS2",
+      "day_date": "2026-09-07",
+      "planned_qty": 300.0,
+      "actual_qty": null,
+      "actual_note": null,
+      "actual_by": null,
+      "actual_at": null,
+      "status": "edited",
+      "parent_week_index": 2,
+      "parent_week_qty": 1680.0,
+      "created_at": "<ts>",
+      "updated_at": "<ts>",
+      "variance": null,
+      "week_planned_now": 1680.0,
+      "week_changed": false,
+      "derived": {
+       "tonnes": 300.0,
+       "trips": 15,
+       "vehicles": 3,
+       "km_day": 900.0,
+       "km_per_vehicle": 300.0,
+       "tonne_km": 18000.0,
+       "eur": 2625.0,
+       "eur_partial": false
+      }
+     },
+     {
+      "route_id": "R1",
+      "month_index": 9,
+      "discipline": "earthworks",
+      "section_id": "WS2",
       "day_date": "2026-09-08",
       "planned_qty": 300.0,
       "actual_qty": null,
@@ -460,7 +490,7 @@
       "discipline": "earthworks",
       "section_id": "WS2",
       "day_date": "2026-09-10",
-      "planned_qty": 360.0,
+      "planned_qty": 390.0,
       "actual_qty": null,
       "actual_note": null,
       "actual_by": null,
@@ -474,13 +504,13 @@
       "week_planned_now": 1680.0,
       "week_changed": false,
       "derived": {
-       "tonnes": 360.0,
-       "trips": 18,
+       "tonnes": 390.0,
+       "trips": 20,
        "vehicles": 4,
-       "km_day": 1080.0,
-       "km_per_vehicle": 270.0,
-       "tonne_km": 21600.0,
-       "eur": 3150.0,
+       "km_day": 1200.0,
+       "km_per_vehicle": 300.0,
+       "tonne_km": 23400.0,
+       "eur": 3480.0,
        "eur_partial": false
       }
      },
@@ -490,7 +520,7 @@
       "discipline": "earthworks",
       "section_id": "WS2",
       "day_date": "2026-09-11",
-      "planned_qty": 360.0,
+      "planned_qty": 390.0,
       "actual_qty": null,
       "actual_note": null,
       "actual_by": null,
@@ -504,13 +534,13 @@
       "week_planned_now": 1680.0,
       "week_changed": false,
       "derived": {
-       "tonnes": 360.0,
-       "trips": 18,
+       "tonnes": 390.0,
+       "trips": 20,
        "vehicles": 4,
-       "km_day": 1080.0,
-       "km_per_vehicle": 270.0,
-       "tonne_km": 21600.0,
-       "eur": 3150.0,
+       "km_day": 1200.0,
+       "km_per_vehicle": 300.0,
+       "tonne_km": 23400.0,
+       "eur": 3480.0,
        "eur_partial": false
       }
      },
@@ -573,36 +603,6 @@
        "eur": 0.0,
        "eur_partial": false
       }
-     },
-     {
-      "route_id": "R1",
-      "month_index": 9,
-      "discipline": "earthworks",
-      "section_id": "WS2",
-      "day_date": "2026-09-14",
-      "planned_qty": 360.0,
-      "actual_qty": null,
-      "actual_note": null,
-      "actual_by": null,
-      "actual_at": null,
-      "status": "edited",
-      "parent_week_index": 2,
-      "parent_week_qty": 1680.0,
-      "created_at": "<ts>",
-      "updated_at": "<ts>",
-      "variance": null,
-      "week_planned_now": 1680.0,
-      "week_changed": false,
-      "derived": {
-       "tonnes": 360.0,
-       "trips": 18,
-       "vehicles": 4,
-       "km_day": 1080.0,
-       "km_per_vehicle": 270.0,
-       "tonne_km": 21600.0,
-       "eur": 3150.0,
-       "eur_partial": false
-      }
      }
     ],
     "days_sum": 1680.0,
@@ -645,11 +645,11 @@
     },
     "week_derived": {
      "tonnes": 1680.0,
-     "trips": 84,
+     "trips": 85,
      "vehicles_peak": 4,
-     "km": 5040.0,
+     "km": 5100.0,
      "tonne_km": 100800.0,
-     "eur": 14700.0,
+     "eur": 14835.0,
      "eur_partial": false
     }
    },
@@ -700,6 +700,36 @@
       "month_index": 9,
       "discipline": "substructure",
       "section_id": "WS3",
+      "day_date": "2026-09-07",
+      "planned_qty": 100.0,
+      "actual_qty": null,
+      "actual_note": null,
+      "actual_by": null,
+      "actual_at": null,
+      "status": "derived",
+      "parent_week_index": 2,
+      "parent_week_qty": 500.0,
+      "created_at": "<ts>",
+      "updated_at": "<ts>",
+      "variance": null,
+      "week_planned_now": 500.0,
+      "week_changed": false,
+      "derived": {
+       "tonnes": 100.0,
+       "trips": 5,
+       "vehicles": 1,
+       "km_day": 305.0,
+       "km_per_vehicle": 305.0,
+       "tonne_km": 3100.0,
+       "eur": 300.0,
+       "eur_partial": false
+      }
+     },
+     {
+      "route_id": "R3",
+      "month_index": 9,
+      "discipline": "substructure",
+      "section_id": "WS3",
       "day_date": "2026-09-08",
       "planned_qty": 100.0,
       "actual_qty": null,
@@ -872,36 +902,6 @@
        "km_per_vehicle": 0.0,
        "tonne_km": 0.0,
        "eur": 0.0,
-       "eur_partial": false
-      }
-     },
-     {
-      "route_id": "R3",
-      "month_index": 9,
-      "discipline": "substructure",
-      "section_id": "WS3",
-      "day_date": "2026-09-14",
-      "planned_qty": 100.0,
-      "actual_qty": null,
-      "actual_note": null,
-      "actual_by": null,
-      "actual_at": null,
-      "status": "derived",
-      "parent_week_index": 2,
-      "parent_week_qty": 500.0,
-      "created_at": "<ts>",
-      "updated_at": "<ts>",
-      "variance": null,
-      "week_planned_now": 500.0,
-      "week_changed": false,
-      "derived": {
-       "tonnes": 100.0,
-       "trips": 5,
-       "vehicles": 1,
-       "km_day": 305.0,
-       "km_per_vehicle": 305.0,
-       "tonne_km": 3100.0,
-       "eur": 300.0,
        "eur_partial": false
       }
      }
@@ -965,8 +965,8 @@
   "week": {
    "month_index": 9,
    "week_index": 1,
-   "from": "2026-09-01",
-   "to": "2026-09-07"
+   "from": "2026-08-31",
+   "to": "2026-09-06"
   },
   "rows": [
    {
@@ -1096,7 +1096,25 @@
   "actual_t": 2305.0,
   "shortfall": 0,
   "open_to_calibrate": 0,
-  "hold_band": 0.98
+  "hold_band": 0.98,
+  "stock": [
+   {
+    "location_id": "L2",
+    "name": "Site",
+    "loc_type": null,
+    "unit": "t",
+    "capacity_qty": 1000.0,
+    "opening": 100.0,
+    "inbound": 2305.0,
+    "consumed": null,
+    "consumed_unit": null,
+    "note": null,
+    "closing": 2405.0,
+    "remaining": -1405.0,
+    "over": true,
+    "unconvertible_movements": 0
+   }
+  ]
  },
  "horizon": {
   "from_month": 9,
@@ -1364,7 +1382,7 @@
     "discipline": "earthworks",
     "section_id": "WS1",
     "week_index": 1,
-    "planned_qty": 1000.0,
+    "planned_qty": 800.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1396,7 +1414,7 @@
     "discipline": "earthworks",
     "section_id": "WS1",
     "week_index": 2,
-    "planned_qty": 1000.0,
+    "planned_qty": 800.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1428,7 +1446,7 @@
     "discipline": "earthworks",
     "section_id": "WS1",
     "week_index": 3,
-    "planned_qty": 1000.0,
+    "planned_qty": 800.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1460,7 +1478,39 @@
     "discipline": "earthworks",
     "section_id": "WS1",
     "week_index": 4,
-    "planned_qty": 1000.0,
+    "planned_qty": 800.0,
+    "unit": "t",
+    "status": "derived",
+    "weather": null,
+    "wetness": null,
+    "traffic": null,
+    "other": null,
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "actual_qty": null,
+    "actual_note": null,
+    "actual_by": null,
+    "actual_at": null,
+    "parent_qty": 4000.0,
+    "actual_cost_eur": null,
+    "calibrated_at": null,
+    "calibrated_qty": null,
+    "variance": null,
+    "parent_qty_now": 4000.0,
+    "parent_changed": false,
+    "material_type": "Small aggregate",
+    "vehicle_type": "Rigid 8-wheeler (32t)",
+    "parent_status": "Approved",
+    "ipt": "IPT1",
+    "role": null
+   },
+   {
+    "route_id": "R1",
+    "month_index": 10,
+    "discipline": "earthworks",
+    "section_id": "WS1",
+    "week_index": 5,
+    "planned_qty": 800.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1492,7 +1542,7 @@
     "discipline": "earthworks",
     "section_id": "WS2",
     "week_index": 1,
-    "planned_qty": 1500.0,
+    "planned_qty": 1200.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1524,7 +1574,7 @@
     "discipline": "earthworks",
     "section_id": "WS2",
     "week_index": 2,
-    "planned_qty": 1500.0,
+    "planned_qty": 1200.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1556,7 +1606,7 @@
     "discipline": "earthworks",
     "section_id": "WS2",
     "week_index": 3,
-    "planned_qty": 1500.0,
+    "planned_qty": 1200.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1588,7 +1638,39 @@
     "discipline": "earthworks",
     "section_id": "WS2",
     "week_index": 4,
-    "planned_qty": 1500.0,
+    "planned_qty": 1200.0,
+    "unit": "t",
+    "status": "derived",
+    "weather": null,
+    "wetness": null,
+    "traffic": null,
+    "other": null,
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "actual_qty": null,
+    "actual_note": null,
+    "actual_by": null,
+    "actual_at": null,
+    "parent_qty": 6000.0,
+    "actual_cost_eur": null,
+    "calibrated_at": null,
+    "calibrated_qty": null,
+    "variance": null,
+    "parent_qty_now": 6000.0,
+    "parent_changed": false,
+    "material_type": "Small aggregate",
+    "vehicle_type": "Rigid 8-wheeler (32t)",
+    "parent_status": "Approved",
+    "ipt": "IPT2",
+    "role": null
+   },
+   {
+    "route_id": "R1",
+    "month_index": 10,
+    "discipline": "earthworks",
+    "section_id": "WS2",
+    "week_index": 5,
+    "planned_qty": 1200.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1748,7 +1830,7 @@
     "discipline": "substructure",
     "section_id": "WS3",
     "week_index": 1,
-    "planned_qty": 500.0,
+    "planned_qty": 400.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1780,7 +1862,7 @@
     "discipline": "substructure",
     "section_id": "WS3",
     "week_index": 2,
-    "planned_qty": 500.0,
+    "planned_qty": 400.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1812,7 +1894,7 @@
     "discipline": "substructure",
     "section_id": "WS3",
     "week_index": 3,
-    "planned_qty": 500.0,
+    "planned_qty": 400.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1844,7 +1926,39 @@
     "discipline": "substructure",
     "section_id": "WS3",
     "week_index": 4,
-    "planned_qty": 500.0,
+    "planned_qty": 400.0,
+    "unit": "t",
+    "status": "derived",
+    "weather": null,
+    "wetness": null,
+    "traffic": null,
+    "other": null,
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "actual_qty": null,
+    "actual_note": null,
+    "actual_by": null,
+    "actual_at": null,
+    "parent_qty": 2000.0,
+    "actual_cost_eur": null,
+    "calibrated_at": null,
+    "calibrated_qty": null,
+    "variance": null,
+    "parent_qty_now": 2000.0,
+    "parent_changed": false,
+    "material_type": "Small aggregate",
+    "vehicle_type": "Rigid 8-wheeler (32t)",
+    "parent_status": "Approved",
+    "ipt": "IPT3",
+    "role": null
+   },
+   {
+    "route_id": "R3",
+    "month_index": 10,
+    "discipline": "substructure",
+    "section_id": "WS3",
+    "week_index": 5,
+    "planned_qty": 400.0,
     "unit": "t",
     "status": "derived",
     "weather": null,
@@ -1871,6 +1985,48 @@
     "role": null
    }
   ],
+  "weeks_in_month": {
+   "9": 4,
+   "10": 5
+  },
+  "week_spans": {
+   "9|1": {
+    "from": "2026-08-31",
+    "to": "2026-09-06"
+   },
+   "9|2": {
+    "from": "2026-09-07",
+    "to": "2026-09-13"
+   },
+   "9|3": {
+    "from": "2026-09-14",
+    "to": "2026-09-20"
+   },
+   "9|4": {
+    "from": "2026-09-21",
+    "to": "2026-09-27"
+   },
+   "10|1": {
+    "from": "2026-09-28",
+    "to": "2026-10-04"
+   },
+   "10|2": {
+    "from": "2026-10-05",
+    "to": "2026-10-11"
+   },
+   "10|3": {
+    "from": "2026-10-12",
+    "to": "2026-10-18"
+   },
+   "10|4": {
+    "from": "2026-10-19",
+    "to": "2026-10-25"
+   },
+   "10|5": {
+    "from": "2026-10-26",
+    "to": "2026-11-01"
+   }
+  },
   "roles": {
    "account": [
     9,
@@ -1909,7 +2065,7 @@
  "clashes": {
   "flags": [
    {
-    "code": "PILE_OVER",
+    "code": "STOCKPILE_OVER",
     "route_id": "R1",
     "month_index": 9,
     "discipline": "earthworks",
@@ -1920,7 +2076,7 @@
     "over_by": 4585.0
    },
    {
-    "code": "PILE_OVER",
+    "code": "STOCKPILE_OVER",
     "route_id": "R1",
     "month_index": 9,
     "discipline": "earthworks",
@@ -1931,7 +2087,7 @@
     "over_by": 4585.0
    },
    {
-    "code": "PILE_OVER",
+    "code": "STOCKPILE_OVER",
     "route_id": "R3",
     "month_index": 9,
     "discipline": "substructure",
@@ -1948,6 +2104,30 @@
     "discipline": "earthworks",
     "section_id": "WS1",
     "ipt": "IPT1",
+    "text": "R1 2026-09-07: 5 veh against a cap of 4",
+    "day_date": "2026-09-07",
+    "vehicles": 5,
+    "cap": 4
+   },
+   {
+    "code": "ROUTE_CAP",
+    "route_id": "R1",
+    "month_index": 9,
+    "discipline": "earthworks",
+    "section_id": "WS2",
+    "ipt": "IPT2",
+    "text": "R1 2026-09-07: 5 veh against a cap of 4",
+    "day_date": "2026-09-07",
+    "vehicles": 5,
+    "cap": 4
+   },
+   {
+    "code": "ROUTE_CAP",
+    "route_id": "R1",
+    "month_index": 9,
+    "discipline": "earthworks",
+    "section_id": "WS1",
+    "ipt": "IPT1",
     "text": "R1 2026-09-08: 5 veh against a cap of 4",
     "day_date": "2026-09-08",
     "vehicles": 5,
@@ -2038,28 +2218,68 @@
     "cap": 4
    },
    {
-    "code": "ROUTE_CAP",
+    "code": "IPT_SHARE",
     "route_id": "R1",
     "month_index": 9,
     "discipline": "earthworks",
     "section_id": "WS1",
     "ipt": "IPT1",
-    "text": "R1 2026-09-14: 6 veh against a cap of 4",
-    "day_date": "2026-09-14",
-    "vehicles": 6,
-    "cap": 4
+    "text": "IPT1 + IPT2 on R1 on 2026-09-07",
+    "day_date": "2026-09-07",
+    "ipts": [
+     "IPT1",
+     "IPT2"
+    ],
+    "share": "route",
+    "share_id": "R1"
    },
    {
-    "code": "ROUTE_CAP",
+    "code": "IPT_SHARE",
     "route_id": "R1",
     "month_index": 9,
     "discipline": "earthworks",
     "section_id": "WS2",
     "ipt": "IPT2",
-    "text": "R1 2026-09-14: 6 veh against a cap of 4",
-    "day_date": "2026-09-14",
-    "vehicles": 6,
-    "cap": 4
+    "text": "IPT1 + IPT2 on R1 on 2026-09-07",
+    "day_date": "2026-09-07",
+    "ipts": [
+     "IPT1",
+     "IPT2"
+    ],
+    "share": "route",
+    "share_id": "R1"
+   },
+   {
+    "code": "IPT_SHARE",
+    "route_id": "R1",
+    "month_index": 9,
+    "discipline": "earthworks",
+    "section_id": "WS1",
+    "ipt": "IPT1",
+    "text": "IPT1 + IPT2 on the same haul L1→L2 on 2026-09-07",
+    "day_date": "2026-09-07",
+    "ipts": [
+     "IPT1",
+     "IPT2"
+    ],
+    "share": "od",
+    "share_id": "L1→L2"
+   },
+   {
+    "code": "IPT_SHARE",
+    "route_id": "R1",
+    "month_index": 9,
+    "discipline": "earthworks",
+    "section_id": "WS2",
+    "ipt": "IPT2",
+    "text": "IPT1 + IPT2 on the same haul L1→L2 on 2026-09-07",
+    "day_date": "2026-09-07",
+    "ipts": [
+     "IPT1",
+     "IPT2"
+    ],
+    "share": "od",
+    "share_id": "L1→L2"
    },
    {
     "code": "IPT_SHARE",
@@ -2310,70 +2530,6 @@
     "ipt": "IPT2",
     "text": "IPT1 + IPT2 on the same haul L1→L2 on 2026-09-11",
     "day_date": "2026-09-11",
-    "ipts": [
-     "IPT1",
-     "IPT2"
-    ],
-    "share": "od",
-    "share_id": "L1→L2"
-   },
-   {
-    "code": "IPT_SHARE",
-    "route_id": "R1",
-    "month_index": 9,
-    "discipline": "earthworks",
-    "section_id": "WS1",
-    "ipt": "IPT1",
-    "text": "IPT1 + IPT2 on R1 on 2026-09-14",
-    "day_date": "2026-09-14",
-    "ipts": [
-     "IPT1",
-     "IPT2"
-    ],
-    "share": "route",
-    "share_id": "R1"
-   },
-   {
-    "code": "IPT_SHARE",
-    "route_id": "R1",
-    "month_index": 9,
-    "discipline": "earthworks",
-    "section_id": "WS2",
-    "ipt": "IPT2",
-    "text": "IPT1 + IPT2 on R1 on 2026-09-14",
-    "day_date": "2026-09-14",
-    "ipts": [
-     "IPT1",
-     "IPT2"
-    ],
-    "share": "route",
-    "share_id": "R1"
-   },
-   {
-    "code": "IPT_SHARE",
-    "route_id": "R1",
-    "month_index": 9,
-    "discipline": "earthworks",
-    "section_id": "WS1",
-    "ipt": "IPT1",
-    "text": "IPT1 + IPT2 on the same haul L1→L2 on 2026-09-14",
-    "day_date": "2026-09-14",
-    "ipts": [
-     "IPT1",
-     "IPT2"
-    ],
-    "share": "od",
-    "share_id": "L1→L2"
-   },
-   {
-    "code": "IPT_SHARE",
-    "route_id": "R1",
-    "month_index": 9,
-    "discipline": "earthworks",
-    "section_id": "WS2",
-    "ipt": "IPT2",
-    "text": "IPT1 + IPT2 on the same haul L1→L2 on 2026-09-14",
-    "day_date": "2026-09-14",
     "ipts": [
      "IPT1",
      "IPT2"
@@ -2395,7 +2551,7 @@
   ],
   "count": 34,
   "by_code": {
-   "PILE_OVER": 3,
+   "STOCKPILE_OVER": 3,
    "ROUTE_CAP": 10,
    "IPT_SHARE": 20,
    "TARK_TEE": 1
@@ -2403,7 +2559,7 @@
   "codes": [
    "SHORTAGE",
    "DAYS_NE_WEEK",
-   "PILE_OVER",
+   "STOCKPILE_OVER",
    "ROUTE_CAP",
    "IPT_SHARE",
    "TARK_TEE",
