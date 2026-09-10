@@ -40,6 +40,8 @@ import export       # Look-ahead v2 slice 4 — XLSX + PDF of the commit week
 import stockpiles    # Week 1 — stockpile capacity and typed consumption (Task D2)
 import access        # 2026-09-02 — IPT access codes (Task F)
 import config        # 2.5b — the editable copy of factors.json
+import costing       # 10 Sep evening — target rates + fuel settings (config key 'costing'), BAF
+import fuel          # 10 Sep evening — the EU Weekly Oil Bulletin diesel index, fetched server-side
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -75,6 +77,7 @@ async def lifespan(app: FastAPI):
         db.init_weeks_db()
         db.init_lookahead_db()      # Look-ahead v2 slices 3-5. ALTERs only; after weeks, before tenant.
         db.init_config_db()         # 2.5b. No ALTERs, so its position only needs to precede the seed.
+        db.init_costing_db()        # 10 Sep evening. The GLOBAL fuel_index table (untenanted, by design).
         # Phase 4.5. Must sit exactly here: init_tenant() migrates a pre-4.5 database by
         # rebuilding each table, copying the columns the table actually has — several of
         # which the init_* calls above add by ALTER. Run it before them and those columns
@@ -1051,6 +1054,118 @@ def reset_factors_config(updated_by: Optional[str] = None, token: Optional[str] 
     if not res["ok"]:
         raise HTTPException(400, "; ".join(res["problems"]))
     return {"ok": True, "status": config.status(conversions)}
+
+
+# ------------------------------------------------- costing + fuel index (10 Sep evening)
+class TargetRatesIn(BaseModel):
+    rate_eur_per_load: Optional[float] = None
+    rate_eur_per_t: Optional[float] = None
+    rate_eur_per_km: Optional[float] = None
+    updated_by: Optional[str] = None
+
+
+class FuelSettingsIn(BaseModel):
+    yard_eur_per_l: Optional[float] = None
+    share_pct: Optional[float] = None
+    country: Optional[str] = None
+    updated_by: Optional[str] = None
+
+
+class ManualIndexIn(BaseModel):
+    eur_per_l: float
+    bulletin_date: str
+    updated_by: Optional[str] = None
+
+
+def _costing_payload():
+    s = costing.settings(use_cache=False)
+    country = s["fuel"].get("country") or fuel.DEFAULT_COUNTRY
+    idx = fuel.get_index(country)
+    out = {"target": s["target"], "fuel": s["fuel"], "index": fuel.state(country),
+           "summary": costing.summary(idx)}
+    return out
+
+
+@app.get("/api/costing")
+def get_costing():
+    """The tenant's target rates, fuel settings, the stored diesel index and the BAF
+    they give. Any signed-in code. Never fetches."""
+    _require_access()
+    return _costing_payload()
+
+
+@app.put("/api/admin/costing/target")
+def put_costing_target(body: TargetRatesIn, token: Optional[str] = None):
+    """
+    Type the TARGET rates (€/load, €/t, €/km) — the Planned € for every route that has
+    no rate of its own. Only the fields sent are written; a sent null clears one.
+    Admin token: a target changes every unpriced line's € at once. Nothing is seeded.
+    """
+    _check_admin(token)
+    fields = {k: getattr(body, k) for k in costing.TARGET_FIELDS if k in _fields_set(body)}
+    res = costing.set_target(fields, by=body.updated_by)
+    if not res["ok"]:
+        raise HTTPException(400, "; ".join(res["problems"]))
+    return _costing_payload()
+
+
+@app.get("/api/fuel-index")
+def get_fuel_index(lazy: int = 1, sync: int = 0):
+    """
+    The widget's read: the stored EE diesel row (EU Weekly Oil Bulletin via EuroOilWatch),
+    its staleness, the tenant's fuel settings and the BAF. Returns the STORED row at
+    once; when the last attempt is older than 12 h it starts one background refresh
+    (`lazy=0` to suppress; `sync=1` waits — tests and diagnostics). Never on the page
+    read's path: /api/lookahead reads the row only.
+    """
+    _require_access()
+    if lazy:
+        s = costing.settings()
+        fuel.ensure_fresh(s["fuel"].get("country") or fuel.DEFAULT_COUNTRY, sync=bool(sync))
+    return _costing_payload()
+
+
+@app.post("/api/admin/fuel-index/refresh")
+def refresh_fuel_index(sync: int = 0, token: Optional[str] = None):
+    """Fetch the feed now (admin). `sync=1` waits for the outcome."""
+    _check_admin(token)
+    s = costing.settings()
+    fuel.refresh(s["fuel"].get("country") or fuel.DEFAULT_COUNTRY, sync=bool(sync))
+    return _costing_payload()
+
+
+@app.put("/api/fuel-index/settings")
+def put_fuel_settings(body: FuelSettingsIn):
+    """
+    Type the yard €/L (optional, cost-plus later) and the fuel share % (empty = no BAF
+    line). Planner or admin. Never touches the bulletin row or the locked base.
+    """
+    _require_approver()
+    fields = {k: getattr(body, k) for k in costing.FUEL_FIELDS if k in _fields_set(body)}
+    res = costing.set_fuel(fields, by=body.updated_by)
+    if not res["ok"]:
+        raise HTTPException(400, "; ".join(res["problems"]))
+    return _costing_payload()
+
+
+@app.put("/api/admin/fuel-index/manual")
+def put_fuel_manual(body: ManualIndexIn, token: Optional[str] = None):
+    """Type the index when the feed is down (admin). Writes the same row, source 'manual'."""
+    _check_admin(token)
+    s = costing.settings()
+    res = fuel.set_manual(body.eur_per_l, body.bulletin_date, by=body.updated_by,
+                          country=s["fuel"].get("country") or fuel.DEFAULT_COUNTRY)
+    if not res["ok"]:
+        raise HTTPException(400, "; ".join(res["problems"]))
+    return _costing_payload()
+
+
+@app.post("/api/admin/fuel-index/reset-base")
+def reset_fuel_base(updated_by: Optional[str] = None, token: Optional[str] = None):
+    """Clear the locked BAF base (admin). The next Confirm week locks a fresh one."""
+    _check_admin(token)
+    costing.reset_baf_base(by=updated_by)
+    return _costing_payload()
 
 
 # ------------------------------------------------------------------ public feed (map)

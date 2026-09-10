@@ -771,6 +771,36 @@ def init_config_db():
         conn.close()
 
 
+def init_costing_db():
+    """
+    10 Sep evening — the fuel index. ONE table, deliberately NOT tenanted: the EU
+    Weekly Oil Bulletin's diesel price for a country is public national data, not a
+    client's. One row per country. It is therefore not in TENANTED_TABLES, has no
+    _TENANT_DDL entry, and is listed as untenanted (with this reason) in
+    test_tenant_audit.py. The tenant's own fuel SETTINGS (yard price, share, the locked
+    BAF base) and target rates live in the tenanted `config` table under key 'costing'
+    — see costing.py — so no new tenanted table was needed either.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS fuel_index (
+                country          TEXT PRIMARY KEY,
+                source           TEXT,
+                bulletin_date    TEXT,
+                fetched_at       TEXT,
+                eur_per_l        REAL,
+                raw_source_label TEXT,
+                last_attempt_at  TEXT,
+                last_error       TEXT
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def count_forecast_weeks():
     return query("SELECT COUNT(*) AS n FROM forecast_weeks WHERE tenant_id = ?",
                  (current_tenant(),))[0]["n"]

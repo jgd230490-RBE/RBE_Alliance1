@@ -68,7 +68,10 @@ BLUE_RGB = (0x1D / 255, 0x4E / 255, 0xD8 / 255)
 GREY = (0x64 / 255, 0x74 / 255, 0x8B / 255)
 BAND = (0xEF / 255, 0xF6 / 255, 0xFF / 255)
 
-FOOTER = ("€ not printed where no contract rate is typed on the route.",
+FOOTER = ("€ from the contract rate typed on the route, or the target rate on Config where the "
+          "route has none (marked 'target'); not printed where neither exists. € + BAF applies the "
+          "fuel surcharge (EU Weekly Oil Bulletin diesel vs the locked base × fuel share) and never "
+          "replaces the quote.",
           "Vignette is time-based in Estonia and is not on this sheet. Payloads are planning "
           "figures, not plated. Km from the baked HERE route unless marked ‡.",
           "Mon–Fri only, one row per line; each day cell is qty / trips · vehicles; † = a typed day "
@@ -125,7 +128,8 @@ def _line_rows(page, weekdays_only=True):
                 "qty": d.get("planned_qty"), "unit": c.get("unit"),
                 "tonnes": f.get("tonnes"), "trips": f.get("trips"), "veh": f.get("vehicles"),
                 "km_trip": c.get("km_trip"), "km_day": f.get("km_day"), "tonne_km": f.get("tonne_km"),
-                "eur": f.get("eur"), "cycle_min": c.get("cycle_min"),
+                "eur": f.get("eur"), "rate_source": c.get("rate_source") or "",
+                "eur_adj": f.get("eur_adj"), "cycle_min": c.get("cycle_min"),
                 "cycle_mark": c.get("cycle_mark") or ("" if c.get("baked") else "—"),
                 "baked": c.get("baked"), "status": d.get("status"),
                 "days_ne_week": l.get("days_ne_week"), "week_qty": (l.get("week") or {}).get("planned_qty"),
@@ -141,7 +145,8 @@ XLSX_COLS = [("Date", "date"), ("Route", "route_id"), ("Origin", "origin"), ("De
              ("IPT", "ipt"), ("WS", "ws"), ("Discipline", "discipline"), ("Material", "material"),
              ("Vehicle", "vehicle"), ("Qty", "qty"), ("Unit", "unit"), ("Tonnes", "tonnes"),
              ("Trips", "trips"), ("Vehicles", "veh"), ("km/trip", "km_trip"), ("km/day", "km_day"),
-             ("t·km", "tonne_km"), ("€", "eur"), ("Cycle min", "cycle_min"), ("Cycle source", "cycle_mark"),
+             ("t·km", "tonne_km"), ("€", "eur"), ("€ source", "rate_source"), ("€ + BAF", "eur_adj"),
+             ("Cycle min", "cycle_min"), ("Cycle source", "cycle_mark"),
              ("Day status", "status"), ("Week qty", "week_qty"), ("Days ≠ week", "days_ne_week")]
 
 
@@ -172,6 +177,27 @@ def build_xlsx(page):
     rows = _line_rows(page)
     sheet(ws, XLSX_COLS, rows)
     # no Stock sheet (10 Sep): the sheet is for the supplier; stock is the planner's
+    # 10 Sep evening: the fuel index and settings every € + BAF above was computed from
+    ws_f = wb.create_sheet("Fuel")
+    cost = page.get("costing") or {}
+    fu = cost.get("fuel") or {}
+    for i, (k, v) in enumerate((
+            ("Diesel index €/L", cost.get("index_eur_per_l")),
+            ("Bulletin date", cost.get("index_bulletin_date")),
+            ("Index source", cost.get("index_source")),
+            ("Attribution", "EU Weekly Oil Bulletin via EuroOilWatch" if cost.get("index_source") else ""),
+            ("BAF base €/L", fu.get("baf_base_eur_per_l")),
+            ("BAF base bulletin date", fu.get("baf_base_bulletin_date")),
+            ("Fuel share %", fu.get("share_pct")),
+            ("BAF %", (round(cost["baf_pct"] * 100, 2) if cost.get("baf_pct") is not None else None)),
+            ("BAF not applied because", cost.get("baf_reason") or ""),
+            # the yard price and the target rates are the planner's own numbers and are
+            # NOT on the supplier's sheet — only the public index and the BAF terms
+            ("Lines priced at the target rate", (page.get("commit", {}).get("totals") or {}).get("eur_target_lines"))), 1):
+        ws_f.cell(row=i, column=1, value=k).font = Font(bold=True)
+        ws_f.cell(row=i, column=2, value=v)
+    ws_f.column_dimensions["A"].width = 34
+    ws_f.column_dimensions["B"].width = 40
     ws3 = wb.create_sheet("Clashes")
     sheet(ws3, [("Code", "code"), ("Route", "route_id"), ("IPT", "ipt"), ("WS", "section_id"),
                 ("Day", "day_date"), ("Detail", "text")],
@@ -467,13 +493,21 @@ def build_pdf(page):
                      f"{_n(wk.get('tonne_km')) if c.get('baked') else '—'} t·km</font>", st_c))
         row.append(P((_n(c.get("km_trip")) + (c.get("cycle_mark") or "")) if c.get("baked") else "—", st_c))
         if priced:
-            row.append(P(_n(wk.get("eur")) if wk.get("eur") is not None else "—", st_c))
+            if wk.get("eur") is None:
+                row.append(P("—", st_c))
+            else:
+                tail = ("<br/><font size=6 color='#64748B'>target</font>" if c.get("rate_source") == "target" else "")
+                if wk.get("eur_adj") is not None:
+                    tail += f"<br/><font size=6.5 color='#64748B'>+BAF {_n(wk['eur_adj'])}</font>"
+                row.append(P(_n(wk.get("eur")) + tail, st_c))
         data.append(row)
         tot["t"] += float(wk.get("tonnes") or 0)
         tot["trips"] += int(wk.get("trips") or 0)
         tot["tkm"] += float(wk.get("tonne_km") or 0)
         if wk.get("eur") is not None:
             tot["eur"] += float(wk["eur"]); tot["eur_any"] = True
+        if wk.get("eur_adj") is not None:
+            tot["eur_adj"] = tot.get("eur_adj", 0.0) + float(wk["eur_adj"])
 
     if rows:
         n_fixed = 6
@@ -481,14 +515,17 @@ def build_pdf(page):
         day_w = 19 * mm
         widths = [13 * mm, 33 * mm, 33 * mm, 15 * mm, 22 * mm, 18 * mm] + [day_w] * ndays + [27 * mm, 13 * mm]
         if priced:
-            widths.append(14 * mm)
+            # wider when a + BAF line sits under the quote, so "+BAF 9 896" does not wrap
+            widths.append(20 * mm if (page.get("costing") or {}).get("baf_pct") is not None else 14 * mm)
         # whatever is left after the fixed columns goes to origin / destination
         spare = usable - sum(widths)
         widths[1] += spare / 2; widths[2] += spare / 2
         total_row = [P("<b>TOTAL</b>", st), P(f"{len(rows)} line(s)", st), "", "", "", ""] + [""] * ndays + [
             P(f"<b>{_n(tot['t'])} t</b><br/><font size=6.5 color='#64748B'>{_n(tot['trips'])} tr · {_n(tot['tkm'])} t·km</font>", st_c), ""]
         if priced:
-            total_row.append(P(f"<b>{_n(tot['eur'])}</b>" if tot["eur_any"] else "—", st_c))
+            adj = (f"<br/><font size=6.5 color='#64748B'>+BAF {_n(tot['eur_adj'])}</font>"
+                   if tot.get("eur_adj") is not None else "")
+            total_row.append(P((f"<b>{_n(tot['eur'])}</b>" + adj) if tot["eur_any"] else "—", st_c))
         data.append(total_row)
         t = LongTable(data, colWidths=widths, repeatRows=1)
         style = [("BACKGROUND", (0, 0), (-1, 0), colors.Color(*NAVY_RGB)),
@@ -530,10 +567,28 @@ def build_pdf(page):
         if (l.get("week") or {}).get("confirmed_at"):
             stamp = l["week"]["confirmed_at"]
     ft = [P(E(f), st_grey) for f in FOOTER]
+    ft.append(P(E(_fuel_line(page)), st_grey))
     ft.append(P((f"Confirmed {stamp}. " if stamp else "Not yet confirmed. ") + "Re-open the week in Look-ahead to change the plan.", st_grey))
     story.append(KeepTogether(ft))
     doc.build(story)
     return buf.getvalue()
+
+
+def _fuel_line(page):
+    """One footer line naming the diesel index the sheet's € + BAF used — or that none did."""
+    cost = page.get("costing") or {}
+    fu = cost.get("fuel") or {}
+    if cost.get("index_eur_per_l") is None:
+        return "Diesel index: not available (EU Weekly Oil Bulletin via EuroOilWatch not reached, nothing typed)."
+    s = (f"Diesel {cost.get('fuel', {}).get('country') or 'EE'} €{cost['index_eur_per_l']:.3f}/L, "
+         f"bulletin {cost.get('index_bulletin_date') or '—'} (EU Weekly Oil Bulletin via EuroOilWatch"
+         + (", typed" if cost.get("index_source") == "manual" else "") + ").")
+    if cost.get("baf_pct") is not None:
+        s += (f" BAF {cost['baf_pct'] * 100:+.2f} % = (index / base €{fu.get('baf_base_eur_per_l'):.3f} of "
+              f"{fu.get('baf_base_bulletin_date') or '—'} − 1) × {fu.get('share_pct'):g} % fuel share.")
+    else:
+        s += f" No BAF applied ({cost.get('baf_reason') or 'not set up'})."
+    return s
 
 
 class _Caption(Flowable):

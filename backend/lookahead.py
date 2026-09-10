@@ -277,26 +277,29 @@ def page(bucket="commit", route_id=None, acc=None, with_tark_tee=True, today=Non
     t = 0.0
     routes = derived._routes_and_names()
     cache = {}
+    cost = derived.costing_context()          # once, not per row
     for r in acct["rows"]:
         if r.get("actual_qty") is not None:
             ctx = {"unit": r.get("unit"), "material_type": r.get("material_type"),
                    "vehicle_type": r.get("vehicle_type"),
                    "payload_t": derived.payload_for(r.get("vehicle_type"), factors)[0]}
             t += derived.tonnes_of(r["actual_qty"], ctx, factors)
-        # planned € for the account week, from the route's rates, so € variance exists
-        rt = routes.get(r["route_id"]) or {}
-        r["rate_set"] = any(rt.get(k) is not None for k in
-                            ("rate_eur_per_load", "rate_eur_per_t", "rate_eur_per_km"))
+        # planned € for the account week, from the route's rates — or, since 10 Sep
+        # evening, the tenant's target rates where the route has none — so € variance
+        # exists. `rate_source` says which; the row prints "target" when it is.
         # the week's planned € and (once typed) actual € against it, through the same
         # formulas the Commit view uses for a day — a week is just a bigger quantity
         ctx = derived.line_context({"route_id": r["route_id"], "unit": r.get("unit"),
                                     "material_type": r.get("material_type"),
                                     "vehicle_type": r.get("vehicle_type"), "ipt": r.get("ipt"),
                                     "discipline": r.get("discipline"), "section_id": r.get("section_id"),
-                                    "week": r}, factors, routes=routes, cache=cache)
+                                    "week": r}, factors, routes=routes, cache=cache, cost=cost)
         pf = derived.day_figures(r.get("planned_qty"), ctx, factors)
+        r["rate_set"] = bool(ctx.get("rate_set"))
+        r["rate_source"] = ctx.get("rate_source")
         r["planned_eur"] = pf.get("eur")
         r["planned_eur_partial"] = pf.get("eur_partial")
+        r["planned_eur_adj"] = pf.get("eur_adj")
         r["planned_t"] = pf.get("tonnes")
         r["eur_variance"] = (round(float(pf["eur"]) - float(r["actual_cost_eur"]), 2)
                              if pf.get("eur") is not None and r.get("actual_cost_eur") is not None
@@ -309,7 +312,10 @@ def page(bucket="commit", route_id=None, acc=None, with_tark_tee=True, today=Non
     acct["open_to_calibrate"] = sum(1 for r in acct["rows"] if r.get("action") == "spread")
     aw = acct.get("week") or {}
     acct["stock"] = account_stock(aw.get("month_index"), aw.get("week_index")) if aw else []
+    acct["eur_target_lines"] = sum(1 for r in acct["rows"] if r.get("rate_source") == "target")
     out["account"] = acct
+    # the settings and index behind every € on the page (also on commit.costing)
+    out["costing"] = cost
 
     # horizon, filtered
     hz = horizon_rows(mi, wi, route_id=route_id)

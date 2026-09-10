@@ -392,6 +392,15 @@ def set_week(route_id, month_index, discipline, section_id, week_index,
     return {"week": get_week(route_id, month_index, discipline, section_id, week_index)}
 
 
+def _lock_baf_base(by=None):
+    try:
+        import costing
+        import fuel
+        return costing.lock_baf_base_if_empty(fuel.get_index(costing.settings()["fuel"]["country"]), by=by)
+    except Exception as e:           # the confirm itself must never fail on the surcharge
+        return {"locked": False, "base": None, "base_date": None, "error": str(e)[:120]}
+
+
 def confirm_week(route_id, month_index, discipline, section_id, week_index,
                  by=None, flags=None):
     """
@@ -418,7 +427,13 @@ def confirm_week(route_id, month_index, discipline, section_id, week_index,
          f.get("traffic", cur.get("traffic")), f.get("other", cur.get("other")),
          _now(), db.current_tenant(), route_id, int(month_index), discipline or "",
          section_id or "", int(week_index)))
-    return {"week": get_week(route_id, month_index, discipline, section_id, week_index)}
+    # 10 Sep evening: the FIRST confirm that finds a fuel index row and no BAF base
+    # locks the base to that index (costing.py). Every later confirm finds a base and
+    # does nothing; an admin reset on Config is the only way it moves. No index row
+    # (feed never reached, nothing typed) locks nothing — a base is never guessed.
+    baf = _lock_baf_base(by)
+    return {"week": get_week(route_id, month_index, discipline, section_id, week_index),
+            "baf_base": baf}
 
 
 def set_actual(route_id, month_index, discipline, section_id, week_index,
