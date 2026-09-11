@@ -24,6 +24,9 @@
   .brand-bar{background:var(--navy-deep);}
   .card{background:#fff;border:1px solid var(--line);border-radius:12px;}
   .kpi-num{font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
+  /* Dashboard big-screen mode (11 Sep): larger labels; the figures scale with clamp() */
+  .dash-wall .fig-label{font-size:13px;} .dash-wall .fig-sub{font-size:12px;} .dash-wall .fig-group{font-size:12px;}
+  .dash-wall .chart-title{font-size:16px;} .dash-wall .text-xs{font-size:13px;} .dash-wall table.text-xs{font-size:13px;}
   input[type=number]::-webkit-outer-spin-button,
   input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
   input[type=number]{-moz-appearance:textfield;}
@@ -109,8 +112,24 @@ function Kpi({ label, value, sub, small }){
 // fair € (the old fallback to the route's headline distance is gone) — the coverage line
 // says how many lines the totals exclude. The only conversion left in the browser is
 // tonnes → the chosen display unit for the material chart, which is presentation.
-// `initialData` exists for the render harness (useEffect never runs there).
-const eurK = (n) => (n == null || isNaN(+n)) ? "—" : (Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + " M" : Math.abs(n) >= 1e4 ? Math.round(n / 1e3).toLocaleString("en-US") + " k" : Math.round(n).toLocaleString("en-US"));
+// `initialData` / `initialWeek` exist for the render harness (useEffect never runs there).
+//
+// 11 Sep afternoon — the big-screen rework (the human's four asks):
+//   1. every KPI figure carries its full value and how it is made on hover;
+//   2. no figure is ever cut off: no `truncate`, a clamp() font, two columns per card
+//      below 1536 px, millions as "1.02 M" with the exact figure on hover;
+//   3. the stock TABLE is gone — a capacity bar chart (fill % per stockpile) replaces it;
+//   4. a TODAY strip at the top: what moves today, this week to date, last week's
+//      account, and a small map of this week's lines — from ONE read of /api/lookahead
+//      (the Look-ahead's own page read, Tark Tee off), plus "Big screen" mode: filters
+//      and the table hidden, larger type, fullscreen, both reads refreshed every 5 min.
+//   Interactive: click a route row (or a bar in Top routes) and every chart and KPI
+//   narrows to that line; click again or the chip to clear.
+// Read-only, as before: nothing on this page writes.
+const eurK = (n) => (n == null || isNaN(+n)) ? "—" : (Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + " M" : Math.abs(n) >= 1e4 ? grp(Math.round(n / 1e3)) + " k" : grp(Math.round(n)));
+// a KPI figure that never overflows its cell: millions compact, the exact value on hover
+const bigNum = (n, d) => (n == null || isNaN(+n)) ? "—" : (Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + " M" : grp(n, d == null ? 0 : d));
+const pctOf = (a, b) => (a == null || !b) ? null : a * 100 / b;
 const unitTriple = (u, opts) => {
   if(!u || u.eur == null) return null;
   const o = opts || {};
@@ -120,10 +139,13 @@ const unitTriple = (u, opts) => {
   if(u.per_km != null) parts.push(`€ ${(+u.per_km).toFixed(2)}/km`);
   return parts.length ? parts.join(o.sep || " · ") : null;
 };
-function Dashboard({ meta, initialData }){
+const REFRESH_MS = 5 * 60 * 1000;
+function Dashboard({ meta, initialData, initialWeek, onWall }){
   const { materials, vehicles, units, months, factors } = meta;
   const [data, setData] = useState(initialData || null);
+  const [week, setWeek] = useState(initialWeek || null);
   const [err, setErr] = useState(false);
+  const [weekErr, setWeekErr] = useState("");
   const [status, setStatus] = useState("Approved");
   const [unit, setUnit] = useState("t");
   const [material, setMaterial] = useState("All");
@@ -134,23 +156,63 @@ function Dashboard({ meta, initialData }){
   const [toM, setToM] = useState(months.count);
   const [sortKey, setSortKey] = useState("t");
   const [sortDir, setSortDir] = useState("desc");
+  const [lineKey, setLineKey] = useState(null);      // a clicked route row narrows the charts and figures
+  const [wall, setWall] = useState(false);           // big-screen mode
+  const [tick, setTick] = useState(0);               // bumps every 5 min in big-screen mode
+  const [stamp, setStamp] = useState(null);
 
   useEffect(() => {
     if(initialData) return;
     let live = true;
     fetch(`${API}/costing/lines?status=All`).then(r => r.ok ? r.json() : Promise.reject(r.status)).then(j => {
       if(!live) return;
-      setData(j);
-      const idx = (j.lines || []).map(x => x.month_index);
-      if(idx.length){ setFromM(Math.min(...idx)); setToM(Math.max(...idx)); }
-    }).catch(() => setErr(true));
+      setData(j); setErr(false); setStamp(new Date());
+      if(tick === 0){
+        const idx = (j.lines || []).map(x => x.month_index);
+        if(idx.length){ setFromM(Math.min(...idx)); setToM(Math.max(...idx)); }
+      }
+    }).catch(() => { if(live && !data) setErr(true); });
     return () => { live = false; };
-  }, []);
+  }, [tick]);
+  // the week: this week's lines day by day, last week's account, from the Look-ahead's
+  // own read. Its own fetch — a failure here never hides the programme figures.
+  useEffect(() => {
+    if(initialWeek) return;
+    let live = true;
+    fetch(`${API}/lookahead?bucket=commit&tark_tee=0`).then(r => r.ok ? r.json() : Promise.reject(r.status)).then(j => {
+      if(live){ setWeek(j); setWeekErr(""); }
+    }).catch(e => { if(live) setWeekErr(`Couldn't load this week (${e}).`); });
+    return () => { live = false; };
+  }, [tick]);
+  useEffect(() => {
+    if(!wall) return;
+    const id = setInterval(() => setTick(t => t + 1), REFRESH_MS);
+    return () => clearInterval(id);
+  }, [wall]);
+  useEffect(() => {
+    if(!wall) return;
+    // Esc, or the browser's own exit from fullscreen, ends big-screen mode
+    const leave = () => { setWall(false); if(onWall) onWall(false); };
+    const onKey = (e) => { if(e.key === "Escape") leave(); };
+    const onFs = () => { if(!document.fullscreenElement) leave(); };
+    window.addEventListener("keydown", onKey); document.addEventListener("fullscreenchange", onFs);
+    return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("fullscreenchange", onFs); };
+  }, [wall]);
+  const toggleWall = () => {
+    const next = !wall;
+    setWall(next);
+    if(onWall) onWall(next);          // the Portal folds its rail away for the big screen
+    try {
+      if(next && document.documentElement.requestFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+      if(!next && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    } catch(e) { /* fullscreen is a courtesy, never a requirement */ }
+  };
 
   const unitLabel = unit === "t" ? "tonnes" : unit === "m3" ? "m³" : "vehicles";
   const rows = (data && data.lines) || [];
   const ipts = useMemo(() => [...new Set(rows.map(r => r.ipt).filter(Boolean))].sort(), [rows]);
   const discs = useMemo(() => [...new Set(rows.map(r => r.discipline).filter(Boolean))].sort(), [rows]);
+  const keyOf = (r) => `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}`;
 
   const D = useMemo(() => {
     if(!data) return null;
@@ -163,60 +225,76 @@ function Dashboard({ meta, initialData }){
       (discipline === "All" || r.discipline === discipline) &&
       r.month_index >= lo && r.month_index <= hi
     );
+    // the route table always shows every filtered line; the charts and figures narrow
+    // to the clicked line when there is one
+    const narrowed = lineKey ? filtered.filter(r => keyOf(r) === lineKey) : filtered;
     const n = hi - lo + 1;
     const labels = []; for(let i = lo; i <= hi; i++) labels.push(monthLabelAbs(i, months.start_year));
-    const mats = [...new Set(filtered.map(r => r.material_type))];
+    const mats = [...new Set(narrowed.map(r => r.material_type))];
     const demand = {}; mats.forEach(m => demand[m] = new Array(n).fill(0));
     const Z = () => new Array(n).fill(0);
-    const tripsM = Z(), co2M = Z(), tonnesM = Z(), plannedM = Z(), fairM = Z(), vehM = Z();
+    const tripsM = Z(), co2M = Z(), tonnesM = Z(), plannedM = Z(), fairM = Z(), vehM = Z(), actualM = Z();
     const split = {}; mats.forEach(m => split[m] = 0);
     const rAgg = {};
     const T = { t: 0, trips: 0, km: 0, co2: 0, tkm: 0, planned: 0, plannedT: 0, plannedTrips: 0, plannedKm: 0, plannedN: 0, targetN: 0,
-                fair: 0, fairT: 0, fairTrips: 0, fairKm: 0, fairN: 0, baked: 0, bakedT: 0 };
+                fair: 0, fairT: 0, fairTrips: 0, fairKm: 0, fairN: 0, baked: 0, bakedT: 0,
+                actualT: null, actualEur: null, reportedN: 0, reportedT: 0 };
     filtered.forEach(r => {
-      const k = r.month_index - lo;
-      const disp = fromTonnes(r.tonnes, unit, r.material_type, r.vehicle_type, factors);   // display only
-      demand[r.material_type][k] += disp; split[r.material_type] += disp;
-      tripsM[k] += r.trips; tonnesM[k] += r.tonnes; co2M[k] += r.co2_t || 0; vehM[k] += r.vehicles || 0;
-      plannedM[k] += (r.planned && r.planned.eur) || 0; fairM[k] += (r.fair && r.fair.eur) || 0;
-      T.t += r.tonnes; T.trips += r.trips; T.km += r.km || 0; T.co2 += r.co2_t || 0; T.tkm += r.tonne_km || 0;
-      const bk = (r.basis_km || 0) * r.trips;
-      if(r.baked){ T.baked += 1; T.bakedT += r.tonnes; }
-      if(r.planned && r.planned.eur != null){ T.planned += r.planned.eur; T.plannedT += r.tonnes; T.plannedTrips += r.trips; T.plannedKm += bk; T.plannedN += 1; if(r.planned.source === "target") T.targetN += 1; }
-      if(r.fair && r.fair.eur != null){ T.fair += r.fair.eur; T.fairT += r.tonnes; T.fairTrips += r.trips; T.fairKm += bk; T.fairN += 1; }
       // keyed per LINE — a route carrying two disciplines is two rows
-      const key = `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}`;
+      const key = keyOf(r);
       const a = rAgg[key] || (rAgg[key] = {
         key, route_id: r.route_id, discipline: r.discipline || "", section_id: r.section_id || "", ipt: r.ipt || "—",
         origin: r.origin_name, dest: r.dest_name, vehicle: r.vehicle_type, vehicle_short: r.vehicle_short,
         dist: r.km_trip, cycleH: (r.cycle_min != null ? r.cycle_min / 60 : null), capacityPerDay: r.cycles_per_vehicle_day,
         baked: !!r.baked, t: 0, trips: 0, km: 0, bkm: 0, co2: 0, peakVeh: null, planned: null, fair: null, source: null, flags: new Set(),
+        actualT: null,
       });
+      const bk = (r.basis_km || 0) * r.trips;
       a.t += r.tonnes; a.trips += r.trips; a.km += r.km || 0; a.bkm += bk; a.co2 += r.co2_t || 0;
       if(r.vehicles != null) a.peakVeh = Math.max(a.peakVeh || 0, r.vehicles);
       if(r.planned && r.planned.eur != null){ a.planned = (a.planned || 0) + r.planned.eur; a.source = r.planned.source; }
       if(r.fair && r.fair.eur != null){ a.fair = (a.fair || 0) + r.fair.eur; (r.fair.flags || []).forEach(x => a.flags.add(x)); }
+      if(r.actual_tonnes != null) a.actualT = (a.actualT || 0) + r.actual_tonnes;
+    });
+    narrowed.forEach(r => {
+      const k = r.month_index - lo;
+      const disp = fromTonnes(r.tonnes, unit, r.material_type, r.vehicle_type, factors);   // display only
+      demand[r.material_type][k] += disp; split[r.material_type] += disp;
+      tripsM[k] += r.trips; tonnesM[k] += r.tonnes; co2M[k] += r.co2_t || 0; vehM[k] += r.vehicles || 0;
+      plannedM[k] += (r.planned && r.planned.eur) || 0; fairM[k] += (r.fair && r.fair.eur) || 0;
+      actualM[k] += r.actual_tonnes || 0;
+      T.t += r.tonnes; T.trips += r.trips; T.km += r.km || 0; T.co2 += r.co2_t || 0; T.tkm += r.tonne_km || 0;
+      const bk = (r.basis_km || 0) * r.trips;
+      if(r.baked){ T.baked += 1; T.bakedT += r.tonnes; }
+      if(r.planned && r.planned.eur != null){ T.planned += r.planned.eur; T.plannedT += r.tonnes; T.plannedTrips += r.trips; T.plannedKm += bk; T.plannedN += 1; if(r.planned.source === "target") T.targetN += 1; }
+      if(r.fair && r.fair.eur != null){ T.fair += r.fair.eur; T.fairT += r.tonnes; T.fairTrips += r.trips; T.fairKm += bk; T.fairN += 1; }
+      if(r.actual_tonnes != null){ T.actualT = (T.actualT || 0) + r.actual_tonnes; T.reportedN += 1; T.reportedT += r.tonnes; }
+      if(r.actual_eur != null) T.actualEur = (T.actualEur || 0) + r.actual_eur;
     });
     const per = (eur, t, trips, km) => eur == null ? null : { eur, per_t: t > 0 ? eur / t : null, per_trip: trips > 0 ? eur / trips : null, per_km: km > 0 ? eur / km : null };
     const routeRows = Object.values(rAgg).map(a => ({
       ...a, intensity: a.t > 0 && a.baked ? (a.co2 * 1000 / a.t) : null,
       plannedU: per(a.planned, a.t, a.trips, a.bkm), fairU: per(a.fair, a.t, a.trips, a.bkm),
       fairPerT: (a.fair != null && a.t > 0) ? a.fair / a.t : null, flags: [...a.flags],
+      deliveredPct: (a.actualT != null && a.t > 0) ? a.actualT * 100 / a.t : null,
     }));
     let peakIdx = 0; for(let i = 1; i < n; i++) if(tonnesM[i] > tonnesM[peakIdx]) peakIdx = i;
     let fleetIdx = 0; for(let i = 1; i < n; i++) if(vehM[i] > vehM[fleetIdx]) fleetIdx = i;
     return {
-      lo, hi, labels, mats, demand, tripsM, co2M, tonnesM, plannedM, fairM, vehM, split, routeRows,
+      lo, hi, labels, mats, demand, tripsM, co2M, tonnesM, plannedM, fairM, vehM, actualM, split, routeRows,
       kpis: { totT: T.t, totTrips: T.trips, totKm: T.km, totCo2: T.co2, totTkm: T.tkm,
               intensity: T.bakedT > 0 ? T.co2 * 1000 / T.bakedT : null,
-              peakMonth: tonnesM.some(x => x > 0) ? labels[peakIdx] : "—",
+              peakMonth: tonnesM.some(x => x > 0) ? labels[peakIdx] : "—", peakMonthT: tonnesM[peakIdx],
               peakFleet: vehM.some(x => x > 0) ? vehM[fleetIdx] : 0, peakFleetMonth: vehM.some(x => x > 0) ? labels[fleetIdx] : "—",
               planned: per(T.plannedN ? T.planned : null, T.plannedT, T.plannedTrips, T.plannedKm), plannedN: T.plannedN, targetN: T.targetN,
-              fair: per(T.fairN ? T.fair : null, T.fairT, T.fairTrips, T.fairKm), fairN: T.fairN },
-      lines: filtered.length, baked: T.baked, unbakedRoutes: routeRows.filter(r => !r.baked).length,
+              fair: per(T.fairN ? T.fair : null, T.fairT, T.fairTrips, T.fairKm), fairN: T.fairN,
+              // delivered to date — reported tonnes over ALL the tonnes in view (an unreported month is not yet delivered)
+              actualT: T.actualT, actualEur: T.actualEur, reportedN: T.reportedN, reportedT: T.reportedT,
+              deliveredPct: pctOf(T.actualT, T.t) },
+      lines: narrowed.length, baked: T.baked, unbakedRoutes: routeRows.filter(r => !r.baked).length,
       empty: filtered.length === 0,
     };
-  }, [data, status, material, vehicle, ipt, discipline, fromM, toM, unit, factors, months]);
+  }, [data, status, material, vehicle, ipt, discipline, fromM, toM, unit, factors, months, lineKey]);
 
   if(err) return <div className="p-8 text-center text-slate-500">Couldn't load the forecast figures.</div>;
   if(!data || !D) return <div className="p-8 text-center text-slate-400">Loading dashboard…</div>;
@@ -229,48 +307,80 @@ function Dashboard({ meta, initialData }){
   });
   const setSort = (k) => { if(sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(k); setSortDir("desc"); } };
   const arrow = (k) => sortKey === k ? (sortDir === "asc" ? " ▲" : " ▼") : "";
+  const selected = lineKey ? D.routeRows.find(r => r.key === lineKey) : null;
+  const pick = (key) => setLineKey(k => k === key ? null : key);
 
+  const tf = { size: wall ? 13 : 11 };
+  const eurTip = { callbacks: { label: (c) => `${c.dataset.label}: € ${grp(c.parsed.y)}` } };
   const commonOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
-  const barScales = { scales: { x: { grid: { display: false } }, y: { ticks: { font: { size: 11 } } } } };
-  const stackedOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } } }, scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, ticks: { font: { size: 11 } } } } };
-  const legendOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } } }, scales: { x: { grid: { display: false } }, y: { ticks: { font: { size: 11 } } } } };
+  const barScales = { scales: { x: { grid: { display: false }, ticks: { font: tf } }, y: { ticks: { font: tf } } } };
+  const stackedOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: tf } } }, scales: { x: { stacked: true, grid: { display: false }, ticks: { font: tf } }, y: { stacked: true, ticks: { font: tf } } } };
+  const legendOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: tf } }, tooltip: eurTip }, scales: { x: { grid: { display: false }, ticks: { font: tf } }, y: { ticks: { font: tf } } } };
 
   const demandCfg = { type: "bar", data: { labels: D.labels, datasets: D.mats.map((m, i) => ({ label: m, data: D.demand[m], backgroundColor: colorOf(i), stack: "s", borderWidth: 0 })) }, options: stackedOpts };
+  // planned tonnes as bars, what has been reported delivered as a line over them
   const tripsCfg  = { type: "bar", data: { labels: D.labels, datasets: [{ label: "Trips", data: D.tripsM, backgroundColor: "#003787", borderWidth: 0 }] }, options: { ...commonOpts, ...barScales } };
+  const progressCfg = { type: "bar", data: { labels: D.labels, datasets: [
+    { type: "bar", label: "Planned t", data: D.tonnesM, backgroundColor: "rgba(0,55,135,.18)", borderColor: "#003787", borderWidth: 1, order: 2 },
+    { type: "bar", label: "Delivered t (reported)", data: D.actualM, backgroundColor: "#039E86", borderWidth: 0, order: 1 }] },
+    options: { ...commonOpts, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: tf } } }, scales: { x: { grid: { display: false }, ticks: { font: tf } }, y: { ticks: { font: tf } } } } };
   const fleetCfg  = { type: "bar", data: { labels: D.labels, datasets: [{ label: "Vehicles", data: D.vehM, backgroundColor: "#0E7490", borderWidth: 0 }] }, options: { ...commonOpts, ...barScales } };
   const co2Cfg    = { type: "line", data: { labels: D.labels, datasets: [{ label: "tCO₂e", data: D.co2M, borderColor: "#039E86", backgroundColor: "rgba(3,158,134,.12)", fill: true, tension: .3, pointRadius: 2 }] }, options: { ...commonOpts, ...barScales } };
   const costCfg   = { type: "bar", data: { labels: D.labels, datasets: [
     { label: "Planned € (quote / target)", data: D.plannedM, backgroundColor: "#003787", borderWidth: 0 },
     { label: "Fair € (model)", data: D.fairM, backgroundColor: "#3398DB", borderWidth: 0 }] }, options: legendOpts };
-  const splitCfg  = { type: "doughnut", data: { labels: D.mats, datasets: [{ data: D.mats.map(m => D.split[m]), backgroundColor: D.mats.map((m, i) => colorOf(i)), borderWidth: 2, borderColor: "#fff" }] }, options: { responsive: true, maintainAspectRatio: false, cutout: "62%", plugins: { legend: { position: "right", labels: { boxWidth: 10, font: { size: 11 } } } } } };
+  const splitCfg  = { type: "doughnut", data: { labels: D.mats, datasets: [{ data: D.mats.map(m => D.split[m]), backgroundColor: D.mats.map((m, i) => colorOf(i)), borderWidth: 2, borderColor: "#fff" }] }, options: { responsive: true, maintainAspectRatio: false, cutout: "62%", plugins: { legend: { position: "right", labels: { boxWidth: 10, font: tf } } } } };
   const topN = [...D.routeRows].sort((a, b) => b.t - a.t).slice(0, 10);
-  const topCfg = { type: "bar", data: { labels: topN.map(r => r.route_id), datasets: [{ label: "tonnes", data: topN.map(r => r.t), backgroundColor: "#3398DB", borderWidth: 0 }] }, options: { indexAxis: "y", ...commonOpts, scales: { x: { grid: { display: false }, ticks: { font: { size: 10 } } }, y: { ticks: { font: { size: 9 } } } } } };
+  const topCfg = { type: "bar", data: { labels: topN.map(r => r.route_id + (r.discipline ? ` · ${r.discipline}` : "")), datasets: [{ label: "tonnes", data: topN.map(r => r.t), backgroundColor: topN.map(r => r.key === lineKey ? "#003787" : "#3398DB"), borderWidth: 0 }] },
+    options: { indexAxis: "y", ...commonOpts, onClick: (evt, els) => { if(els && els.length) pick(topN[els[0].index].key); },
+               scales: { x: { grid: { display: false }, ticks: { font: { size: wall ? 12 : 10 } } }, y: { ticks: { font: { size: wall ? 12 : 9 } } } } } };
 
-  const sel = "border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm bg-white";
+  // width-capped: a vehicle name is 50 characters, and an uncapped <select> pushed the
+  // whole filter row off the right of a 1440 px screen (the 11 Sep screenshot)
+  const sel = "border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm bg-white max-w-[13rem] truncate";
   const numTd = "px-3 py-2 text-right tabular-nums";
   const cost = data.costing || {};
   const K = D.kpis;
   const srcChip = (s) => s === "target" ? <span className="ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600" title="No rate on the route — the target rate from Config">target</span>
                         : s === "route" ? <span className="ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600" title="The rates typed on the route">quote</span> : null;
+  // KPI cards: two figures per row below 1536 px, four on a wide screen — a figure is
+  // never truncated (the 11 Sep screenshot: "1 017 …", "€ 3.31…")
   const Group = ({ title, children, tone }) => (
     <div className="card p-3.5">
-      <div className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: tone || "#94a3b8" }}>{title}</div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2">{children}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wide mb-2 fig-group" style={{ color: tone || "#94a3b8" }}>{title}</div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3">{children}</div>
     </div>
   );
   const Fig = ({ value, label, sub, title, tone }) => (
-    <div title={title} className="min-w-0">
-      <div className="kpi-num font-bold text-xl truncate" style={{ color: tone || "var(--navy-deep)" }}>{value}</div>
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mt-0.5 truncate">{label}</div>
-      {sub && <div className="text-[11px] text-slate-400 truncate">{sub}</div>}
+    <div title={title} className="min-w-0 cursor-help">
+      <div className="kpi-num font-bold whitespace-nowrap" style={{ color: tone || "var(--navy-deep)", fontSize: "clamp(1.1rem, 1.45vw, 1.7rem)", lineHeight: 1.15 }}>{value}</div>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mt-0.5 fig-label">{label}</div>
+      {sub && <div className="text-[11px] text-slate-400 fig-sub">{sub}</div>}
     </div>
   );
+  const rangeLabel = D.lo === D.hi ? D.labels[0] : (monthLabelAbs(D.lo, months.start_year) + " – " + monthLabelAbs(D.hi, months.start_year));
+  const scopeNote = `${status === "All" ? "all forecasts" : status.toLowerCase() + " only"}${ipt !== "All" ? " · " + (ipt === "none" ? "no IPT" : ipt) : ""}${discipline !== "All" ? " · " + discipline : ""}${selected ? " · " + selected.route_id + (selected.discipline ? " · " + selected.discipline : "") : ""}`;
+  const plannedVsFair = (K.planned && K.fair && K.fair.eur > 0 && K.plannedN === K.fairN) ? (K.planned.eur - K.fair.eur) * 100 / K.fair.eur : null;
+  const hhmm = (d) => d ? `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : "";
 
   return (
-    <div className="max-w-7xl mx-auto p-5 space-y-5">
+    <div className={"mx-auto p-5 space-y-5 " + (wall ? "dash-wall max-w-none" : "max-w-7xl")}>
       <PageHeader title="Dashboard"
-        subtitle={`Strategic planning view · ${D.lo === D.hi ? D.labels[0] : (monthLabelAbs(D.lo, months.start_year) + " – " + monthLabelAbs(D.hi, months.start_year))} · ${status === "All" ? "all forecasts" : status.toLowerCase() + " only"}${ipt !== "All" ? " · " + (ipt === "none" ? "no IPT" : ipt) : ""}${discipline !== "All" ? " · " + discipline : ""}`}
-        actions={<div className="flex flex-wrap gap-2">
+        subtitle={`Strategic planning view · ${rangeLabel} · ${scopeNote}`}
+        actions={<div className="flex flex-wrap gap-2 items-center">
+          <button type="button" onClick={toggleWall} className={"rounded-lg px-3 py-1.5 text-sm font-semibold " + (wall ? "bg-slate-200 text-slate-700" : "text-white")} style={wall ? undefined : { background: "var(--navy)" }}
+                  title={wall ? "Back to the working view (Esc)" : "Fullscreen, larger type, filters and the table hidden, refreshed every 5 minutes"}>{wall ? "Exit big screen" : "Big screen"}</button>
+        </div>}>
+        {/* coverage: what the totals include and exclude — the old amber box, moved to where the numbers are read */}
+        <div className="text-xs text-slate-500 mt-2 flex flex-wrap gap-x-3 gap-y-1">
+          <span><strong className="tabular-nums">{D.baked}</strong> of <strong className="tabular-nums">{D.lines}</strong> line-months on a baked route{D.lines > D.baked ? <span className="text-amber-700"> · km, CO₂e and fair € exclude the {D.lines - D.baked} unbaked ({D.unbakedRoutes} route{D.unbakedRoutes === 1 ? "" : "s"}) — bake them on the Routes page</span> : null}</span>
+          <span>· diesel {cost.index_eur_per_l != null ? <strong>€{(+cost.index_eur_per_l).toFixed(3)}/L</strong> : <span className="text-amber-700">index unavailable — no fair price</span>}{cost.index_bulletin_date ? ` (bulletin ${longDate(String(cost.index_bulletin_date).slice(0, 10))})` : ""}</span>
+          {stamp && <span>· updated {hhmm(stamp)}{wall ? " · refreshes every 5 min" : ""}</span>}
+          {selected && <button type="button" onClick={() => setLineKey(null)} className="rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: "rgba(0,55,135,.1)", color: "var(--navy)" }} title="The charts and figures are narrowed to this line — click to show every line again">{selected.route_id}{selected.discipline ? ` · ${selected.discipline}` : ""} only · ✕ show all</button>}
+        </div>
+      </PageHeader>
+
+      {!wall && <div className="flex flex-wrap gap-2 items-center -mt-2">
           <select className={sel} value={status} onChange={e => setStatus(e.target.value)}>{["Approved", "Pending", "All"].map(s => <option key={s}>{s}</option>)}</select>
           <select className={sel} value={ipt} onChange={e => setIpt(e.target.value)} title="IPT"><option value="All">All IPTs</option>{ipts.map(i => <option key={i} value={i}>{i}</option>)}{rows.some(r => !r.ipt) && <option value="none">No IPT set</option>}</select>
           <select className={sel} value={discipline} onChange={e => setDiscipline(e.target.value)} title="Discipline"><option value="All">All disciplines</option>{discs.map(d => <option key={d} value={d}>{d}</option>)}</select>
@@ -280,32 +390,42 @@ function Dashboard({ meta, initialData }){
           <select className={sel} value={fromM} onChange={e => setFromM(+e.target.value)}>{Array.from({ length: months.count }, (_, i) => i + 1).map(i => <option key={i} value={i}>{monthLabelAbs(i, months.start_year)}</option>)}</select>
           <span className="self-center text-slate-400 text-sm">→</span>
           <select className={sel} value={toM} onChange={e => setToM(+e.target.value)}>{Array.from({ length: months.count }, (_, i) => i + 1).map(i => <option key={i} value={i}>{monthLabelAbs(i, months.start_year)}</option>)}</select>
-        </div>}>
-        {/* coverage: what the totals include and exclude — the old amber box, moved to where the numbers are read */}
-        <div className="text-xs text-slate-500 mt-2 flex flex-wrap gap-x-3 gap-y-1">
-          <span><strong className="tabular-nums">{D.baked}</strong> of <strong className="tabular-nums">{D.lines}</strong> line-months on a baked route{D.lines > D.baked ? <span className="text-amber-700"> · km, CO₂e and fair € exclude the {D.lines - D.baked} unbaked ({D.unbakedRoutes} route{D.unbakedRoutes === 1 ? "" : "s"}) — bake them on the Routes page</span> : null}</span>
-          <span>· diesel {cost.index_eur_per_l != null ? <strong>€{(+cost.index_eur_per_l).toFixed(3)}/L</strong> : <span className="text-amber-700">index unavailable — no fair price</span>}{cost.index_bulletin_date ? ` (bulletin ${longDate(String(cost.index_bulletin_date).slice(0, 10))})` : ""}</span>
-        </div>
-      </PageHeader>
+                </div>}
 
-      <div className="grid lg:grid-cols-3 gap-3">
+      <DashboardToday meta={meta} week={week} err={weekErr} wall={wall} />
+
+      <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <Group title="Delivered to date" tone="var(--green)">
+          <Fig value={K.actualT == null ? "—" : bigNum(K.actualT)} label="tonnes moved" sub={K.actualT == null ? "nothing reported yet" : `${K.reportedN} of ${D.lines} line-months reported`} tone="var(--green)"
+               title={K.actualT == null ? "No week actual has been typed against any line in view (Look-ahead → Account). Nothing is assumed delivered." : `${grp(K.actualT)} t reported delivered — the sum of the typed week actuals on ${K.reportedN} line-months, through each line's payload. Typed on Look-ahead → Account; a day actual rolls into its week.`} />
+          <Fig value={K.deliveredPct == null ? "—" : K.deliveredPct.toFixed(1) + " %"} label="of plan" sub={K.actualT == null ? "type actuals on Look-ahead → Account" : `${bigNum(K.totT)} t planned in view`} tone="var(--green)"
+               title={K.deliveredPct == null ? "Delivered ÷ planned, once something is reported" : `${grp(K.actualT)} t delivered ÷ ${grp(K.totT)} t planned across every line-month in view (a month nobody has reported counts as not yet delivered)`} />
+          <Fig value={K.actualEur == null ? "—" : "€ " + eurK(K.actualEur)} label="actual € typed" sub={K.actualEur == null ? "no actual cost typed" : (K.planned ? `planned € ${eurK(K.planned.eur)}` : "no planned €")}
+               title={K.actualEur == null ? "The actual cost typed with a week actual (Look-ahead → Account) — none yet" : `€ ${grp(K.actualEur)} typed as actual cost on the account weeks in view`} />
+          <Fig value={K.reportedT > 0 && K.actualT != null ? (K.actualT * 100 / K.reportedT).toFixed(0) + " %" : "—"} label="on reported months" sub="delivered ÷ planned, reported only"
+               title={K.reportedT > 0 && K.actualT != null ? `${grp(K.actualT)} t delivered ÷ ${grp(K.reportedT)} t planned on the ${K.reportedN} line-months that carry an actual — how close to plan the reported months ran` : "Once a month is reported, its delivered ÷ planned"} />
+        </Group>
         <Group title="Volume">
-          <Fig value={grp(K.totT)} label="tonnes" sub="all lines" />
-          <Fig value={grp(K.totTrips)} label="trips" sub="loaded runs, rounded up per month" title="ceil(tonnes ÷ payload) per line-month — the Look-ahead's figure" />
-          <Fig value={grp(K.totKm)} label="truck-km" sub="round trips · baked lines" />
-          <Fig value={K.peakFleet ? grp(K.peakFleet) : "—"} label="peak fleet" sub={K.peakFleet ? `vehicles · ${K.peakFleetMonth}` : "needs baked routes"} title="The largest same-month sum of vehicles needed across the visible lines: trips ÷ (working days × what one vehicle does in a shift)" />
+          <Fig value={bigNum(K.totT)} label="tonnes" sub="all lines in view" title={`${grp(K.totT)} t — the planned quantity of every line-month in view, in tonnes through each line's conversion (m³ and vehicle loads included)`} />
+          <Fig value={bigNum(K.totTrips)} label="trips" sub="loaded runs, rounded up per month" title={`${grp(K.totTrips)} loaded trips — ceil(tonnes ÷ payload) per line-month, the Look-ahead's figure`} />
+          <Fig value={bigNum(K.totKm)} label="truck-km" sub="round trips · baked lines" title={`${grp(K.totKm)} km — trips × the baked route distance (both legs) for the line's vehicle; an unbaked line adds nothing`} />
+          <Fig value={K.peakFleet ? grp(K.peakFleet) : "—"} label="peak fleet" sub={K.peakFleet ? `vehicles · ${K.peakFleetMonth}` : "needs baked routes"} title={K.peakFleet ? `${grp(K.peakFleet)} vehicles in ${K.peakFleetMonth} — the largest same-month sum of vehicles needed across the lines in view: trips ÷ (working days × what one vehicle does in a shift)` : "Vehicles needed come from the baked cycle time — bake the routes on the Routes page"} />
         </Group>
         <Group title="Cost" tone="var(--navy)">
-          <Fig value={K.planned ? "€ " + eurK(K.planned.eur) : "—"} label="planned €" sub={K.planned ? `${K.plannedN} of ${D.lines} priced${K.targetN ? ` · ${K.targetN} at target` : ""}` : "no rate typed, no target set"} title={K.planned ? unitTriple(K.planned) : undefined} tone="var(--navy)" />
-          <Fig value={K.fair ? "€ " + eurK(K.fair.eur) : "—"} label="fair € (model)" sub={K.fair ? `${K.fairN} of ${D.lines} lines` : (cost.index_eur_per_l == null ? "no diesel index" : "no baked lines")} title={K.fair ? unitTriple(K.fair) : undefined} tone="var(--navy)" />
-          <Fig value={K.fair && K.fair.per_t != null ? "€ " + (+K.fair.per_t).toFixed(2) : "—"} label="fair € / t" sub={K.planned && K.planned.per_t != null ? `planned € ${(+K.planned.per_t).toFixed(2)} / t` : "weighted over priced tonnes"} />
-          <Fig value={K.fair && K.fair.per_km != null ? "€ " + (+K.fair.per_km).toFixed(2) : "—"} label="fair € / km" sub={K.fair && K.fair.per_trip != null ? `€ ${grp(K.fair.per_trip)} / trip` : "on the route basis km"} />
+          <Fig value={K.planned ? "€ " + eurK(K.planned.eur) : "—"} label="planned €" sub={K.planned ? `${K.plannedN} of ${D.lines} priced${K.targetN ? ` · ${K.targetN} at target` : ""}` : "no rate typed, no target set"} tone="var(--navy)"
+               title={K.planned ? `€ ${grp(K.planned.eur)} = ${unitTriple(K.planned)} — the route's typed rates summed, or the Config target rate where the route has none (${K.targetN} line-months at target)` : "No route in view has typed rates and no target rate is set on Config → Costing"} />
+          <Fig value={K.fair ? "€ " + eurK(K.fair.eur) : "—"} label="fair € (model)" sub={K.fair ? `${K.fairN} of ${D.lines} lines${plannedVsFair != null ? ` · planned ${plannedVsFair >= 0 ? "+" : ""}${plannedVsFair.toFixed(0)} % vs fair` : ""}` : (cost.index_eur_per_l == null ? "no diesel index" : "no baked lines")} tone="var(--navy)"
+               title={K.fair ? `€ ${grp(K.fair.eur)} = ${unitTriple(K.fair)} — the cost model (Config → Costing · fuel): fuel at the live diesel index, driver and vehicle time over the baked cycle, running cost per km, margin; winter months +${(((factors || {}).fair_price || {}).winter_consumption_uplift_pct) ?? 8} % fuel. A floor for negotiation, never a quote.` : (cost.index_eur_per_l == null ? "The fair price needs the diesel index — Config → Costing · fuel" : "The fair price needs a baked route for the line's vehicle")} />
+          <Fig value={K.fair && K.fair.per_t != null ? "€ " + (+K.fair.per_t).toFixed(2) : "—"} label="fair € / t" sub={K.planned && K.planned.per_t != null ? `planned € ${(+K.planned.per_t).toFixed(2)} / t` : "weighted over priced tonnes"}
+               title={K.fair && K.fair.per_t != null ? `€ ${(+K.fair.per_t).toFixed(2)} per tonne = fair € ${grp(K.fair.eur)} ÷ ${grp(K.fairT || K.totT)} t on the lines the model prices${K.planned && K.planned.per_t != null ? ` · planned € ${(+K.planned.per_t).toFixed(2)}/t the same way` : ""}` : "Fair € per tonne, once the model has a priced line"} />
+          <Fig value={K.fair && K.fair.per_km != null ? "€ " + (+K.fair.per_km).toFixed(2) : "—"} label="fair € / km" sub={K.fair && K.fair.per_trip != null ? `€ ${grp(K.fair.per_trip)} / trip` : "on the route basis km"}
+               title={K.fair && K.fair.per_km != null ? `€ ${(+K.fair.per_km).toFixed(2)} per km = fair € ÷ the km the trips run on each route's basis (round trip unless the route says loaded) · € ${grp(K.fair.per_trip)} per loaded trip${K.planned && K.planned.per_km != null ? ` · planned € ${(+K.planned.per_km).toFixed(2)}/km, € ${grp(K.planned.per_trip)}/trip` : ""}` : "Fair € per km, once the model has a priced line"} />
         </Group>
         <Group title="Carbon" tone="var(--green)">
-          <Fig value={K.totCo2.toFixed(1)} label="tCO₂e" sub="baked lines" tone="var(--green)" />
-          <Fig value={K.intensity == null ? "—" : K.intensity.toFixed(1)} label="kg / tonne" sub="over baked tonnes" />
-          <Fig value={grp(K.totTkm)} label="t·km" sub="route basis" />
-          <Fig value={K.peakMonth} label="peak month" sub="by tonnage" />
+          <Fig value={K.totCo2 >= 1e4 ? bigNum(K.totCo2) : K.totCo2.toFixed(1)} label="tCO₂e" sub="baked lines" tone="var(--green)" title={`${grp(K.totCo2, 1)} t CO₂e — km × each vehicle's DEFRA-based kg CO₂e/km (factors.json), on the baked lines only`} />
+          <Fig value={K.intensity == null ? "—" : K.intensity.toFixed(1)} label="kg / tonne" sub="over baked tonnes" title={K.intensity == null ? "Needs a baked line" : `${K.intensity.toFixed(2)} kg CO₂e per tonne moved — tCO₂e ÷ the tonnes on baked lines (the unbaked ones have no km)`} />
+          <Fig value={bigNum(K.totTkm)} label="t·km" sub="route basis" title={`${grp(K.totTkm)} tonne-kilometres — tonnes × the route's basis km, baked lines`} />
+          <Fig value={K.peakMonth} label="peak month" sub={K.peakMonthT ? `${bigNum(K.peakMonthT)} t` : "by tonnage"} title={K.peakMonthT ? `${K.peakMonth}: ${grp(K.peakMonthT)} t planned — the busiest month in view` : "The month with the most planned tonnes"} />
         </Group>
       </div>
 
@@ -313,37 +433,43 @@ function Dashboard({ meta, initialData }){
 
       <div className="grid lg:grid-cols-3 gap-4">
         <div className="card p-4 lg:col-span-2">
-          <div className="text-sm font-semibold text-slate-700 mb-1">Material demand over time <span className="text-slate-400 font-normal">({unitLabel})</span></div>
-          <ChartCanvas config={demandCfg} height={260} />
+          <div className="text-sm font-semibold text-slate-700 mb-1 chart-title">Material demand over time <span className="text-slate-400 font-normal">({unitLabel})</span></div>
+          <ChartCanvas config={demandCfg} height={wall ? 320 : 260} />
         </div>
         <div className="card p-4">
-          <div className="text-sm font-semibold text-slate-700 mb-1">Cost over time <span className="text-slate-400 font-normal">(€ · planned vs fair)</span></div>
-          <ChartCanvas config={costCfg} height={260} />
+          <div className="text-sm font-semibold text-slate-700 mb-1 chart-title">Delivered against plan <span className="text-slate-400 font-normal">(t · reported actuals)</span></div>
+          <ChartCanvas config={progressCfg} height={wall ? 320 : 260} />
         </div>
         <div className="card p-4">
-          <div className="text-sm font-semibold text-slate-700 mb-1">Trips over time</div>
-          <ChartCanvas config={tripsCfg} height={220} />
+          <div className="text-sm font-semibold text-slate-700 mb-1 chart-title">Cost over time <span className="text-slate-400 font-normal">(€ · planned vs fair)</span></div>
+          <ChartCanvas config={costCfg} height={wall ? 280 : 220} />
         </div>
         <div className="card p-4">
-          <div className="text-sm font-semibold text-slate-700 mb-1">Vehicles needed over time <span className="text-slate-400 font-normal">(baked lines)</span></div>
-          <ChartCanvas config={fleetCfg} height={220} />
+          <div className="text-sm font-semibold text-slate-700 mb-1 chart-title">Trips over time</div>
+          <ChartCanvas config={tripsCfg} height={wall ? 280 : 220} />
         </div>
         <div className="card p-4">
-          <div className="text-sm font-semibold text-slate-700 mb-1">Carbon over time <span className="text-slate-400 font-normal">(tCO₂e)</span></div>
-          <ChartCanvas config={co2Cfg} height={220} />
+          <div className="text-sm font-semibold text-slate-700 mb-1 chart-title">Vehicles needed over time <span className="text-slate-400 font-normal">(baked lines)</span></div>
+          <ChartCanvas config={fleetCfg} height={wall ? 280 : 220} />
         </div>
         <div className="card p-4">
-          <div className="text-sm font-semibold text-slate-700 mb-1">Material split <span className="text-slate-400 font-normal">({unitLabel})</span></div>
-          <ChartCanvas config={splitCfg} height={240} />
+          <div className="text-sm font-semibold text-slate-700 mb-1 chart-title">Carbon over time <span className="text-slate-400 font-normal">(tCO₂e)</span></div>
+          <ChartCanvas config={co2Cfg} height={wall ? 280 : 220} />
         </div>
-        <div className="card p-4 lg:col-span-2">
-          <div className="text-sm font-semibold text-slate-700 mb-1">Top routes by tonnage</div>
-          <ChartCanvas config={topCfg} height={240} />
+        <div className="card p-4">
+          <div className="text-sm font-semibold text-slate-700 mb-1 chart-title">Material split <span className="text-slate-400 font-normal">({unitLabel})</span></div>
+          <ChartCanvas config={splitCfg} height={wall ? 280 : 240} />
+        </div>
+        <div className="card p-4">
+          <div className="text-sm font-semibold text-slate-700 mb-1 chart-title">Top routes by tonnage <span className="text-slate-400 font-normal">· click a bar to focus</span></div>
+          <ChartCanvas config={topCfg} height={wall ? 280 : 240} />
         </div>
       </div>
 
-      <div className="card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-700">Route planning detail <span className="text-slate-400 font-normal">· click a column to sort · € as total, and €/t · €/trip · €/km on hover</span></div>
+      <DashboardStockChart meta={meta} weekNow={week && week.today_week} wall={wall} tick={tick} />
+
+      {!wall && <div className="card overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-700">Route planning detail <span className="text-slate-400 font-normal">· click a row to focus the charts on that line · click a column to sort · € as total, and €/t · €/trip · €/km on hover</span></div>
         <div className="overflow-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs">
@@ -354,6 +480,7 @@ function Dashboard({ meta, initialData }){
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("dist")} title="km per trip on the route's basis (round trip unless the route says loaded)">km/trip{arrow("dist")}</th>
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("cycleH")}>Cycle h{arrow("cycleH")}</th>
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("t")}>Tonnes{arrow("t")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("deliveredPct")} title="Reported week actuals ÷ planned, over the months in view">Delivered{arrow("deliveredPct")}</th>
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("trips")}>Trips{arrow("trips")}</th>
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("km")}>Truck-km{arrow("km")}</th>
                 <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("co2")}>tCO₂e{arrow("co2")}</th>
@@ -365,7 +492,7 @@ function Dashboard({ meta, initialData }){
             </thead>
             <tbody>
               {sortedRoutes.map(r => (
-                <tr key={r.key} className="border-t border-slate-100 hover:bg-slate-50">
+                <tr key={r.key} onClick={() => pick(r.key)} className={"border-t border-slate-100 cursor-pointer " + (r.key === lineKey ? "bg-[rgba(0,55,135,.06)]" : "hover:bg-slate-50")} title={r.key === lineKey ? "Click to show every line again" : "Click to focus the charts and figures on this line"}>
                   <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{r.route_id}<div className="text-[10px] text-slate-400 font-normal">{r.origin || "—"} → {r.dest || "—"} · {r.vehicle_short || vehLabel(r.vehicle)}</div></td>
                   <td className="px-3 py-2 text-slate-500 whitespace-nowrap">
                     {r.discipline
@@ -377,6 +504,7 @@ function Dashboard({ meta, initialData }){
                   <td className={numTd}>{r.dist == null ? <span className="text-slate-300" title="No cached geometry for this vehicle — bake this route">—</span> : (+r.dist).toFixed(1)}</td>
                   <td className={numTd}>{r.cycleH == null ? <span className="text-slate-300" title="Cycle time needs baked geometry for this vehicle">not baked</span> : r.cycleH.toFixed(2)}</td>
                   <td className={numTd}>{grp(r.t)}</td>
+                  <td className={numTd} title={r.actualT == null ? "No week actual reported on this line in the months in view" : `${grp(r.actualT)} t reported of ${grp(r.t)} t planned`}>{r.deliveredPct == null ? <span className="text-slate-300">—</span> : <span style={{ color: "var(--green)" }}>{r.deliveredPct.toFixed(0)} %</span>}</td>
                   <td className={numTd}>{grp(r.trips)}</td>
                   <td className={numTd}>{r.baked ? grp(r.km) : <span className="text-slate-300">—</span>}</td>
                   <td className={numTd}>{r.baked ? r.co2.toFixed(1) : <span className="text-slate-300">—</span>}</td>
@@ -386,28 +514,141 @@ function Dashboard({ meta, initialData }){
                   <td className={numTd}>{r.fairPerT == null ? <span className="text-slate-300">—</span> : (+r.fairPerT).toFixed(2)}</td>
                 </tr>
               ))}
-              {sortedRoutes.length === 0 && <tr><td colSpan="13" className="px-3 py-6 text-center text-slate-400">No routes in range.</td></tr>}
+              {sortedRoutes.length === 0 && <tr><td colSpan="14" className="px-3 py-6 text-center text-slate-400">No routes in range.</td></tr>}
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
 
-      <DashboardStock meta={meta} />
-
-      <p className="text-xs text-slate-400 px-1">Planning estimates only — no live deliveries or tracking. Every figure on this page comes from <code>/api/costing/lines</code>, the same functions the Look-ahead uses: trips = tonnes ÷ planning payload rounded up per line-month; km, cycle and vehicles from the baked HERE route for the line's vehicle (an unbaked line has none and is excluded from those totals, never estimated); CO₂e = km × the vehicle's DEFRA-based factor. Planned € = the route's typed rates (summed), or the Config target rate where the route has none. Fair € = the cost model on Config → Costing · fuel — a floor for negotiation, never a quote. Peak fleet = the largest same-month sum of vehicles needed (trips ÷ working days ÷ what one vehicle does in a shift).</p>
+      {!wall && <p className="text-xs text-slate-400 px-1">Planning estimates and typed actuals — no live tracking. Every planning figure on this page comes from <code>/api/costing/lines</code>, the same functions the Look-ahead uses: trips = tonnes ÷ planning payload rounded up per line-month; km, cycle and vehicles from the baked HERE route for the line's vehicle (an unbaked line has none and is excluded from those totals, never estimated); CO₂e = km × the vehicle's DEFRA-based factor. Planned € = the route's typed rates (summed), or the Config target rate where the route has none. Fair € = the cost model on Config → Costing · fuel — a floor for negotiation, never a quote. Peak fleet = the largest same-month sum of vehicles needed (trips ÷ working days ÷ what one vehicle does in a shift). Delivered = the week actuals typed on Look-ahead → Account (a day actual rolls into its week); a week nobody reported counts as nothing. Today and this week come from the Look-ahead's own read.</p>}
     </div>
   );
 }
 
-// ---- 10 Sep: stock held, READ-ONLY, on the Dashboard ---------------------------------
-// The forecast balance of every stockpile, week by week, for this month and the next.
-// Nothing is typed here: consumption goes in on the Look-ahead's Account view (last
-// week, one box per stockpile). In = typed week actuals delivered there; a week nobody
-// reported counts as nothing, not as a share of the forecast. Over capacity is a flag.
-function DashboardStock({ meta }){
+// ---- 11 Sep: TODAY on the Dashboard ---------------------------------------------------
+// What moves today, this week to date, last week's account, and a small map of this
+// week's lines — from ONE read of /api/lookahead (bucket=commit, the week that holds
+// today; Tark Tee off). Nothing is derived here: the days carry the server's tonnes,
+// trips and vehicles; the account carries its own totals. Cost stays off the map (the
+// map's hover shows quantity and trips only, as on the Look-ahead).
+function DashboardToday({ meta, week, err, wall }){
+  const lines = (week && week.commit && week.commit.lines) || [];
+  const today = (week && week.today) || new Date().toISOString().slice(0, 10);
+  const acct = (week && week.account) || null;
+  const T = useMemo(() => {
+    const out = { rows: [], t: 0, trips: 0, veh: 0, km: 0, lines: 0, confirmed: 0, reported: 0, actualT: 0,
+                  wkPlanT: 0, wkToDateT: 0, wkToDateActT: 0, wkToDateReported: 0, wkToDateDays: 0, wkTrips: 0 };
+    lines.forEach(l => {
+      const ctx = l.context || {};
+      const wd = l.week_derived || {};
+      out.wkPlanT += wd.tonnes || 0; out.wkTrips += wd.trips || 0;
+      (l.days || []).forEach(d => {
+        const dv = d.derived || {};
+        if(d.day_date <= today && (d.planned_qty || 0) > 0){
+          out.wkToDateT += dv.tonnes || 0; out.wkToDateDays += 1;
+          if(d.actual_qty != null){ out.wkToDateReported += 1; out.wkToDateActT += (dv.tonnes || 0) * (d.planned_qty > 0 ? d.actual_qty / d.planned_qty : 0); }
+        }
+        if(d.day_date !== today || !((d.planned_qty || 0) > 0 || d.actual_qty != null)) return;
+        out.rows.push({ key: `${l.route_id}|${l.discipline || ""}|${l.section_id || ""}`, route_id: l.route_id, discipline: l.discipline, ipt: ctx.ipt || l.ipt,
+                        origin: ctx.origin_name, dest: ctx.dest_name, material: l.material_type, vehicle: ctx.vehicle_short || l.vehicle_type,
+                        qty: d.planned_qty, unit: l.unit, tonnes: dv.tonnes, trips: dv.trips, vehicles: dv.vehicles, km: dv.km_day,
+                        status: d.status, actual: d.actual_qty, baked: !!ctx.baked, flags: ctx.flags || [] });
+        out.t += dv.tonnes || 0; out.trips += dv.trips || 0; out.veh += dv.vehicles || 0; out.km += dv.km_day || 0; out.lines += 1;
+        if(d.status === "confirmed") out.confirmed += 1;
+        if(d.actual_qty != null) out.reported += 1;
+      });
+    });
+    out.rows.sort((a, b) => (b.tonnes || 0) - (a.tonnes || 0));
+    return out;
+  }, [lines, today]);
+  const cw = (week && week.commit_week) || {};
+  const dayName = (iso) => { const d = new Date(iso + "T00:00:00"); return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getDay()]; };
+  const Big = ({ value, label, sub, title, tone }) => (
+    <div title={title} className="min-w-0 cursor-help">
+      <div className="kpi-num font-bold whitespace-nowrap" style={{ color: tone || "var(--navy-deep)", fontSize: wall ? "clamp(1.6rem, 2.4vw, 3rem)" : "clamp(1.3rem, 1.8vw, 2rem)", lineHeight: 1.1 }}>{value}</div>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mt-0.5 fig-label">{label}</div>
+      {sub && <div className="text-[11px] text-slate-400 fig-sub">{sub}</div>}
+    </div>
+  );
+  const Bar = ({ pct, tone }) => (
+    <div className="h-2 rounded-full bg-slate-100 overflow-hidden mt-1.5"><div className="h-2 rounded-full" style={{ width: `${Math.max(0, Math.min(100, pct || 0))}%`, background: tone || "var(--green)" }} /></div>
+  );
+  const acctReportedPlanT = acct ? (acct.rows || []).filter(r => r.actual_qty != null).reduce((s, r) => s + (r.planned_t || 0), 0) : 0;
+  const acctPct = acct && acct.reported > 0 && acctReportedPlanT > 0 ? acct.actual_t * 100 / acctReportedPlanT : null;
+  const wkPct = T.wkToDateT > 0 && T.wkToDateReported > 0 ? T.wkToDateActT * 100 / T.wkToDateT : null;
+  const statusChip = (s, actual) => actual != null
+    ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: "rgba(3,158,134,.12)", color: "var(--green)" }} title="An actual has been typed for today">reported</span>
+    : s === "confirmed" ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: "rgba(0,55,135,.1)", color: "var(--navy)" }} title="Confirmed on the Look-ahead">confirmed</span>
+    : s === "edited" ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700" title="Edited on the Look-ahead, not yet confirmed">edited</span>
+    : <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500" title="Derived from the week — not yet confirmed on the Look-ahead">planned</span>;
+  return (
+    <div className="grid lg:grid-cols-5 gap-3">
+      <div className="card p-4 lg:col-span-2 flex flex-col">
+        <div className="flex items-baseline justify-between gap-2 flex-wrap">
+          <div className="text-[10px] font-semibold uppercase tracking-wide fig-group" style={{ color: "var(--navy)" }}>Today · {dayName(today)} {longDate(today)}</div>
+          <div className="text-[11px] text-slate-400">{cw.from ? `week ${cw.week_index} · ${longDate(cw.from)} – ${longDate(cw.to)}` : ""}</div>
+        </div>
+        {err && <div className="text-xs mt-2" style={{ color: "var(--red)" }}>{err}</div>}
+        {!week && !err && <div className="text-sm text-slate-400 mt-3">Loading this week…</div>}
+        {week && <>
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-x-4 gap-y-3 mt-3">
+            <Big value={T.lines ? bigNum(T.t) : "—"} label="tonnes" sub={T.lines ? `today · ${T.lines} line${T.lines === 1 ? "" : "s"} · ${T.confirmed} confirmed` : (lines.length ? "nothing planned today" : "no lines this week")}
+                 title={T.lines ? `${grp(T.t)} t planned for today across ${T.lines} lines — each day's planned quantity through the line's payload, from the Look-ahead` : "No line has a planned quantity on today's date in the commit week"} />
+            <Big value={T.lines ? grp(T.trips) : "—"} label="trips" sub={T.lines ? `today · ${grp(T.km)} km` : "—"} title={T.lines ? `${grp(T.trips)} loaded trips today (ceil of tonnes ÷ payload per line) · ${grp(T.km)} truck-km on the baked lines` : "—"} />
+            <Big value={T.lines ? grp(T.veh) : "—"} label="vehicles" sub={T.lines ? "on the road today" : "—"} tone="var(--navy)" title={T.lines ? `${grp(T.veh)} vehicles needed today — per line, trips ÷ what one vehicle does in a shift on that route, summed (an unbaked line needs an unknown number)` : "—"} />
+            <Big value={T.lines ? `${T.reported} / ${T.lines}` : "—"} label="reported" sub="day actuals typed today" title="Lines with a day actual typed for today on the Look-ahead" />
+          </div>
+          <div className="mt-4 grid sm:grid-cols-2 gap-x-6 gap-y-3 text-xs text-slate-600">
+            <div title={wkPct != null ? `${grp(T.wkToDateActT)} t reported against ${grp(T.wkToDateT)} t planned on the ${T.wkToDateReported} reported line-days up to today` : "The week's planned tonnes to today; the bar fills as day actuals are typed"}>
+              <div className="flex justify-between"><span className="font-semibold text-slate-700">This week to date</span><span className="tabular-nums">{wkPct != null ? `${wkPct.toFixed(0)} % of plan` : `${bigNum(T.wkToDateT)} t planned`}</span></div>
+              <Bar pct={wkPct != null ? wkPct : 0} />
+              <div className="text-[11px] text-slate-400 mt-1">{bigNum(T.wkPlanT)} t · {grp(T.wkTrips)} trips planned this week{T.wkToDateReported ? ` · ${T.wkToDateReported} of ${T.wkToDateDays} line-days reported` : " · no day actuals yet"}</div>
+            </div>
+            <div title={acct && acct.week ? (acct.reported ? `${grp(acct.actual_t)} t reported against ${grp(acctReportedPlanT)} t planned on the ${acct.reported} reported lines · ${acct.delivered} of ${acct.lines} held (≥ ${Math.round((acct.hold_band || 0.98) * 100)} %)` : "Nothing reported for last week yet — type actuals on Look-ahead → Account") : "No account week yet"}>
+              <div className="flex justify-between"><span className="font-semibold text-slate-700">Last week{acct && acct.week ? ` · W${acct.week.week_index}` : ""}</span><span className="tabular-nums">{acctPct != null ? `${acctPct.toFixed(0)} % of plan` : (acct && acct.week ? "not reported" : "—")}</span></div>
+              <Bar pct={acctPct != null ? acctPct : 0} tone="var(--navy)" />
+              <div className="text-[11px] text-slate-400 mt-1">{acct && acct.week ? `${acct.reported} of ${acct.lines} lines reported · ${acct.delivered} held to plan${acct.shortfall ? ` · ${grp(acct.shortfall)} short` : ""}` : "—"}</div>
+            </div>
+          </div>
+          <div className="mt-3 flex-1 overflow-auto" style={{ maxHeight: wall ? 260 : 190 }}>
+            {T.rows.length === 0 ? <div className="text-xs text-slate-400 py-2">{lines.length ? "No deliveries planned for today." : "No confirmed lines in this week's Look-ahead."}</div> : (
+            <table className="w-full text-xs">
+              <thead className="text-slate-400"><tr><th className="text-left font-semibold py-1">Line</th><th className="text-left font-semibold py-1">Material</th><th className="text-right font-semibold py-1">t</th><th className="text-right font-semibold py-1">trips</th><th className="text-right font-semibold py-1">veh</th><th className="text-right font-semibold py-1"></th></tr></thead>
+              <tbody>
+                {T.rows.map(r => (
+                  <tr key={r.key} className="border-t border-slate-100" title={`${grp(r.qty)} ${unitLbl(r.unit)} planned today${r.actual != null ? ` · ${grp(r.actual)} ${unitLbl(r.unit)} reported` : ""}${r.baked ? "" : " · route not baked — no km or vehicles"}`}>
+                    <td className="py-1 pr-2 whitespace-nowrap"><span className="font-semibold text-slate-800">{r.route_id}</span>{r.discipline && <span className="ml-1 text-[10px] text-slate-400">{r.discipline}</span>}<div className="text-[10px] text-slate-400">{r.origin || "—"} → {r.dest || "—"} · {r.vehicle}</div></td>
+                    <td className="py-1 pr-2 text-slate-600">{r.material}</td>
+                    <td className="py-1 text-right tabular-nums font-semibold">{grp(r.tonnes)}</td>
+                    <td className="py-1 text-right tabular-nums">{r.trips == null ? "—" : grp(r.trips)}</td>
+                    <td className="py-1 text-right tabular-nums">{r.vehicles == null ? <span className="text-slate-300" title="not baked">—</span> : r.vehicles}</td>
+                    <td className="py-1 text-right">{statusChip(r.status, r.actual)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>)}
+          </div>
+        </>}
+      </div>
+      <div className="card p-0 overflow-hidden lg:col-span-3">
+        {week ? <CommitMap meta={meta} bucket="commit" tick={0} lines={lines} title="This week's lines on the map" height={wall ? 460 : 380} flush />
+              : <div className="p-6 text-sm text-slate-400">Loading the map…</div>}
+      </div>
+    </div>
+  );
+}
+
+// ---- 11 Sep: stockpile capacity, a bar chart (replaces the 10 Sep stock table) ---------
+// One bar per stockpile: how full it is at the end of the chosen week, as a % of its
+// recorded capacity, red past 100 %. The figures are the same /stockpiles read model
+// (balance = opening + typed inbound − typed consumption; a week nobody reported counts as
+// nothing). A stockpile with NO capacity recorded cannot be a %, so it is listed beside
+// the chart with its balance — never drawn as 0 % or as full. Pick the week with the chips.
+function DashboardStockChart({ meta, weekNow, wall, tick }){
   const { months } = meta;
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
+  const [wk, setWk] = useState(null);
   const now = new Date();
   const thisM = Math.max(1, Math.min(months.count, (now.getFullYear() - months.start_year) * 12 + now.getMonth() + 1));
   const toM = Math.min(months.count, thisM + 1);
@@ -415,66 +656,76 @@ function DashboardStock({ meta }){
     let live = true;
     fetch(`${API}/stockpiles?from_month=${thisM}&to_month=${toM}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(j => { if(live) setData(j); })
+      .then(j => { if(live){ setData(j); setErr(""); } })
       .catch(e => { if(live) setErr(`Couldn't load stock (${e}).`); });
     return () => { live = false; };
-  }, [thisM, toM]);
+  }, [thisM, toM, tick]);
   const sps = (data && data.stockpiles) || [];
   const cols = [];
   sps.forEach(sp => (sp.weeks || []).forEach(w => { const k = `${w.month_index}|${w.week_index}`; if(!cols.some(c => c.k === k)) cols.push({ k, m: w.month_index, w: w.week_index }); }));
   cols.sort((a, b) => a.m - b.m || a.w - b.w);
+  const nowKey = weekNow ? `${weekNow.month_index}|${weekNow.week_index}` : null;
+  const selKey = wk && cols.some(c => c.k === wk) ? wk : (cols.some(c => c.k === nowKey) ? nowKey : (cols[0] || {}).k);
+  const cellOf = (sp) => { const c = cols.find(x => x.k === selKey); return c ? (sp.weeks || []).find(x => x.month_index === c.m && x.week_index === c.w) : null; };
+  const withCap = sps.filter(sp => sp.capacity_qty != null && sp.capacity_qty > 0);
+  const noCap = sps.filter(sp => !(sp.capacity_qty != null && sp.capacity_qty > 0));
+  const bars = withCap.map(sp => { const c = cellOf(sp) || {}; const bal = c.balance_end || 0; return { sp, c, bal, pct: bal * 100 / sp.capacity_qty, over: !!c.over }; });
+  const maxPct = Math.max(120, ...bars.map(b => b.pct));
+  const unitOf = (sp) => sp.capacity_unit === "m3" ? "m³" : (sp.capacity_unit || "");
+  const capLine = { id: "capLine", afterDatasetsDraw: (chart) => {
+    const x = chart.scales.x, ctx = chart.ctx; if(!x) return;
+    const px = x.getPixelForValue(100);
+    ctx.save(); ctx.strokeStyle = "#BF2E55"; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(px, chart.chartArea.top); ctx.lineTo(px, chart.chartArea.bottom); ctx.stroke();
+    ctx.fillStyle = "#BF2E55"; ctx.font = "600 10px Inter, system-ui, sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("capacity", px, chart.chartArea.top - 4); ctx.restore();
+  } };
+  const cfg = { type: "bar",
+    data: { labels: bars.map(b => b.sp.name), datasets: [{ label: "% of capacity", data: bars.map(b => Math.round(b.pct * 10) / 10),
+              backgroundColor: bars.map(b => b.over ? "#BF2E55" : b.pct >= 90 ? "#FFC101" : "#039E86"), borderWidth: 0, borderRadius: 4, barPercentage: 0.7 }] },
+    options: { indexAxis: "y", responsive: true, maintainAspectRatio: false, layout: { padding: { top: 14 } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        title: (items) => items.length ? bars[items[0].dataIndex].sp.name : "",
+        label: (item) => { const b = bars[item.dataIndex]; const u = unitOf(b.sp); return [
+          `${b.pct.toFixed(0)} % full · ${fmt(b.bal, b.sp.capacity_unit)} of ${fmt(b.sp.capacity_qty, b.sp.capacity_unit)} ${u}`,
+          `in ${fmt(b.c.inbound || 0, b.sp.capacity_unit)} · out ${fmt(b.c.consumed || 0, b.sp.capacity_unit)} this week`,
+          b.over ? `OVER capacity by ${fmt(-(b.c.remaining || 0), b.sp.capacity_unit)} ${u}` : `room for ${fmt(b.c.remaining == null ? 0 : b.c.remaining, b.sp.capacity_unit)} ${u} more` ]; } } } },
+      scales: { x: { min: 0, max: Math.ceil(maxPct / 10) * 10, grid: { display: false }, ticks: { font: { size: wall ? 12 : 10 }, callback: (v) => v + " %" } },
+                y: { ticks: { font: { size: wall ? 13 : 11 } } } } },
+    plugins: [capLine] };
+  const c = cols.find(x => x.k === selKey);
   return (
-    <div>
-      <div className="flex items-baseline justify-between mb-2">
-        <h3 className="text-sm font-bold text-[color:var(--navy-deep)]">Stock held · {monthLabelAbs(thisM, months.start_year)} + {monthLabelAbs(toM, months.start_year)}</h3>
-        <span className="text-[11px] text-slate-400">balance at each week's end · in = typed week actuals delivered there, a week nobody reported counts as nothing · consumption is typed on Look-ahead → Account</span>
+    <div className="card p-4">
+      <div className="flex items-baseline justify-between gap-2 flex-wrap mb-2">
+        <div className="text-sm font-semibold text-slate-700 chart-title">Stockpile capacity <span className="text-slate-400 font-normal">· how full each stockpile is at the end of {c ? `${MONTHS[(c.m - 1) % 12]} week ${c.w}` : "the week"}</span></div>
+        <div className="flex flex-wrap gap-1">
+          {cols.map(x => <button key={x.k} type="button" onClick={() => setWk(x.k)} className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + (x.k === selKey ? "text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")} style={x.k === selKey ? { background: "var(--navy)" } : undefined} title={x.k === nowKey ? "this week" : undefined}>{x.w === 1 ? MONTHS[(x.m - 1) % 12] + " " : ""}W{x.w}{x.k === nowKey ? " · now" : ""}</button>)}
+        </div>
       </div>
       {err && <div className="text-xs mb-2" style={{ color: "var(--red)" }}>{err}</div>}
       {!data ? <div className="p-4 text-center text-slate-400 text-sm">Loading…</div>
         : sps.length === 0 ? (
-        <div className="bg-white rounded-xl border border-slate-200 p-4 text-center text-slate-500 text-sm">
+        <div className="p-4 text-center text-slate-500 text-sm">
           No locations that hold stock yet. Set a type of Stockpile, Site, Compound or Railhead on the Locations page, and give it a capacity there.
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-auto">
-          <table className="text-xs" style={{ minWidth: `${260 + cols.length * 92}px` }}>
-            <thead className="bg-slate-50 text-slate-500">
-              <tr>
-                <th className="px-3 py-2 text-left font-semibold border-r border-slate-200">Stockpile</th>
-                {cols.map(c => <th key={c.k} className="px-2 py-2 text-right font-semibold whitespace-nowrap">{c.w === 1 ? MONTHS[(c.m - 1) % 12] + " " : ""}W{c.w}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {sps.map(sp => (
-                <tr key={sp.location_id} className="border-t border-slate-100 align-top">
-                  <td className="px-3 py-2 border-r border-slate-100 whitespace-nowrap">
-                    <div className="font-medium text-slate-800">{sp.name}</div>
-                    <div className="text-[10px] text-slate-400">{sp.loc_type} · {sp.location_id}</div>
-                    <div className="text-[11px] text-slate-600 tabular-nums">
-                      {/* '—', never 0. No capacity recorded is not zero capacity. */}
-                      max {sp.capacity_qty == null ? "—" : `${fmt(sp.capacity_qty, sp.capacity_unit)} ${sp.capacity_unit === "m3" ? "m³" : sp.capacity_unit}`}
-                      {" · opening "}{fmt(sp.opening_qty || 0, sp.capacity_unit)}
-                    </div>
-                  </td>
-                  {cols.map(c => {
-                    const cell = (sp.weeks || []).find(x => x.month_index === c.m && x.week_index === c.w);
-                    if(!cell) return <td key={c.k} className="px-2 py-2 text-right text-slate-300">—</td>;
-                    return (
-                      <td key={c.k} className={"px-2 py-2 text-right tabular-nums " + (cell.over ? "bg-[rgba(191,46,85,.07)]" : "")}>
-                        <div className="font-semibold" style={{ color: cell.over ? "var(--red)" : "#1e293b" }}>{fmt(cell.balance_end || 0, sp.capacity_unit)}</div>
-                        <div className="text-[10px] text-slate-500 leading-tight">in {fmt(cell.inbound || 0, sp.capacity_unit)} · out {fmt(cell.consumed || 0, sp.capacity_unit)}</div>
-                        <div className="text-[10px] leading-tight" style={{ color: cell.over ? "var(--red)" : "#64748b" }}>
-                          {cell.remaining == null ? "no cap" : cell.over ? `OVER by ${fmt(-cell.remaining, sp.capacity_unit)}` : `rem ${fmt(cell.remaining, sp.capacity_unit)}`}
-                        </div>
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="grid lg:grid-cols-4 gap-4">
+          <div className={noCap.length ? "lg:col-span-3" : "lg:col-span-4"}>
+            {bars.length ? <ChartCanvas config={cfg} height={Math.max(wall ? 220 : 160, 36 * bars.length + 40)} />
+                         : <div className="text-sm text-slate-400 p-4">No stockpile has a capacity recorded — set one on the Locations page to see how full it is.</div>}
+          </div>
+          {noCap.length > 0 && <div className="text-xs text-slate-600">
+            {/* '—', never 0. No capacity recorded is not zero capacity. */}
+            <div className="font-semibold text-slate-700 mb-1">No capacity recorded</div>
+            {noCap.map(sp => { const cell = cellOf(sp) || {}; return (
+              <div key={sp.location_id} className="py-1 border-t border-slate-100" title={`${sp.loc_type} · ${sp.location_id} · in ${fmt(cell.inbound || 0, sp.capacity_unit)} · out ${fmt(cell.consumed || 0, sp.capacity_unit)}`}>
+                <span className="font-medium text-slate-800">{sp.name}</span> <span className="tabular-nums">{fmt(cell.balance_end || 0, sp.capacity_unit)} {unitOf(sp)}</span> <span className="text-slate-400">· max —</span>
+              </div>); })}
+            <div className="text-[10px] text-slate-400 mt-1">Give these a capacity on the Locations page and they join the chart.</div>
+          </div>}
         </div>
       )}
+      <div className="text-[11px] text-slate-400 mt-2">balance at the week's end = opening + typed week actuals delivered there − typed consumption · a week nobody reported counts as nothing · consumption is typed on Look-ahead → Account · red past capacity, amber from 90 %</div>
     </div>
   );
 }
@@ -789,7 +1040,7 @@ function Portal({ role, who, meta, metaErr, vehLang }){
       </aside>
 
       <main className="flex-1 min-h-0 overflow-auto">
-        {page === "dashboard" && <Dashboard meta={meta} />}
+        {page === "dashboard" && <Dashboard meta={meta} onWall={(on) => setRailOpen(!on)} />}
         {page === "submit" && <Matrix meta={meta} who={who} editTarget={editTarget} vehLang={vehLang} access={role} />}
         {page === "forecasts" && <Forecasts meta={meta} who={who} access={role} onEdit={editInMatrix} onChanged={refreshPending} />}
         {page === "lookahead" && <LookAhead meta={meta} who={who} access={role} />}
@@ -3010,7 +3261,7 @@ function LookAhead({ meta, who, access, initialPage, initialView }){
 // the Look-ahead — moving to Account and back does not rebuild it. Lines take the IPT's
 // palette-C colour; ends are dots (navy origin, red destination); hover names the line
 // with its week figures. An unbaked route is listed under the map, not drawn.
-function CommitMap({ meta, bucket, tick, lines }){
+function CommitMap({ meta, bucket, tick, lines, title, height, flush }){
   const mapDiv = useRef(null);
   const mapObj = useRef(null);
   const [geo, setGeo] = useState(null);
@@ -3038,8 +3289,16 @@ function CommitMap({ meta, bucket, tick, lines }){
   useEffect(() => {
     if(mapObj.current || !mapDiv.current || !window.mapboxgl) return;
     window.mapboxgl.accessToken = meta.mapbox_token;
-    const m = new window.mapboxgl.Map({ container: mapDiv.current, style: "mapbox://styles/mapbox/light-v11",
-                                        center: [24.7, 58.5], zoom: 6.5, attributionControl: true });
+    let m;
+    try {
+      m = new window.mapboxgl.Map({ container: mapDiv.current, style: "mapbox://styles/mapbox/light-v11",
+                                    center: [24.7, 58.5], zoom: 6.5, attributionControl: true });
+    } catch(e) {
+      // 11 Sep: the Dashboard mounts this too — a map that cannot start (no token, no
+      // WebGL) must never take the page down with it
+      setErr(`The map could not start (${e && e.message ? e.message : e}).`);
+      return;
+    }
     m.addControl(new window.mapboxgl.NavigationControl({ showCompass: false }), "top-right");
     m.on("load", () => {
       m.addSource("la-routes", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -3089,11 +3348,13 @@ function CommitMap({ meta, bucket, tick, lines }){
   }, [geo, ready, byRoute]);
 
   const unbaked = (geo && geo.routes || []).filter(r => !r.geometry).map(r => r.route_id);
+  // 11 Sep: the Dashboard mounts this too (`flush` inside its own card, its own title
+  // and height); the Look-ahead's rendering is unchanged by the defaults.
   return (
-    <div className="mt-4">
-      <div className="text-sm font-semibold text-slate-700 mb-2">This week's movements</div>
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <div ref={mapDiv} style={{ height: 380 }} />
+    <div className={flush ? "" : "mt-4"}>
+      <div className={"text-sm font-semibold text-slate-700 mb-2" + (flush ? " px-4 pt-3 chart-title" : "")}>{title || "This week's movements"}</div>
+      <div className={flush ? "" : "bg-white rounded-xl border border-slate-200 overflow-hidden"}>
+        <div ref={mapDiv} style={{ height: height || 380 }} />
         <div className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100 flex flex-wrap gap-x-3">
           <span>Baked loaded leg per line, coloured by IPT · navy dot = origin · red dot = destination · hover a line for its week.</span>
           {unbaked.length > 0 && <span className="text-amber-700">Not drawn (no baked route): {unbaked.join(", ")}</span>}
