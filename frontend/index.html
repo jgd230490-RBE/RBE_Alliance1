@@ -1077,7 +1077,7 @@ function vehOption(v, suggested, current){
 }
 
 // ================================================================= Matrix
-function Matrix({ meta, who, editTarget, vehLang, access }){
+function Matrix({ meta, who, editTarget, vehLang, access, initialCost }){
   const { routes, materials, vehicles, units, months, factors,
           material_categories = {}, seasonal_restrictions = [],
           disciplines = [], work_sections = [], planning_vehicles = [] } = meta;
@@ -1190,6 +1190,12 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
   const [vals, setVals] = useState({});
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
+  // 11 Sep pm: the price while you type. POST /api/costing/preview with the cells in
+  // range, debounced, priced by the SAME functions the saved line will be priced with
+  // (costlines.preview). Read-only; a failure blanks the strip and nothing else.
+  // `initialCost` is for the render harness (no effect runs there).
+  const [cost, setCost] = useState(initialCost || null);
+  const [costErr, setCostErr] = useState("");
 
   // default the category from the route's material guess when the route resolves.
   // /api/meta now normalises material_guess to a factors.json category server-side, so
@@ -1280,6 +1286,23 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
       .map(([mi, q]) => [+mi, q])
       .filter(([mi]) => mi >= mLo && mi <= mHi),
     [vals, mLo, mHi]);
+
+  const cellsKey = JSON.stringify(inRange.filter(([, q]) => +q > 0));
+  useEffect(() => {
+    if(initialCost) return;
+    if(!routeId || !vehicle || !inRange.some(([, q]) => +q > 0)){ setCost(null); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      fetch(`${API}/costing/preview`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ route_id: routeId, vehicle_type: vehicle, material_type: material, unit,
+                               cells: inRange.filter(([, q]) => +q > 0).map(([mi, q]) => ({ month_index: mi, quantity: +q })) }) })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(j => { if(live){ setCost(j); setCostErr(""); } })
+        .catch(e => { if(live){ setCost(null); setCostErr(`Couldn't price these cells (${e}).`); } });
+    }, 400);
+    return () => { live = false; clearTimeout(t); };
+  }, [routeId, vehicle, material, unit, cellsKey]);
+  const costCell = useMemo(() => { const m = {}; ((cost && cost.cells) || []).forEach(c => m[c.month_index] = c); return m; }, [cost]);
 
   // One vehicle per line since Phase 2. A load split across two vehicle types is two
   // lines now, which the widened forecasts key makes storable. The old blended payload
@@ -1590,6 +1613,12 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
                         <input type="number" min="0" inputMode="decimal"
                           value={vals[mi] ?? ""} onChange={e => setMonth(mi, e.target.value)} placeholder="0"
                           className="mt-1 w-full border border-slate-300 rounded-lg px-2.5 py-2 outline-none focus:ring-2 focus:ring-[color:var(--blue)]" />
+                        {/* the model's fair € for this cell, from the preview read — never computed here */}
+                        {costCell[mi] && costCell[mi].fair && costCell[mi].fair.eur != null && (
+                          <span className="block mt-0.5 text-[10px] tabular-nums" style={{ color: "var(--navy)" }} data-cell-fair="1"
+                                title={`fair € (model): ${unitTriple(costCell[mi].fair)} · ${grp(costCell[mi].trips)} trips${(costCell[mi].fair.flags || []).includes("WINTER") ? " · winter" : ""}${(costCell[mi].fair.flags || []).includes("THAW") ? " · thaw restrictions may apply" : ""}${costCell[mi].planned && costCell[mi].planned.eur != null ? ` · ${costCell[mi].planned.source === "target" ? "target" : "quote"} € ${grp(costCell[mi].planned.eur)}` : ""}`}>
+                            fair € {grp(costCell[mi].fair.eur)}{(costCell[mi].fair.flags || []).includes("WINTER") ? <span className="text-slate-400"> · w</span> : null}
+                          </span>)}
                       </label>
                     );
                   })}
@@ -1642,6 +1671,28 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
                 <div className={"text-lg font-bold tabular-nums " + (tone === "peak" ? "text-[color:var(--gold)]" : "")}>{value}</div>
               </div>
             ))}
+          </div>
+          {/* 11 Sep pm: the price of what is typed — fair (the model) and planned (quote / target),
+              in € · €/t · €/trip · €/km, from POST /api/costing/preview. The submitter sees
+              the same figures the Look-ahead and the Dashboard will show once this is saved. */}
+          <div className="px-4 py-3 bg-white border-t border-slate-200 flex flex-wrap gap-x-8 gap-y-2 items-start" data-cost-strip="1">
+            {cost && cost.totals && cost.totals.fair && cost.totals.fair.eur != null ? <>
+              <Stat label="Fair € (model) · range" value={"€ " + grp(cost.totals.fair.eur)} tone="var(--navy)" />
+              <Stat label="fair € / t" value={"€ " + (+cost.totals.fair.per_t).toFixed(2)} />
+              <Stat label="fair € / trip" value={cost.totals.fair.per_trip == null ? "—" : "€ " + grp(cost.totals.fair.per_trip)} />
+              <Stat label="fair € / km" value={cost.totals.fair.per_km == null ? "—" : "€ " + (+cost.totals.fair.per_km).toFixed(2)} />
+            </> : <Stat label="Fair € (model)" value="—" />}
+            {cost && cost.totals && cost.totals.planned && cost.totals.planned.eur != null
+              ? <Stat label={`Planned € · ${cost.totals.planned_source === "target" ? "target rate" : "route quote"}`} value={"€ " + grp(cost.totals.planned.eur)} />
+              : <Stat label="Planned €" value="rate not set" />}
+            <span className="text-xs text-slate-400 self-center">
+              {costErr ? <span style={{ color: "var(--red)" }}>{costErr}</span>
+               : !cost ? "type a quantity to see the price"
+               : cost.fair_reason === "not baked" ? <span className="text-amber-700">no fair price — this route is not baked for {vehLabel(vehicle)}; bake it on the Routes page</span>
+               : cost.fair_reason === "no diesel index" ? <span className="text-amber-700">no fair price — the diesel index is unavailable (Config → Costing · fuel)</span>
+               : cost.fair_reason ? `no fair price — ${cost.fair_reason}`
+               : `the cost model on Config → Costing · fuel at diesel €${cost.index_eur_per_l != null ? (+cost.index_eur_per_l).toFixed(3) : "—"}/L${(cost.totals.fair_flags || []).includes("WINTER") ? " · winter months +fuel" : ""} · a floor for negotiation, never a quote · fair € under each cell`}
+            </span>
           </div>
           <div className="px-3 py-1.5 text-[10.5px] text-slate-400 bg-white">
             Movements = loads per working day ({perDay.wd}/month). Vehicles needed = movements ÷{" "}
