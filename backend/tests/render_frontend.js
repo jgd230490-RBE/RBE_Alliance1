@@ -245,6 +245,29 @@ if (loaded) {
     ok("...nothing renders as undefined or NaN", !/undefined|NaN/.test(fOut));
   }
 
+  // ---- 11 Sep pm: the Submit matrix with the price while typing (initialCost) -------
+  const pvPath = path.join(__dirname, "fixtures", "cost_preview.json");
+  ok("the cost-preview fixture exists (written by test_costlines.py)", fs.existsSync(pvPath));
+  const pv = fs.existsSync(pvPath) ? JSON.parse(fs.readFileSync(pvPath, "utf8")) : null;
+  if (pv) {
+    const mMeta = { ...meta, months: { start_year: 2026, count: 24 }, routes: [{ route_id: "R1", origin: "Pit", dest: "Site", distance_km: 30 }],
+                    materials: ["Small aggregate"], vehicles: [pv.vehicle_type], planning_vehicles: [pv.vehicle_type],
+                    factors: { ...meta.factors, material_density_t_per_m3: { "Small aggregate": 1.6, _default: 1.6 }, vehicle_payload_t: { [pv.vehicle_type]: 20, _default: 20 } } };
+    const mOut = render("the Submit matrix renders with a cost preview (initialCost)",
+      h(Matrix, { meta: mMeta, who: "t", editTarget: null, vehLang: "en", access: planner, initialCost: pv }));
+    const fairT = pv.totals.fair;
+    ok("...the strip prints the preview's fair € total, €/t, €/trip, €/km and the planned € with 'target rate'",
+      mOut.includes('data-cost-strip="1"') && mOut.includes("€ " + Math.round(fairT.eur).toLocaleString("en-US").replace(/,/g, " "))
+      && mOut.includes("€ " + (+fairT.per_t).toFixed(2)) && mOut.includes("€ " + (+fairT.per_km).toFixed(2)) && mOut.includes("target rate"));
+    ok("...and the diesel index the model priced at, with the winter note", mOut.includes("€" + (+pv.index_eur_per_l).toFixed(3) + "/L") && mOut.includes("winter months"));
+    ok("...nothing renders as undefined or NaN", !/undefined|NaN/.test(mOut));
+    const mNone = render("the matrix renders with NO preview (nothing typed)", h(Matrix, { meta: mMeta, who: "t", editTarget: null, vehLang: "en", access: planner, initialCost: null }));
+    ok("...and says 'type a quantity to see the price' with fair — and 'rate not set'", mNone.includes("type a quantity to see the price") && mNone.includes("rate not set"));
+    const mUnb = render("the matrix renders an UNBAKED preview", h(Matrix, { meta: mMeta, who: "t", editTarget: null, vehLang: "en", access: planner,
+      initialCost: { ...pv, baked: false, fair_reason: "not baked", cells: [], totals: { ...pv.totals, fair: { eur: null, per_t: null, per_trip: null, per_km: null } } } }));
+    ok("...which says why there is no fair price and where to fix it", mUnb.includes("not baked for") && mUnb.includes("bake it on the Routes page"));
+  }
+
   // ---- the shared furniture -----------------------------------------------------
   ok("PageHeader renders a title, a subtitle and actions",
     (() => { const o = ReactDOMServer.renderToStaticMarkup(

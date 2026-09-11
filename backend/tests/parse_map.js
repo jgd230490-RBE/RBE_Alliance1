@@ -1421,6 +1421,19 @@ ok("⭐ §F4: guarded on the composite source, with the sidebar told when it is 
 ok("§F4: only re-added on style.load when the checkbox is on",
   /if \(buildingsVisible\(\)\) ensureBuildingLayer\(\);/.test(code));
 
+// ---- 2026-09-11 pm — the timeline's play speed ---------------------------------------
+ok("a play-speed select sits in the timeline bar (¼× to 4×, 1× selected by default)",
+  /<select id="tl-speed" onchange="setTimelineSpeed\(this\.value\)"/.test(html) && html.includes('<option value="1" selected>1×</option>')
+  && html.includes('<option value="0.25">') && html.includes('<option value="4">'));
+ok("one step length at 1×, divided by the speed — the ONLY interval the timeline uses",
+  code.includes("const TL_STEP_MS = 750;") && (code.match(/setInterval\(tickTimeline, TL_STEP_MS \/ TL\.speed\)/g) || []).length === 2
+  && !/setInterval\([^)]*,\s*750\)/.test(code));
+ok("changing the speed while playing restarts the interval at the new pace without moving the month",
+  /if\(TL\.playing\)\{ clearInterval\(TL\.timer\); TL\.timer = setInterval\(tickTimeline/.test(code) && !/function setTimelineSpeed[\s\S]*?TL\.month\s*=/.test(code.slice(code.indexOf("function setTimelineSpeed"), code.indexOf("function tickTimeline"))));
+ok("the speed is remembered per browser and shown when the bar opens; a bad value is ignored",
+  code.includes("localStorage.getItem('rbe_tl_speed')") && code.includes("localStorage.setItem('rbe_tl_speed'") && code.includes("if(!(sp > 0)) return;")
+  && code.includes("sel.value=String(TL.speed)"));
+
 console.log();
 for (const f of fail) console.log("  FAIL:", f);
 console.log(`\n${pass} passed, ${fail.length} failed`);

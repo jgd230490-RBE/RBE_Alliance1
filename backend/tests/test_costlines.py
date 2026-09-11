@@ -355,6 +355,39 @@ ok("🔴 the actuals read carries the tenant predicate in its literal and materi
    "FROM forecast_weeks WHERE tenant_id = ?" in open(os.path.join(BACKEND, "costlines.py"), encoding="utf-8").read()
    and "materialise" not in open(os.path.join(BACKEND, "costlines.py"), encoding="utf-8").read().split('"""', 2)[2])
 
+# ---- the Submit-forecast preview: the typed cells priced as the saved line will be ------
+pv = main.costing_preview(main.CostPreview(route_id="R1", vehicle_type=V8, material_type="Small aggregate", unit="t",
+                                           cells=[main.Cell(month_index=9, quantity=4010.0), main.Cell(month_index=11, quantity=4010.0),
+                                                  main.Cell(month_index=10, quantity=0.0)]))
+ok("the preview prices the body's cells only (a 0 cell is skipped), and says the route is baked",
+   pv["baked"] is True and pv["totals"]["cells"] == 2 and [c["month_index"] for c in pv["cells"]] == [9, 11] and pv["vehicle_class"] == "rigid")
+pc = {c["month_index"]: c for c in pv["cells"]}
+ok("⭐ a previewed cell equals the SAVED line-month on /api/costing/lines — same trips, planned, fair (one source)",
+   pc[9]["trips"] == r1["trips"] and pc[9]["planned"]["eur"] == r1["planned"]["eur"] and pc[9]["planned"]["source"] == "target"
+   and pc[9]["fair"]["eur"] == r1["fair"]["eur"] and pc[9]["fair"]["per_t"] == r1["fair"]["per_t"]
+   and pc[11]["fair"]["eur"] == byk[("R1", 11)]["fair"]["eur"] and "WINTER" in pc[11]["fair"]["flags"])
+ok("...totals in four units, the winter flag carried, no fair_reason when priced",
+   abs(pv["totals"]["fair"]["eur"] - (pc[9]["fair"]["eur"] + pc[11]["fair"]["eur"])) < 0.02 and pv["totals"]["fair"]["per_t"] is not None
+   and pv["totals"]["planned_source"] == "target" and pv["totals"]["planned_target_cells"] == 2 and pv["totals"]["fair_flags"] == ["WINTER"]
+   and pv["fair_reason"] is None and pv["index_eur_per_l"] == 1.922)
+pu = costlines.preview("R3", V8, "Small aggregate", "t", [{"month_index": 9, "quantity": 900.0}])
+ok("🔴 an UNBAKED route previews NO fair price and says why; planned is the target's per-load term, marked partial",
+   pu["baked"] is False and pu["totals"]["fair"]["eur"] is None and pu["fair_reason"] == "not baked"
+   and pu["cells"][0]["planned"]["partial"] is True and pu["cells"][0]["planned"]["eur"] is not None)
+ok("no cells ⇒ nothing priced, reason 'no cells'",
+   costlines.preview("R1", V8, "Small aggregate", "t", [])["fair_reason"] == "no cells")
+_cnt.clear(); db.query, db.execute = _q, _x
+try:
+    costlines.preview("R1", V8, "Small aggregate", "t", [{"month_index": m, "quantity": 100.0} for m in range(1, 25)])
+    _pc = dict(_cnt)
+finally:
+    db.query, db.execute = _orig_q, _orig_x
+ok(f"the preview writes nothing and prices 24 cells within the statement budget ({_pc.get('query', 0)} reads)",
+   _pc.get("execute", 0) == 0 and _pc.get("query", 0) <= 40, str(_pc))
+ok("🔴 the preview endpoint requires a signed-in code and reads no forecast row",
+   "_require_access()" in open(os.path.join(BACKEND, "main.py"), encoding="utf-8").read().split("def costing_preview(", 1)[1].split("@app.", 1)[0]
+   and "FROM forecasts" not in open(os.path.join(BACKEND, "costlines.py"), encoding="utf-8").read().split("def preview(", 1)[1])
+
 # the fixture the render harness reads
 _fix_dir = os.path.join(HERE, "fixtures")
 os.makedirs(_fix_dir, exist_ok=True)
@@ -367,6 +400,17 @@ def _scrub(o):
 with open(os.path.join(_fix_dir, "cost_lines.json"), "w", encoding="utf-8") as _fh:
     _fh.write(json.dumps(_scrub(res), indent=1, ensure_ascii=False))
 ok("the cost-lines fixture is written (12 rows, planned + fair, an unbaked line, a reported line)", os.path.exists(os.path.join(_fix_dir, "cost_lines.json")))
+with open(os.path.join(_fix_dir, "cost_preview.json"), "w", encoding="utf-8") as _fh:
+    _fh.write(json.dumps(_scrub(pv), indent=1, ensure_ascii=False))
+ok("the cost-preview fixture is written (two priced cells, one winter)", os.path.exists(os.path.join(_fix_dir, "cost_preview.json")))
+_fe0 = open(os.path.join(ROOT, "frontend", "index.html"), encoding="utf-8").read()
+_mx = _fe0[_fe0.index("function Matrix("):_fe0.index("\nfunction ", _fe0.index("function Matrix(") + 10)]
+ok("🔴 the Submit matrix reads POST /costing/preview (debounced) and prices NOTHING itself — no fairprice arithmetic, no rate × qty in the browser",
+   "fetch(`${API}/costing/preview`, { method: \"POST\"" in _mx and "setTimeout(() => {" in _mx and "}, 400);" in _mx
+   and "rate_eur" not in _mx and "l_per_100km" not in _mx and "margin_pct" not in _mx and "costCell[mi].fair.eur" in _mx)
+ok("...the strip shows fair € in four units, planned € with its source, and the REASON when there is no fair price",
+   'data-cost-strip="1"' in _mx and "fair € / t" in _mx and "fair € / trip" in _mx and "fair € / km" in _mx
+   and 'cost.fair_reason === "not baked"' in _mx and 'cost.fair_reason === "no diesel index"' in _mx and "rate not set" in _mx)
 
 # =========================================================================== #
 #  1. Source level — the pages READ, they do not derive                        #
