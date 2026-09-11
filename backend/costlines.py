@@ -34,6 +34,18 @@ trips actually run (basis km × trips), never on a loaded-leg-only figure.
 
 CO2 is km × the vehicle's kg CO2e/km from factors.json, as the Dashboard always did —
 the same factor, now applied to the server's km.
+
+DELIVERED TO DATE (11 Sep, afternoon — the Dashboard's progress figures)
+------------------------------------------------------------------------
+Each line-month also carries what has been REPORTED against it: `actual_qty` is the sum
+of the typed week actuals (forecast_weeks.actual_qty — typed by a clerk, or the running
+sum of day actuals; days.py rule 6), `actual_tonnes` the same through the line's payload,
+`actual_eur` the sum of typed week costs, `weeks_reported` how many weeks carry an
+actual. A line-month nobody has reported is None / 0 — never "0 delivered", and never a
+share of the forecast. Totals: `actual_tonnes`, `actual_eur`, `reported_lines`,
+`delivered_pct` (reported tonnes over ALL visible tonnes — the programme's progress, so
+an unreported month counts as not yet delivered, which is what it is). ONE statement,
+no materialisation (a read that writes would be wrong here — weeks.list_weeks does).
 """
 import access
 import conversions
@@ -68,6 +80,22 @@ def _rows(acc, from_month=None, to_month=None, status=None):
     return access.filter_lines(rows, acc)
 
 
+def _actuals():
+    """{(route, month, discipline, section): {qty, eur, weeks}} — the reported weeks, one read."""
+    out = {}
+    for w in db.query("SELECT route_id, month_index, discipline, section_id, actual_qty, actual_cost_eur "
+                      "FROM forecast_weeks WHERE tenant_id = ? "
+                      "AND (actual_qty IS NOT NULL OR actual_cost_eur IS NOT NULL)",
+                      (db.current_tenant(),)):
+        k = (w["route_id"], int(w["month_index"]), w.get("discipline") or "", w.get("section_id") or "")
+        a = out.setdefault(k, {"qty": None, "eur": None, "weeks": 0})
+        if w.get("actual_qty") is not None:
+            a["qty"] = (a["qty"] or 0.0) + float(w["actual_qty"]); a["weeks"] += 1
+        if w.get("actual_cost_eur") is not None:
+            a["eur"] = (a["eur"] or 0.0) + float(w["actual_cost_eur"])
+    return out
+
+
 def lines(acc=None, from_month=None, to_month=None, status=None, factors=None):
     """
     {lines: [...], totals: {...}, costing: {...}} for the caller's visible forecast rows.
@@ -80,13 +108,15 @@ def lines(acc=None, from_month=None, to_month=None, status=None, factors=None):
     routes = derived._routes_and_names()
     cost = derived.costing_context()
     cache = {}
+    actuals = _actuals()
     plan = factors.get("planning", {}) or {}
     work_days = float(plan.get("working_days_per_month") or 22)
     out = []
     tot = {"lines": 0, "baked_lines": 0, "tonnes": 0.0, "trips": 0, "km": 0.0, "tonne_km": 0.0,
            "co2_t": 0.0, "planned_eur": 0.0, "planned_lines": 0, "planned_target_lines": 0,
            "fair_eur": 0.0, "fair_lines": 0, "planned_tonnes": 0.0, "planned_km": 0.0,
-           "fair_tonnes": 0.0, "fair_km": 0.0, "fair_trips": 0, "planned_trips": 0}
+           "fair_tonnes": 0.0, "fair_km": 0.0, "fair_trips": 0, "planned_trips": 0,
+           "actual_t": None, "actual_eur": None, "reported_lines": 0}
     for r in rows:
         line = {"route_id": r["route_id"], "unit": r.get("unit"), "material_type": r.get("material_type"),
                 "vehicle_type": r.get("vehicle_type"), "ipt": r.get("ipt"), "discipline": r.get("discipline"),
@@ -111,6 +141,9 @@ def lines(acc=None, from_month=None, to_month=None, status=None, factors=None):
         fair = unit_prices(f.get("fair_eur"), f["tonnes"], f["trips"], basis_km_total)
         fair["flags"] = list(((ctx.get("fair") or {}).get("flags")) or [])
         fair["fuel_share_pct"] = (ctx.get("fair") or {}).get("fuel_share_pct")
+        act = actuals.get((r["route_id"], int(r["month_index"]), r.get("discipline") or "", r.get("section_id") or ""),
+                          {"qty": None, "eur": None, "weeks": 0})
+        actual_t = (round(derived.tonnes_of(act["qty"], ctx, factors), 3) if act["qty"] is not None else None)
         out.append({
             "route_id": r["route_id"], "discipline": r.get("discipline") or "", "section_id": r.get("section_id") or "",
             "ipt": ctx.get("ipt") or r.get("ipt"), "month_index": int(r["month_index"]), "status": r.get("status"),
@@ -123,8 +156,14 @@ def lines(acc=None, from_month=None, to_month=None, status=None, factors=None):
             "cycle_min": ctx.get("cycle_min"), "cycles_per_vehicle_day": (cycles if baked else None),
             "km": km, "tonne_km": f.get("tonne_km"), "co2_t": co2_t,
             "planned": planned, "fair": fair,
+            "actual_qty": act["qty"], "actual_tonnes": actual_t, "actual_eur": act["eur"],
+            "weeks_reported": act["weeks"],
             "flags": list(ctx.get("flags") or []),
         })
+        if actual_t is not None:
+            tot["actual_t"] = (tot["actual_t"] or 0.0) + actual_t; tot["reported_lines"] += 1
+        if act["eur"] is not None:
+            tot["actual_eur"] = (tot["actual_eur"] or 0.0) + act["eur"]
         tot["lines"] += 1
         tot["tonnes"] += f["tonnes"]; tot["trips"] += f["trips"]
         if baked:
@@ -153,6 +192,12 @@ def lines(acc=None, from_month=None, to_month=None, status=None, factors=None):
         "fair": (unit_prices(tot["fair_eur"], tot["fair_tonnes"], tot["fair_trips"], tot["fair_km"])
                  if tot["fair_lines"] else unit_prices(None, 0, 0, 0)),
         "fair_lines": tot["fair_lines"],
+        # delivered to date — reported tonnes over ALL visible tonnes; None until something is reported
+        "actual_tonnes": (round(tot["actual_t"], 3) if tot["actual_t"] is not None else None),
+        "actual_eur": (round(tot["actual_eur"], 2) if tot["actual_eur"] is not None else None),
+        "reported_lines": tot["reported_lines"],
+        "delivered_pct": (round(tot["actual_t"] * 100.0 / tot["tonnes"], 1)
+                          if tot["actual_t"] is not None and tot["tonnes"] > 0 else None),
     }
     return {"lines": out, "totals": totals, "costing": cost,
             "working_days_per_month": work_days}
