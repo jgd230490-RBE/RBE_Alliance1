@@ -196,6 +196,39 @@ if (loaded) {
     ok("...the route table prints planned € with a 'target' chip, fair € and fair €/t, and 'not baked' on the unbaked route",
       dOut.includes(">target<") && dOut.includes("Fair € (model)") && dOut.includes("not baked") && dOut.includes("Cost over time"));
     ok("...nothing renders as undefined or NaN", !/undefined|NaN/.test(dOut));
+    // 11 Sep pm: the four groups, the Delivered figures from the fixture's reported line, every Fig with a title
+    ok("...the Delivered-to-date group prints the server's actual tonnes and % of plan (a reported line is in the fixture)",
+      dOut.includes(">Delivered to date<") && cl.totals.actual_tonnes != null
+      && dOut.includes(">" + cl.totals.actual_tonnes.toLocaleString("en-US").replace(/,/g, " ") + "<")
+      && dOut.includes("tonnes moved") && dOut.includes("line-months reported"));
+    ok("...every KPI value sits in a nowrap clamp()-sized div, none truncated",
+      (dOut.match(/font-size:clamp\(1\.1rem/g) || []).length >= 16 && !/kpi-num[^"]*truncate/.test(dOut));
+    ok("...every KPI cell has a title attribute (hover)",
+      (dOut.match(/<div title="[^"]+" class="min-w-0 cursor-help">/g) || []).length >= 16);
+    ok("...the Today strip renders its loading state without the week, and the stock chart card is there (no stock table)",
+      dOut.includes("Loading this week") && dOut.includes("Stockpile capacity") && !dOut.includes("Stock held") && dOut.includes("Big screen"));
+    ok("...the route table has a Delivered column with a % on the reported line and — elsewhere",
+      dOut.includes(">Delivered") && / %<\/span>/.test(dOut));
+    // with the week fixture: today's deliveries, this week to date, last week, the map card
+    const wkPath = path.join(__dirname, "fixtures", "lookahead_page_fuel.json");
+    const wk = fs.existsSync(wkPath) ? JSON.parse(fs.readFileSync(wkPath, "utf8")) : null;
+    if (wk) {
+      const wOut = render("the Dashboard renders POPULATED with the week too (initialWeek)", h(Dashboard, { meta: dMeta, initialData: cl, initialWeek: wk }));
+      const todayRows = [];
+      wk.commit.lines.forEach(l => (l.days || []).forEach(d => { if (d.day_date === wk.today && ((d.planned_qty || 0) > 0 || d.actual_qty != null)) todayRows.push({ l, d }); }));
+      const tT = todayRows.reduce((a, x) => a + ((x.d.derived || {}).tonnes || 0), 0);
+      const tTrips = todayRows.reduce((a, x) => a + ((x.d.derived || {}).trips || 0), 0);
+      ok(`...today (${wk.today}) lists ${todayRows.length} lines with the SERVER's day tonnes and trips summed (${tT} t, ${tTrips} trips)`,
+        todayRows.length > 0 && wOut.includes(">tonnes<") && wOut.includes("day actuals typed today") && wOut.includes(">" + tT.toLocaleString("en-US").replace(/,/g, " ") + "<")
+        && wOut.includes(">" + tTrips.toLocaleString("en-US").replace(/,/g, " ") + "<")
+        && todayRows.every(x => wOut.includes(">" + x.l.route_id + "</span>")));
+      ok("...this week to date and last week's account are printed with their bars",
+        wOut.includes("This week to date") && wOut.includes("Last week") && (wOut.match(/h-2 rounded-full bg-slate-100/g) || []).length === 2
+        && wOut.includes(`${wk.account.reported} of ${wk.account.lines} lines reported`));
+      ok("...the map card carries the Look-ahead's CommitMap with the Dashboard's title, and no € anywhere in the Today strip",
+        wOut.includes("This week&#x27;s lines on the map") && !/€/.test(wOut.slice(wOut.indexOf("Today · "), wOut.indexOf("Delivered to date"))));
+      ok("...nothing renders as undefined or NaN", !/undefined|NaN/.test(wOut));
+    }
     // Approved-only default: the Pending IPT2 line is not in the default view
     ok("...the default view is Approved only (the Pending line is filtered out; the status select says so)",
       dOut.includes("approved only") && !dOut.includes(">R4<"));

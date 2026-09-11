@@ -327,6 +327,34 @@ try:
 finally:
     db.query, db.execute = _orig_q, _orig_x
 
+# ---- delivered to date: reported week actuals ride on each line-month -------------
+ok("before anything is reported: every line-month has actual_qty None, weeks_reported 0; totals say None, not 0",
+   all(l["actual_qty"] is None and l["actual_tonnes"] is None and l["weeks_reported"] == 0 for l in L)
+   and T["actual_tonnes"] is None and T["delivered_pct"] is None and T["reported_lines"] == 0 and T["actual_eur"] is None)
+import weeks as _wk
+_wk.materialise_window(9, 9)
+_wk.set_actual("R1", 9, "earthworks", "WS1", 1, actual_qty=800.0, by="clerk")
+_wk.set_actual("R1", 9, "earthworks", "WS1", 2, actual_qty=1100.0, by="clerk", actual_cost_eur=3300.0, cost_given=True)
+_wk.set_actual("R2", 9, "earthworks", "WS2", 1, actual_qty=0.0, by="clerk")          # a real zero
+res2 = main.costing_lines()
+b2 = {(l["route_id"], l["month_index"]): l for l in res2["lines"]}
+ok("⭐ actual_qty is the SUM of the typed week actuals (800 + 1100), actual_tonnes through the line's payload, 2 weeks reported",
+   b2[("R1", 9)]["actual_qty"] == 1900.0 and b2[("R1", 9)]["actual_tonnes"] == 1900.0 and b2[("R1", 9)]["weeks_reported"] == 2
+   and b2[("R1", 9)]["actual_eur"] == 3300.0)
+ok("a typed 0 is a report (0.0, 1 week), an untyped month is None (0 weeks) — never confused",
+   b2[("R2", 9)]["actual_qty"] == 0.0 and b2[("R2", 9)]["weeks_reported"] == 1
+   and b2[("R1", 10)]["actual_qty"] is None and b2[("R1", 10)]["weeks_reported"] == 0)
+T2 = res2["totals"]
+ok("totals: actual_tonnes 1900 over 2 reported line-months; delivered_pct over ALL visible tonnes (unreported = not yet delivered)",
+   T2["actual_tonnes"] == 1900.0 and T2["reported_lines"] == 2 and T2["actual_eur"] == 3300.0
+   and T2["delivered_pct"] == round(1900.0 * 100.0 / T2["tonnes"], 1))
+ok("...the planned figures did not move (an actual never calibrates — weeks.py rule 4)",
+   T2["tonnes"] == T["tonnes"] and T2["trips"] == T["trips"] and T2["planned"]["eur"] == T["planned"]["eur"])
+res = res2      # the fixture carries a reported line
+ok("🔴 the actuals read carries the tenant predicate in its literal and materialises nothing",
+   "FROM forecast_weeks WHERE tenant_id = ?" in open(os.path.join(BACKEND, "costlines.py"), encoding="utf-8").read()
+   and "materialise" not in open(os.path.join(BACKEND, "costlines.py"), encoding="utf-8").read().split('"""', 2)[2])
+
 # the fixture the render harness reads
 _fix_dir = os.path.join(HERE, "fixtures")
 os.makedirs(_fix_dir, exist_ok=True)
@@ -338,13 +366,13 @@ def _scrub(o):
     return o
 with open(os.path.join(_fix_dir, "cost_lines.json"), "w", encoding="utf-8") as _fh:
     _fh.write(json.dumps(_scrub(res), indent=1, ensure_ascii=False))
-ok("the cost-lines fixture is written (12 rows, planned + fair, an unbaked line)", os.path.exists(os.path.join(_fix_dir, "cost_lines.json")))
+ok("the cost-lines fixture is written (12 rows, planned + fair, an unbaked line, a reported line)", os.path.exists(os.path.join(_fix_dir, "cost_lines.json")))
 
 # =========================================================================== #
 #  1. Source level — the pages READ, they do not derive                        #
 # =========================================================================== #
 _fe = open(os.path.join(ROOT, "frontend", "index.html"), encoding="utf-8").read()
-_db = _fe[_fe.index("function Dashboard("):_fe.index("function DashboardStock(")]
+_db = _fe[_fe.index("function Dashboard("):_fe.index("function DashboardToday(")]
 ok("🔴 the Dashboard reads /costing/lines and NOT /forecasts or /routes/analysis-batch",
    "fetch(`${API}/costing/lines?status=All`)" in _db and "/routes/analysis-batch" not in _db and "`${API}/forecasts`" not in _db)
 ok("...and derives nothing: no tonnes ÷ payload, no CO₂ factor, no cycle arithmetic in the browser",

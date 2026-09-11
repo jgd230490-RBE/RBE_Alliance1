@@ -89,7 +89,7 @@ try {
 // ---- 2. the dashboard no longer computes its own cycle time ------------------
 // 11 Sep: the Dashboard reads /api/costing/lines — the Look-ahead's functions — and
 // derives NOTHING. The analysis-batch read and the client arithmetic are gone with it.
-const _dbBody = src.slice(src.indexOf("function Dashboard("), src.indexOf("function DashboardStock("));
+const _dbBody = src.slice(src.indexOf("function Dashboard("), src.indexOf("function DashboardToday("));
 ok("🔴 the dashboard reads /costing/lines and no longer the analysis batch or the raw forecasts",
   _dbBody.includes("fetch(`${API}/costing/lines?status=All`)") && !_dbBody.includes("/routes/analysis-batch") && !_dbBody.includes("`${API}/forecasts`"));
 ok("the flat-speed cycle formula is gone",
@@ -109,7 +109,7 @@ ok("🔴 fleet size is the SERVER's `vehicles` (a monthly peak of it), never dem
   _dbBody.includes("a.peakVeh = Math.max(a.peakVeh || 0, r.vehicles)") && !_dbBody.includes("peakPerDay / a.capacityPerDay")
   && !_dbBody.includes("/ payload(") && !_dbBody.includes("emisFactor(") && !_dbBody.includes("toTonnes("));
 ok("the footnote says every figure comes from /api/costing/lines and how each is made",
-  _dbBody.includes("Every figure on this page comes from <code>/api/costing/lines</code>") && _dbBody.includes("rounded up per line-month"));
+  _dbBody.includes("Every planning figure on this page comes from <code>/api/costing/lines</code>") && _dbBody.includes("rounded up per line-month"));
 
 // ---- 3. per-line model -------------------------------------------------------
 ok("dashboard rows are keyed per line, not per route",
@@ -470,13 +470,19 @@ let _dsBody;
 // Account view for the account week; the read-only balances are on the Dashboard.
 ok("🔴 the old Stockpiles grid component no longer exists",
   !/function Stockpiles\(/.test(code) && !/<Stockpiles /.test(code));
-ok("the Dashboard carries the read-only stock panel",
-  /function DashboardStock\(/.test(code) && /<DashboardStock meta=\{meta\} \/>/.test(code)
-  && /function Dashboard\(/.test(code) && code.indexOf("<DashboardStock") > code.indexOf("function Dashboard(")
-  && code.indexOf("<DashboardStock") < code.indexOf("function App("));
-ok("...and it types nothing: no consume call, no input, in that component",
-  !(_dsBody = code.slice(code.indexOf("function DashboardStock("), code.indexOf("function App("))).includes("/stockpiles/consume")
-  && !_dsBody.includes("<input"));
+// 11 Sep pm: the stock TABLE is gone from the Dashboard — a capacity bar chart in its place
+ok("🔴 the Dashboard's stock table is gone: no DashboardStock component, no 'Stock held' heading, no per-week <table> in the stock component",
+  !/function DashboardStock\(/.test(code) && !/<DashboardStock /.test(code)
+  && /function DashboardStockChart\(/.test(code) && /<DashboardStockChart meta=\{meta\}/.test(code)
+  && !(_dsBody = code.slice(code.indexOf("function DashboardStockChart("), code.indexOf("function App("))).includes("<table")
+  && !_dsBody.includes("Stock held") && _dsBody.includes('type: "bar"') && _dsBody.includes('indexAxis: "y"'));
+ok("...it is read-only: no consume call, no input, in that component",
+  !_dsBody.includes("/stockpiles/consume") && !_dsBody.includes("<input"));
+ok("...a bar is the balance as a % of the RECORDED capacity, red past 100 %, a dashed line at capacity; no-capacity stockpiles are listed, never drawn as 0 %",
+  _dsBody.includes("pct: bal * 100 / sp.capacity_qty") && _dsBody.includes('b.over ? "#BF2E55"')
+  && _dsBody.includes("sp.capacity_qty != null && sp.capacity_qty > 0") && _dsBody.includes("No capacity recorded")
+  && _dsBody.includes("getPixelForValue(100)"));
+ok("...the week is picked with chips, defaulting to the week that holds today", _dsBody.includes("setWk(x.k)") && _dsBody.includes("nowKey"));
 ok("consumption is typed on the ACCOUNT view through /stockpiles/consume, for the account week",
   _laBody.includes("/stockpiles/consume") && /month_index: account\.week\.month_index,\s*week_index: account\.week\.week_index/.test(_laBody));
 ok("...one box per stockpile, and an emptied box is null (not typed), not zero",
@@ -484,12 +490,10 @@ ok("...one box per stockpile, and an emptied box is null (not typed), not zero",
 ok("...and the balance is read from /stockpiles", code.includes("/stockpiles?from_month="));
 // ⭐ no capacity recorded is NOT zero capacity
 ok("⭐ an unset capacity renders '—' / 'not recorded', never 0",
-  /sp\.capacity_qty == null \? "—"/.test(code)
-  && /cell\.remaining == null \? "no cap"/.test(code)
+  _dsBody.includes("· max —") && !_dsBody.includes("capacity_qty || 0")
   && /s\.capacity_qty == null \? <span className="text-slate-300">not recorded<\/span>/.test(_laBody));
 ok("over capacity uses the existing red, not a reserved route colour",
-  /cell\.over \? "var\(--red\)"/.test(code)
-  && !/cell\.over \? "#039E86"/.test(code));
+  _dsBody.includes('b.over ? "#BF2E55"') && !_dsBody.includes('over ? "#039E86"'));
 ok("the panel says inbound comes from typed actuals only",
   code.includes("a week nobody") && code.includes("reported counts as nothing"));
 ok("🔴 the Commit view's stock card is gone — the week map stands in its place",
@@ -958,6 +962,44 @@ ok("...with the winter and thaw flags on the Account cell and the expanded row",
 ok("...an unbaked line prints — with the reason, never a number", _laBody.includes("No fair price: the route is not baked for this vehicle, or the diesel index is missing"));
 ok("...and the footer calls it a floor for negotiation, never a quote", _laBody.includes("a floor for negotiation, never a quote"));
 ok("the Config page hands the file document to the tab (for the fallback values)", code.includes("setFileDoc(j.file || null)"));
+
+// ---- 11 Sep pm: the big-screen Dashboard ---------------------------------------------
+const _tdBody = src.slice(src.indexOf("function DashboardToday("), src.indexOf("function DashboardStockChart("));
+ok("🔴 every KPI figure carries a title (hover) — none is bare",
+  _dbBody.split("<Fig ").slice(1).length >= 16 && _dbBody.split("<Fig ").slice(1).every(chunk => chunk.slice(0, chunk.indexOf("/>")).includes("title=")));
+ok("🔴 no KPI figure is truncated: no `truncate` on a Fig, the value is nowrap with a clamp() size, two per row",
+  !/kpi-num[^"]*truncate/.test(_dbBody) && _dbBody.includes('kpi-num font-bold whitespace-nowrap') && _dbBody.includes('fontSize: "clamp(')
+  && _dbBody.includes('<div className="grid grid-cols-2 gap-x-4 gap-y-3">{children}</div>'));
+ok("millions print compact (bigNum) with the exact figure in the title",
+  /const bigNum = /.test(src) && _dbBody.includes("bigNum(K.totT)") && _dbBody.includes("`${grp(K.totT)} t —"));
+ok("the four KPI groups: Delivered to date · Volume · Cost · Carbon",
+  ['title="Delivered to date"', 'title="Volume"', 'title="Cost"', 'title="Carbon"'].every(t => _dbBody.includes(t)));
+ok("🔴 delivered to date is the SERVER's actual_tonnes summed — never a share of the forecast, None until reported",
+  _dbBody.includes("if(r.actual_tonnes != null){ T.actualT = (T.actualT || 0) + r.actual_tonnes;") && _dbBody.includes('K.actualT == null ? "—"')
+  && !_dbBody.includes("actual_qty *") );
+ok("the Today strip reads /api/lookahead (commit bucket, Tark Tee OFF) in its own fetch, and a failure never hides the programme figures",
+  _dbBody.includes("fetch(`${API}/lookahead?bucket=commit&tark_tee=0`)") && _dbBody.includes("setWeekErr(") && _dbBody.includes("<DashboardToday meta={meta} week={week} err={weekErr}"));
+ok("...today's rows are the day rows whose date is the server's `today` — the server's tonnes, trips, vehicles per day, nothing derived",
+  _tdBody.includes("d.day_date !== today") && _tdBody.includes("tonnes: dv.tonnes, trips: dv.trips, vehicles: dv.vehicles")
+  && !_tdBody.includes("/ payload") && !_tdBody.includes("payload_t *"));
+ok("...with this week to date and last week's account (the server's actual_t, reported, delivered, hold band)",
+  _tdBody.includes("This week to date") && _tdBody.includes("acct.actual_t") && _tdBody.includes("acct.hold_band"));
+ok("...and the small map is the Look-ahead's CommitMap, title and height as props, defaults unchanged for the Look-ahead",
+  _tdBody.includes('<CommitMap meta={meta} bucket="commit"') && src.includes("function CommitMap({ meta, bucket, tick, lines, title, height, flush })")
+  && src.includes('{title || "This week\'s movements"}') && src.includes("height: height || 380"));
+ok("🔴 cost never reaches the map: no €, eur, fair or rate anywhere in CommitMap (its hover carries quantity and trips only)",
+  !/€|\beur\b|_eur|fair|rate_|\brates?\b|planned_units|eur_units/i.test(_cmBody) && _cmBody.includes("trips`).join"));
+ok("big-screen mode: fullscreen requested (never required), filters and the table hidden, both reads refreshed every 5 minutes, Esc leaves",
+  _dbBody.includes("requestFullscreen") && _dbBody.includes("REFRESH_MS") && src.includes("const REFRESH_MS = 5 * 60 * 1000")
+  && _dbBody.includes("{!wall && <div className=\"flex flex-wrap gap-2 items-center -mt-2\">") && _dbBody.includes("{!wall && <div className=\"card overflow-hidden\">")
+  && _dbBody.includes('e.key === "Escape"') && _dbBody.includes("fullscreenchange"));
+ok("interactive: a route row (or a Top-routes bar) narrows the charts and figures to that line; the table stays whole; a chip clears it",
+  _dbBody.includes("const narrowed = lineKey ? filtered.filter(r => keyOf(r) === lineKey) : filtered;")
+  && _dbBody.includes("onClick={() => pick(r.key)}") && _dbBody.includes("pick(topN[els[0].index].key)")
+  && _dbBody.includes("✕ show all") && _dbBody.includes("filtered.forEach(r => {") && _dbBody.includes("narrowed.forEach(r => {"));
+ok("a Delivered-against-plan chart (planned t as bars, reported t over them) and a Delivered column in the table",
+  _dbBody.includes("Delivered against plan") && _dbBody.includes("actualM") && _dbBody.includes('setSort("deliveredPct")'));
+ok("nothing on the Dashboard writes", !/fetch\(`\$\{API\}[^`]*`,\s*\{\s*method/.test(_dbBody + _tdBody + _dsBody));
 
 // ---- report ------------------------------------------------------------------
 console.log();
