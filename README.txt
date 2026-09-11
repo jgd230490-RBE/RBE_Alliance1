@@ -1,76 +1,104 @@
-rbe-help-page-0910.zip
+rbe-costlines-0911.zip
 ======================
-Delivered 2026-09-10 (evening). Extract over the repo root. No schema change,
-no new dependency, no change to the staff app or the public map. 30 files:
-one new test and the help page with its 27 images — PLUS ONE MANUAL EDIT to
-backend/main.py (below). main.py is deliberately NOT in this zip: a parallel
-session delivered rbe-costing-fuel-0910.zip the same evening, which also
-carries main.py; two zips touching one file are not interchangeable, so the
-four-line mount is left for you to add by hand AFTER whichever zips you apply.
+Delivered 2026-09-11. Extract over the repo root. Cut against HEAD as of 11 Sep morning
+(your fairprice zip applied — thank you; README.txt at HEAD is still the help page's).
+Twelve files. NO new dependency, NO schema change, factors.json NOT in this zip.
 
-THE MANUAL EDIT (backend/main.py, after the /map mount, before @app.get("/"))
------------------------------------------------------------------------------
-# User guide at /help/ (frontend/help/index.html + media/). Same no-cache static class
-# as the map. Mounted before the catch-all "/". Not linked from the rail yet.
-app.mount("/help", NoCacheStatic(directory=str(ROOT / "frontend" / "help"), html=True), name="help")
+WHAT YOU ASKED FOR
+------------------
+1. Every price in EUR/t, EUR/km and EUR/trip as well as the total — Quote, Target and
+   Fair alike — so comparisons are like for like.
+2. The cost figures on the Forecasts page and the Dashboard.
+3. A review of the Dashboard and a general upgrade.
 
-Until that line is in, test_help.py fails its first three assertions and
-says so ("main.py mounts /help"); everything else in it passes.
+WHAT CHANGED, AND ONE THING YOU WILL NOTICE
+-------------------------------------------
+THE DASHBOARD NO LONGER DOES ITS OWN ARITHMETIC. It used to compute trips as tonnes /
+payload (fractional), km from analysis-batch, CO2 from the emissions factor and a fleet
+size from a monthly peak — a second source for numbers the Look-ahead computes on the
+server. Now ONE backend read, GET /api/costing/lines, returns every forecast line x
+month with volume, haul, carbon and cost from the Look-ahead's own functions; the
+Dashboard and the Forecasts page sum what it returns and derive nothing.
+  * Trips are ROUNDED UP per line-month (4,010 t / 20 t = 201, not 200.5). Totals
+    move up a little. That is the Look-ahead's figure and the right one.
+  * An UNBAKED line has NO km, CO2, vehicles or fair EUR on the Dashboard any more —
+    the old fallback to the route's headline distance x 2 is gone (your 09 Sep rule).
+    The header says "n of m line-months on a baked route · km, CO2e and fair EUR
+    exclude the k unbaked". On the live site most routes are unbaked, so expect the
+    km and CO2 totals to DROP until routes are baked. That is not a fault.
 
-WHAT THIS IS
-------------
-The User Guide, served inside the app at /help/ so it can be linked from the
-rail later. It is generated from the same content as the Word User Guide
-(RBE_A1_User_Guide_v1.0.docx), so the two cannot drift unless one is edited
-by hand. Sections: Welcome, Getting started, Dashboard, Submitting a
-forecast, Forecasts, the Look-ahead (weeks, rhythm, Commit / Account /
-Horizon, exports), Data pages, the public map, Understanding the numbers,
-Flags and warnings, Troubleshooting, Methods and assumptions, Glossary.
+THE UNITS
+---------
+Planned (route rates or the Config target) and Fair (the model) each come as
+EUR total · EUR/t · EUR/trip · EUR/km. EUR/km is over the km the trips actually run on
+the route's basis (round trip unless the route says loaded). Where they show:
+  Look-ahead -> Account: under Planned EUR and under Fair EUR, a small line
+    "EUR 5.69/t · EUR 114/trip · EUR 1.90/km".
+  Look-ahead -> Commit, expanded row (▶): "fair EUR … (model) = EUR …/t · …/trip · …/km
+    · quote = …" (or "target = …").
+  Dashboard: the Cost group (planned EUR, fair EUR, fair EUR/t, fair EUR/km with
+    EUR/trip under it); hover any EUR in the route table for the triple.
+  Forecasts page: a Cost column per line — planned (with a 'target' chip where it is
+    the Config rate) and fair with EUR/t beside it; the triple on hover. The CSV
+    export gains nine cost columns.
 
-FILES
------
-backend/main.py            NOT in the zip — see THE MANUAL EDIT above.
-backend/tests/test_help.py NEW. 17 assertions: the mount exists once and sits between
-                             /map and "/"; the page parses, has a title, >= 10 h1 and
-                             >= 20 h2, an id on every h1; every <img> points at an
-                             existing file under frontend/help/media/ and no media file
-                             is orphaned; alt text on every image; the wording rule
-                             ("stockpile", never a bare "pile"); no internal names
-                             (table / function names) leak; the only external URL is
-                             the Inter font; no <script>. Broken on purpose twice
-                             (renamed mount -> 3 fail; removed an image -> 2 fail).
-frontend/help/index.html   NEW. 66 KB, self-contained apart from the Inter font, with a
-                             fixed left navigation built from the headings; prints
-                             cleanly; collapses to one column under 900 px.
-frontend/help/media/*.png  NEW. 27 images, 1.9 MB: 10 drawn figures (architecture,
-                             lifecycle, haul cycle, calendar weeks, access, delivery,
-                             data model, app map, weekly rhythm, numbers) and 17
-                             screenshot SLOTS (see below).
+THE DASHBOARD REVIEW — what was changed and why
+-----------------------------------------------
+- KPI strip regrouped into three cards: VOLUME (tonnes, trips, truck-km, peak fleet),
+  COST (planned EUR, fair EUR, fair EUR/t, fair EUR/km), CARBON (tCO2e, kg/t, t·km,
+  peak month). Peak fleet is new at the top — it was only in the table before.
+- IPT and discipline filters (every other surface had them; the Dashboard did not).
+- A coverage line in the header ("n of m line-months baked …") replaces the amber
+  box at the bottom of the page, and the diesel index with its bulletin date sits
+  beside it.
+- Charts: "Cost over time" (planned vs fair by month) and "Vehicles needed over
+  time" are new; the others are unchanged in content.
+- Route table: km/trip (was "Dist km" — it is the trip distance on the route basis),
+  Peak veh (the server's figure), Planned EUR with a quote/target chip, Fair EUR with
+  winter/thaw marks, Fair EUR/t. Origin -> destination and the vehicle under the route
+  id. "Peak/day" and "Trucks" (client arithmetic) are gone; "kg/t" moved to the KPI.
+- The footnote states where every figure comes from and how it is made.
+NOT changed: the stock panel, the material charts, the Top routes chart.
 
-WHAT YOU NEED TO KNOW
----------------------
-1. The screenshot images are placeholders. The desktop link dropped before
-   the capture pass could run, so every "Screenshot Sxx / Mxx" image is a
-   framed slot naming what it should show and the state to capture it in.
-   When the captures exist they replace the files under the same names
-   (S01..S15, M01..M08) and the page is rebuilt — nothing else changes.
-   The Word guides carry the same slots. The list is Appendix C of both.
-2. Not linked from the rail. Deliberate: you said "for a later link". The
-   page is reachable at /help/ once deployed.
-3. The suite at HEAD + this zip + the manual edit: every existing file
-   unchanged (1,586 py + 989 js = 2,575) plus test_help.py 17 = 2,592 / 0.
-   With rbe-costing-fuel-0910.zip applied as well, expect its 2,714 + 17.
-   Run test_help.py from the repo root like the others.
-4. Order with the costing-fuel zip: either order, then the manual edit last.
+ACTION ON YOUR SIDE
+-------------------
+- Apply, deploy. Open the Dashboard and read the coverage line first.
+- Nothing to configure; nothing to seed.
 
-UNVERIFIED
+NOT BUILT / OPEN
+----------------
+- The Submit-forecast matrix does not show cost while you type (it would need a per-
+  cell read; say if you want it).
+- The Dashboard has not been seen in a browser (Chart.js does not draw in the
+  harness; the page renders around empty canvases). First look: the three KPI cards,
+  the two new charts, the route table at laptop width with 13 columns.
+- test_help.py still fails its one "orphaned media" assertion until
+  frontend/help/media/placeholder.pl is deleted in the web UI.
+
+FILES (12)
 ----------
-- That Starlette serves /help/ on Render. The HTTP layer is stubbed in the
-  sandbox, as for every other harness. Check: open /help/ after deploy; a
-  404 means the mount did not land (partial upload) — compare main.py by
-  content.
-- How the page looks in a real browser. It was rendered from the same
-  content as the .docx (which was rasterised and looked at); the HTML
-  itself has not been opened in Chromium here.
+NEW     backend/costlines.py · backend/tests/test_costlines.py (32) ·
+        backend/tests/fixtures/cost_lines.json (written by that test)
+CHANGED backend/derived.py (unit_prices; eur_units / fair_units on week figures) ·
+        backend/lookahead.py (planned_units / fair_units on Account rows) ·
+        backend/main.py (GET /api/costing/lines) ·
+        backend/tests/parse_frontend.js (340) · render_frontend.js (85) ·
+        fixtures/lookahead_page.json · fixtures/lookahead_page_fuel.json (regenerated) ·
+        frontend/index.html (Dashboard rewritten; Forecasts cost column; Look-ahead units)
+        README.txt
 
-NOTHING TO DELETE. NOTHING TO MERGE.
+SUITE — every figure watched print, on a FRESH clone with this zip applied
+--------------------------------------------------------------------------
+test_costing 106 · test_costlines 32 · test_fairprice 47 · test_lookahead 242 ·
+test_phase2 160 · test_phase25a 104 · test_phase3 154 · test_phase4 220 ·
+test_phase45 144 · test_phase5a 215 · test_tenant_audit 32 · test_week1 317 = 1,773 py
+parse_frontend 340 · parse_map 484 · render_frontend 85 · test_ipt_overlay 140 = 1,049 js
+TOTAL 2,822 / 0 (+ test_help 16 / 1, the placeholder). Was 2,777 / 0.
+Run the .py files before the .js ones — three fixtures are written by them.
+
+NOT TESTED
+----------
+- The Dashboard's charts (Chart.js never draws here) and its layout.
+- The HTTP parsing of ?from=&to=&status= (stubbed layer; the bodies run).
+- Two deliberate regressions run and caught: the access filter removed from the
+  cost-lines read (the IPT assertion fails); CO2 on half the km (the CO2 assertion fails).
