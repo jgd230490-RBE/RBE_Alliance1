@@ -87,29 +87,33 @@ try {
 }
 
 // ---- 2. the dashboard no longer computes its own cycle time ------------------
-ok("dashboard fetches the backend analysis batch",
-  src.includes("/routes/analysis-batch"));
+// 11 Sep: the Dashboard reads /api/costing/lines — the Look-ahead's functions — and
+// derives NOTHING. The analysis-batch read and the client arithmetic are gone with it.
+const _dbBody = src.slice(src.indexOf("function Dashboard("), src.indexOf("function DashboardStock("));
+ok("🔴 the dashboard reads /costing/lines and no longer the analysis batch or the raw forecasts",
+  _dbBody.includes("fetch(`${API}/costing/lines?status=All`)") && !_dbBody.includes("/routes/analysis-batch") && !_dbBody.includes("`${API}/forecasts`"));
 ok("the flat-speed cycle formula is gone",
   !src.includes("round/P.avg_haul_speed_kmh") &&
   !src.includes("round / P.avg_haul_speed_kmh"));
 ok("no local cycleH is computed from avg_haul_speed_kmh",
   !/cycleH\s*=\s*[^;]*avg_haul_speed_kmh/.test(src));
-ok("cycle time is read from the analysis payload",
-  /cycleH\s*:\s*\(?\s*an\s*\?\s*an\.cycle_hr/.test(src));
+ok("cycle time is read from the server row (cycle_min), never computed here",
+  _dbBody.includes("cycleH: (r.cycle_min != null ? r.cycle_min / 60 : null)") && !_dbBody.includes("avg_haul_speed") && !_dbBody.includes("load_minutes"));
 ok("an unbaked route renders 'not baked' rather than a number",
   src.includes("not baked"));
 ok("distance falls back to null, not 0",
   !src.includes("route.distance_km || 0"));
-ok("the dashboard warns when lines reference unbaked routes",
-  src.includes("D.unbaked") && src.includes("no cached geometry"));
-ok("fleet size is derived from demand over capacity",
-  src.includes("peakPerDay / a.capacityPerDay"));
-ok("the footnote no longer claims a local estimate",
-  src.includes("no longer estimates its own"));
+ok("the dashboard says how many line-months the km / CO₂e / fair totals exclude, in the header",
+  _dbBody.includes("line-months on a baked route") && _dbBody.includes("exclude the {D.lines - D.baked} unbaked") && _dbBody.includes("No cached geometry for this vehicle"));
+ok("🔴 fleet size is the SERVER's `vehicles` (a monthly peak of it), never demand ÷ capacity here",
+  _dbBody.includes("a.peakVeh = Math.max(a.peakVeh || 0, r.vehicles)") && !_dbBody.includes("peakPerDay / a.capacityPerDay")
+  && !_dbBody.includes("/ payload(") && !_dbBody.includes("emisFactor(") && !_dbBody.includes("toTonnes("));
+ok("the footnote says every figure comes from /api/costing/lines and how each is made",
+  _dbBody.includes("Every figure on this page comes from <code>/api/costing/lines</code>") && _dbBody.includes("rounded up per line-month"));
 
 // ---- 3. per-line model -------------------------------------------------------
 ok("dashboard rows are keyed per line, not per route",
-  src.includes("`${r.route_id}|${r.discipline||\"\"}|${r.section_id||\"\"}`"));
+  _dbBody.includes("`${r.route_id}|${r.discipline || \"\"}|${r.section_id || \"\"}`"));
 ok("dashboard shows a discipline column", src.includes('setSort("discipline")'));
 ok("matrix posts a discipline", /discipline\s*:/.test(src));
 ok("matrix posts a section_id", /section_id\s*:/.test(src));
@@ -262,7 +266,7 @@ ok("⭐ vehicles needed = movements ÷ trips-per-vehicle, rounded UP",
   /Math\.ceil\(movesPerDay \/ tripsPerVehicleDay\)/.test(code));
 ok("⭐ an unbaked route reads 'not baked', never a fleet size",
   code.includes('"not baked" : String(fleetOf(') && code.includes("not baked yet for"));
-ok("the dashboard's fleet column uses the same model", code.includes("Math.ceil(peakPerDay / a.capacityPerDay)"));
+ok("the dashboard's fleet column is the server's model (costlines.vehicles), read not recomputed", _dbBody.includes("r.vehicles") && !code.includes("Math.ceil(peakPerDay / a.capacityPerDay)"));
 ok("...and avg / peak material in the CHOSEN unit",
   code.includes('`Avg ${unit === "m3" ? "m³"') && code.includes('`Peak ${unit === "m3" ? "m³"'));
 ok("working days come from factors.planning, defaulting to 22",
@@ -773,7 +777,7 @@ ok("...and a page change from the rail is mirrored inward",
 
 // 8c. Forecasts — My submissions and Approvals, merged
 ok("there is one Forecasts page, not two lists",
-  code.includes("function Forecasts({ meta, who, access, onEdit, onChanged })")
+  code.includes("function Forecasts({ meta, who, access, onEdit, onChanged, initialCost, initialRows })")
   && !code.includes("function MySubmissions") && !code.includes("function Approvals("));
 ok("lines group per route + discipline + section, not per month",
   code.includes('const key = [r.route_id, disc, sect].join("|")'));

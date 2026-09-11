@@ -171,6 +171,47 @@ if (loaded) {
     && fSubmitter.includes("across every year each one covers")
     && !fPlanner.includes("across every year each one covers"));
 
+  // ---- 11 Sep: the Dashboard and the Forecasts page POPULATED from the server's cost lines
+  // (test_costlines.py writes the fixture through costlines.lines() on its scratch database)
+  const clPath = path.join(__dirname, "fixtures", "cost_lines.json");
+  ok("the cost-lines fixture exists (written by test_costlines.py)", fs.existsSync(clPath));
+  const cl = fs.existsSync(clPath) ? JSON.parse(fs.readFileSync(clPath, "utf8")) : null;
+  if (cl) {
+    const dMeta = { ...meta, months: { start_year: 2026, count: 24 }, materials: ["Small aggregate"], vehicles: ["Rigid 8-wheeler (32t)"],
+                    factors: { ...meta.factors, material_density_t_per_m3: { "Small aggregate": 1.6 }, vehicle_payload_t: { "Rigid 8-wheeler (32t)": 20 } } };
+    const dOut = render("the Dashboard renders POPULATED from the cost lines (initialData)", h(Dashboard, { meta: dMeta, initialData: cl }));
+    ok("...with the three KPI groups — Volume, Cost, Carbon — and the coverage line",
+      dOut.includes(">Volume<") && dOut.includes(">Cost<") && dOut.includes(">Carbon<") && dOut.includes("line-months on a baked route")
+      && dOut.includes("exclude the " + (cl.totals.lines - cl.totals.baked_lines) + " unbaked"));
+    // the default view is Approved only, so the KPIs are sums over the Approved rows of the fixture
+    const appr = cl.lines.filter(l => l.status === "Approved");
+    const sumTrips = appr.reduce((a, l) => a + l.trips, 0);
+    const fairT = appr.filter(l => l.fair.eur != null);
+    const fairPerT = fairT.reduce((a, l) => a + l.fair.eur, 0) / fairT.reduce((a, l) => a + l.tonnes, 0);
+    ok("...the trips KPI is the SUM of the server's rounded-up trips (no arithmetic of its own) and fair €/t the weighted figure",
+      dOut.includes(">" + sumTrips.toLocaleString("en-US").replace(/,/g, " ") + "<") && dOut.includes("planned €") && dOut.includes("fair € (model)")
+      && dOut.includes("€ " + fairPerT.toFixed(2)));
+    ok("...the diesel index is in the header, and IPT / discipline filters exist",
+      dOut.includes("€" + (+cl.costing.index_eur_per_l).toFixed(3) + "/L") && dOut.includes("All IPTs") && dOut.includes("All disciplines"));
+    ok("...the route table prints planned € with a 'target' chip, fair € and fair €/t, and 'not baked' on the unbaked route",
+      dOut.includes(">target<") && dOut.includes("Fair € (model)") && dOut.includes("not baked") && dOut.includes("Cost over time"));
+    ok("...nothing renders as undefined or NaN", !/undefined|NaN/.test(dOut));
+    // Approved-only default: the Pending IPT2 line is not in the default view
+    ok("...the default view is Approved only (the Pending line is filtered out; the status select says so)",
+      dOut.includes("approved only") && !dOut.includes(">R4<"));
+    const rowsFix = cl.lines.map(l => ({ route_id: l.route_id, discipline: l.discipline, section_id: l.section_id, month_index: l.month_index,
+      quantity: l.quantity, unit: l.unit, status: l.status, ipt: l.ipt, material_type: l.material_type, material_description: null,
+      vehicle_type: l.vehicle_type, submitted_by: "tester", reject_reason: null }));
+    const fOut = render("the Forecasts page renders POPULATED with the cost column (initialRows + initialCost)",
+      h(Forecasts, { meta: dMeta, who: "t", access: planner, onEdit(){}, onChanged(){}, initialRows: rowsFix, initialCost: cl }));
+    const nLines = new Set(cl.lines.map(l => `${l.route_id}|${l.discipline}|${l.section_id}`)).size;
+    ok("...one Cost cell per line, each with a planned figure (or 'rate not set') and a fair figure (or 'fair —')",
+      (fOut.match(/data-cost-cell="1"/g) || []).length === nLines && (fOut.match(/fair € /g) || []).length >= 1 && fOut.includes("fair —")
+      && (fOut.match(/>target<\/span>/g) || []).length >= 1);
+    ok("...and the fair figure carries €/t beside it", /fair € [\d ]+<span class="text-slate-400"> · [\d.]+\/t<\/span>/.test(fOut));
+    ok("...nothing renders as undefined or NaN", !/undefined|NaN/.test(fOut));
+  }
+
   // ---- the shared furniture -----------------------------------------------------
   ok("PageHeader renders a title, a subtitle and actions",
     (() => { const o = ReactDOMServer.renderToStaticMarkup(
