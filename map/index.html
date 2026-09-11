@@ -185,6 +185,7 @@
         .tl-btn{ border:none; background:var(--navy); color:#fff; width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:12px; }
         .tl-close{ border:none; background:none; color:var(--muted); cursor:pointer; font-size:15px; }
         #tl-label{ font-size:12px; font-weight:600; color:var(--navy-deep); min-width:190px; white-space:nowrap; }
+        #tl-speed{ border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--navy-deep); font:600 11.5px Inter,system-ui,sans-serif; padding:4px 6px; cursor:pointer; }
     </style>
 </head>
 <body>
@@ -351,6 +352,9 @@
   <button class="tl-btn" id="tl-next" onclick="stepTimeline(1)" title="Next month">▶▶</button>
   <input type="range" id="tl-range" min="1" max="60" value="1" oninput="onTimelineScrub(this.value)">
   <span id="tl-label">Jan 2026</span>
+  <select id="tl-speed" onchange="setTimelineSpeed(this.value)" title="Play speed — months per second">
+    <option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+  </select>
   <button class="tl-close" onclick="closeTimeline()" title="Close timeline">&times;</button>
 </div>
 
@@ -3505,7 +3509,19 @@
         applyRailFlow();
     }
 
-    const TL = { on:false, playing:false, month:1, timer:null, matrix:null };
+    // 11 Sep pm: play speed. TL_STEP_MS is one month at 1×; the select multiplies it. Kept in
+    // localStorage so a wall display keeps its pace across reloads. Changing it while playing
+    // restarts the interval at the new pace; the month does not jump.
+    const TL_STEP_MS = 750;
+    const TL = { on:false, playing:false, month:1, timer:null, matrix:null, speed:1 };
+    try { const sp = parseFloat(localStorage.getItem('rbe_tl_speed')); if(sp > 0){ TL.speed = sp; } } catch(e){}
+    function setTimelineSpeed(v){
+        const sp = parseFloat(v); if(!(sp > 0)) return;
+        TL.speed = sp; try { localStorage.setItem('rbe_tl_speed', String(sp)); } catch(e){}
+        const sel=document.getElementById('tl-speed'); if(sel && sel.value !== String(sp)) sel.value = String(sp);
+        if(TL.playing){ clearInterval(TL.timer); TL.timer = setInterval(tickTimeline, TL_STEP_MS / TL.speed); }
+    }
+    function tickTimeline(){ TL.month = TL.month>=CONFIG.MONTH_COUNT ? 1 : TL.month+1; setTimelineMonth(TL.month); }
     async function ensureTimelineMatrix(){
         if(TL.matrix) return TL.matrix;
         const unit = CONFIG.FORECAST_UNIT || 'vehicles';
@@ -3534,6 +3550,7 @@
         const cb=document.getElementById('toggle-forecast'); if(cb) cb.checked=false;
         const bar=document.getElementById('timeline-bar'); if(bar) bar.style.display='flex';
         const rng=document.getElementById('tl-range'); if(rng) rng.max=CONFIG.MONTH_COUNT;
+        const sel=document.getElementById('tl-speed'); if(sel) sel.value=String(TL.speed);
         const lbl=document.getElementById('tl-label'); if(lbl) lbl.textContent='Loading\u2026';
         ensureTimelineMatrix().then(()=>{ setTimelineMonth(TL.month); }).catch(()=>{ if(lbl) lbl.textContent='No forecast data'; });
     }
@@ -3553,7 +3570,7 @@
         if(!TL.on) openTimeline();
         TL.playing=true; const b=document.getElementById('tl-play'); if(b) b.textContent='\u23F8';
         startFlowAnimation();          // dashes march only while playing
-        TL.timer=setInterval(()=>{ TL.month = TL.month>=CONFIG.MONTH_COUNT ? 1 : TL.month+1; setTimelineMonth(TL.month); }, 750);
+        TL.timer=setInterval(tickTimeline, TL_STEP_MS / TL.speed);
     }
     function stopTimeline(){
         TL.playing=false; const b=document.getElementById('tl-play'); if(b) b.textContent='\u25B6';
