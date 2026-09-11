@@ -1,0 +1,77 @@
+{
+ "route_id": "R1",
+ "vehicle_type": "Rigid 8-wheeler (32t)",
+ "vehicle_class": "rigid",
+ "baked": true,
+ "cells": [
+  {
+   "month_index": 9,
+   "quantity": 4010.0,
+   "tonnes": 4010.0,
+   "trips": 201,
+   "planned": {
+    "eur": 27135.0,
+    "per_t": 6.77,
+    "per_trip": 135.0,
+    "per_km": 2.25,
+    "source": "target",
+    "partial": false
+   },
+   "fair": {
+    "eur": 22869.78,
+    "per_t": 5.7,
+    "per_trip": 113.78,
+    "per_km": 1.896,
+    "flags": []
+   }
+  },
+  {
+   "month_index": 11,
+   "quantity": 4010.0,
+   "tonnes": 4010.0,
+   "trips": 201,
+   "planned": {
+    "eur": 27135.0,
+    "per_t": 6.77,
+    "per_trip": 135.0,
+    "per_km": 2.25,
+    "source": "target",
+    "partial": false
+   },
+   "fair": {
+    "eur": 23490.87,
+    "per_t": 5.86,
+    "per_trip": 116.87,
+    "per_km": 1.948,
+    "flags": [
+     "WINTER"
+    ]
+   }
+  }
+ ],
+ "totals": {
+  "cells": 2,
+  "tonnes": 8020.0,
+  "trips": 402,
+  "planned": {
+   "eur": 54270.0,
+   "per_t": 6.77,
+   "per_trip": 135.0,
+   "per_km": 2.25
+  },
+  "planned_source": "target",
+  "planned_target_cells": 2,
+  "fair": {
+   "eur": 46360.65,
+   "per_t": 5.78,
+   "per_trip": 115.32,
+   "per_km": 1.922
+  },
+  "fair_flags": [
+   "WINTER"
+  ]
+ },
+ "fair_reason": null,
+ "index_eur_per_l": 1.922,
+ "index_bulletin_date": "2026-09-07"
+}

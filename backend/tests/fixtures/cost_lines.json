@@ -92,8 +92,8 @@
     "flags": [],
     "fuel_share_pct": 33.9
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": []
@@ -143,8 +143,8 @@
     ],
     "fuel_share_pct": 35.7
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": []
@@ -241,8 +241,8 @@
     "flags": [],
     "fuel_share_pct": 32.3
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": []
@@ -292,8 +292,8 @@
     ],
     "fuel_share_pct": 34.0
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": []
@@ -341,8 +341,8 @@
     "flags": [],
     "fuel_share_pct": null
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": [
@@ -392,8 +392,8 @@
     "flags": [],
     "fuel_share_pct": null
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": [
@@ -443,8 +443,8 @@
     "flags": [],
     "fuel_share_pct": null
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": [
@@ -494,8 +494,8 @@
     "flags": [],
     "fuel_share_pct": 33.9
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": []
@@ -543,8 +543,8 @@
     "flags": [],
     "fuel_share_pct": 33.9
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": []
@@ -594,8 +594,8 @@
     ],
     "fuel_share_pct": 35.7
    },
-   "actual_qty": 0.0,
-   "actual_tonnes": 0.0,
+   "actual_qty": null,
+   "actual_tonnes": null,
    "actual_eur": null,
    "weeks_reported": 0,
    "flags": []
@@ -628,7 +628,7 @@
   "fair_lines": 9,
   "actual_tonnes": 1900.0,
   "actual_eur": 3300.0,
-  "reported_lines": 12,
+  "reported_lines": 2,
   "delivered_pct": 7.4
  },
  "costing": {
@@ -653,24 +653,8 @@
   "baf_pct": null,
   "baf_reason": "no base",
   "fair_params": {
-   "season": {
-    "winter_consumption_uplift_pct": 8.0,
-    "thaw_months": [
-     3,
-     4
-    ],
-    "winter_months": [
-     11,
-     12,
-     1,
-     2,
-     3
-    ]
-   },
    "vehicle_standing_eur_per_h": 16.0,
-   "driver_eur_per_h": 20.0,
    "margin_pct": 8.0,
-   "running_eur_per_km": 0.12,
    "vehicle_new_price_eur": 190000,
    "consumption": {
     "rigid": {
@@ -680,6 +664,22 @@
      "l_per_100km_empty": 23.6
     },
     "l_per_100km_per_tonne": 0.4
+   },
+   "running_eur_per_km": 0.12,
+   "driver_eur_per_h": 20.0,
+   "season": {
+    "winter_months": [
+     11,
+     12,
+     1,
+     2,
+     3
+    ],
+    "thaw_months": [
+     3,
+     4
+    ],
+    "winter_consumption_uplift_pct": 8.0
    }
   },
   "fair": {
