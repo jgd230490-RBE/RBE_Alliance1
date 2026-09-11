@@ -1,104 +1,132 @@
-rbe-costlines-0911.zip
-======================
-Delivered 2026-09-11. Extract over the repo root. Cut against HEAD as of 11 Sep morning
-(your fairprice zip applied — thank you; README.txt at HEAD is still the help page's).
-Twelve files. NO new dependency, NO schema change, factors.json NOT in this zip.
+rbe-dashboard-bigscreen-0911.zip
+=================================
+Delivered 2026-09-11 (afternoon). Extract over the repo root. Cut against HEAD as of
+11 Sep 13:00 UK (your costlines zip applied — the screenshot you sent is that build).
+Seven files. NO new dependency, NO schema change, factors.json NOT in this zip.
 
-WHAT YOU ASKED FOR
-------------------
-1. Every price in EUR/t, EUR/km and EUR/trip as well as the total — Quote, Target and
-   Fair alike — so comparisons are like for like.
-2. The cost figures on the Forecasts page and the Dashboard.
-3. A review of the Dashboard and a general upgrade.
+WHAT YOU ASKED FOR, AND WHAT WAS DONE
+-------------------------------------
+1. "Remove the stock held table, replace with a stockpile capacity bar chart."
+   DONE. The table is gone. One horizontal bar per stockpile = how full it is at the
+   end of the chosen week, as a % of its RECORDED capacity: green, amber from 90 %,
+   red past 100 %, a dashed line at capacity. Chips pick the week (this month + next;
+   "now" marks the week that holds today). Hover a bar for the absolute figures
+   (held / max / in / out / room). A stockpile with NO capacity recorded cannot be a
+   % — it is listed beside the chart with its balance and "max —", never drawn as
+   0 % or as full (your rule: no capacity recorded is not zero capacity). Same
+   /api/stockpiles read model as before; nothing typed here.
 
-WHAT CHANGED, AND ONE THING YOU WILL NOTICE
--------------------------------------------
-THE DASHBOARD NO LONGER DOES ITS OWN ARITHMETIC. It used to compute trips as tonnes /
-payload (fractional), km from analysis-batch, CO2 from the emissions factor and a fleet
-size from a monthly peak — a second source for numbers the Look-ahead computes on the
-server. Now ONE backend read, GET /api/costing/lines, returns every forecast line x
-month with volume, haul, carbon and cost from the Look-ahead's own functions; the
-Dashboard and the Forecasts page sum what it returns and derive nothing.
-  * Trips are ROUNDED UP per line-month (4,010 t / 20 t = 201, not 200.5). Totals
-    move up a little. That is the Look-ahead's figure and the right one.
-  * An UNBAKED line has NO km, CO2, vehicles or fair EUR on the Dashboard any more —
-    the old fallback to the route's headline distance x 2 is gone (your 09 Sep rule).
-    The header says "n of m line-months on a baked route · km, CO2e and fair EUR
-    exclude the k unbaked". On the live site most routes are unbaked, so expect the
-    km and CO2 totals to DROP until routes are baked. That is not a fault.
+2. "The cost KPIs need info on hover."
+   DONE — for EVERY KPI figure on the page, not only Cost (16 on the four cards, 4
+   on the Today card). Each hover gives the exact figure and how it is made, e.g.
+   planned EUR: "EUR 111 234 = EUR 4.92/t · EUR 135/trip · EUR 2.25/km — the route's
+   typed rates summed, or the Config target where the route has none (6 line-months
+   at target)". Asserted at source and in the render: a figure without a hover fails.
 
-THE UNITS
----------
-Planned (route rates or the Config target) and Fair (the model) each come as
-EUR total · EUR/t · EUR/trip · EUR/km. EUR/km is over the km the trips actually run on
-the route's basis (round trip unless the route says loaded). Where they show:
-  Look-ahead -> Account: under Planned EUR and under Fair EUR, a small line
-    "EUR 5.69/t · EUR 114/trip · EUR 1.90/km".
-  Look-ahead -> Commit, expanded row (▶): "fair EUR … (model) = EUR …/t · …/trip · …/km
-    · quote = …" (or "target = …").
-  Dashboard: the Cost group (planned EUR, fair EUR, fair EUR/t, fair EUR/km with
-    EUR/trip under it); hover any EUR in the route table for the triple.
-  Forecasts page: a Cost column per line — planned (with a 'target' chip where it is
-    the Config rate) and fair with EUR/t beside it; the triple on hover. The CSV
-    export gains nine cost columns.
+3. "Scaling isn't correct on my screen, numbers are cut off."
+   Reproduced in a real browser at 1440 px (see NOT TESTED for how). Two causes:
+   a) each KPI card packed FOUR figures in one row with `truncate` — 90 px per
+      figure at 1440 px, so "1 017 425" became "1 017 …". Now two figures per row,
+      no truncate anywhere, the value sized with clamp() so it scales with the
+      screen, millions printed compact ("1.02 M") with the exact figure on hover.
+   b) the filter row sat in the page header and the vehicle <select> is as wide as
+      its longest option (a 50-character vehicle name) — it pushed the month pickers
+      off the right edge. The filters are now their own wrapping toolbar under the
+      header, each select capped at 13 rem.
 
-THE DASHBOARD REVIEW — what was changed and why
------------------------------------------------
-- KPI strip regrouped into three cards: VOLUME (tonnes, trips, truck-km, peak fleet),
-  COST (planned EUR, fair EUR, fair EUR/t, fair EUR/km), CARBON (tCO2e, kg/t, t·km,
-  peak month). Peak fleet is new at the top — it was only in the table before.
-- IPT and discipline filters (every other surface had them; the Dashboard did not).
-- A coverage line in the header ("n of m line-months baked …") replaces the amber
-  box at the bottom of the page, and the diesel index with its bulletin date sits
-  beside it.
-- Charts: "Cost over time" (planned vs fair by month) and "Vehicles needed over
-  time" are new; the others are unchanged in content.
-- Route table: km/trip (was "Dist km" — it is the trip distance on the route basis),
-  Peak veh (the server's figure), Planned EUR with a quote/target chip, Fair EUR with
-  winter/thaw marks, Fair EUR/t. Origin -> destination and the vehicle under the route
-  id. "Peak/day" and "Trucks" (client arithmetic) are gone; "kg/t" moved to the KPI.
-- The footnote states where every figure comes from and how it is made.
-NOT changed: the stock panel, the material charts, the Top routes chart.
+4. "Further detail and interactiveness; a big screen; a look-ahead / today's
+   deliveries section with a small map; research similar dashboards; positive,
+   exciting data."
+   BUILT (it is additive — nothing you had is lost, the table and filters are still
+   there in the working view):
+   - TODAY strip at the top: tonnes, trips, vehicles on the road and lines reported
+     for today, from the Look-ahead's own read (/api/lookahead, commit bucket, Tark
+     Tee off); "this week to date" and "last week" bars (planned vs reported, the
+     account's hold count and shortfall); today's deliveries listed (line, material,
+     t, trips, veh, confirmed / edited / planned / reported); and the Look-ahead's
+     week map beside it (same CommitMap component, so it draws exactly what the
+     Look-ahead draws; cost never reaches the map — asserted).
+   - DELIVERED TO DATE card (first card): tonnes moved, % of plan, actual EUR typed,
+     and delivered ÷ planned on the reported months. This is the "positive" number —
+     it is the sum of the week actuals typed on Look-ahead → Account (a day actual
+     rolls into its week). Nothing is assumed: until an actual is typed it says
+     "nothing reported yet", and an unreported month counts as not yet delivered.
+   - "Delivered against plan" chart (planned t as outlined bars, reported t filled)
+     and a Delivered % column in the route table.
+   - INTERACTIVE: click any row of the route table (or a bar in "Top routes") and
+     every chart and KPI narrows to that line; the table stays whole so you can pick
+     another; the chip in the header (or clicking the row again) clears it. The
+     subtitle names the focus.
+   - BIG SCREEN button (header): fullscreen, the rail folded, filters and the route
+     table hidden, larger type, both reads refreshed every 5 minutes with an
+     "updated hh:mm" stamp. Esc (or leaving fullscreen) returns to the working view.
+   Research notes: the wall-display guidance (Klipfolio; DataCamp/Toptal dashboard
+   principles; TransportWorks on logistics KPI dashboards) says: readable in three
+   seconds, high contrast, suffixes on big numbers ("34.2 M"), few defended KPIs,
+   no interaction expected on the wall, refresh automatically, tie each figure to an
+   action. Rail Baltica's own "Progress today" page presents progress as km /
+   percentage counters plus a map per country. That shaped the build: the Today
+   strip and Delivered-to-date lead; the map is beside them; big-screen mode hides
+   what needs a mouse. What the guidance recommends and the product does NOT hold
+   is on-time / OTIF and live vehicle positions — see NOT BUILT.
+
+WHAT THIS CHANGES ON THE SERVER (small)
+---------------------------------------
+GET /api/costing/lines now also returns, per line-month: actual_qty, actual_tonnes,
+actual_eur, weeks_reported; totals gain actual_tonnes, actual_eur, reported_lines,
+delivered_pct. One extra statement (forecast_weeks, tenant-scoped, no materialise).
+Existing fields unchanged; the Forecasts page ignores the new ones.
 
 ACTION ON YOUR SIDE
 -------------------
-- Apply, deploy. Open the Dashboard and read the coverage line first.
-- Nothing to configure; nothing to seed.
+- Apply, deploy. Open the Dashboard on your screen first, then press "Big screen".
+- If a stockpile is missing from the chart, it has no capacity recorded: set one on
+  the Locations page.
+- If "Delivered to date" says nothing reported: that is true until a week actual is
+  typed on Look-ahead → Account.
 
 NOT BUILT / OPEN
 ----------------
-- The Submit-forecast matrix does not show cost while you type (it would need a per-
-  cell read; say if you want it).
-- The Dashboard has not been seen in a browser (Chart.js does not draw in the
-  harness; the page renders around empty canvases). First look: the three KPI cards,
-  the two new charts, the route table at laptop width with 13 columns.
-- test_help.py still fails its one "orphaned media" assertion until
-  frontend/help/media/placeholder.pl is deleted in the web UI.
+- On-time / in-full and live truck positions: the product has no arrival times and
+  no tracking. Today's rows show the planned figures and the day's status only.
+- The Today strip shows the commit week (the week that holds today). On a Saturday
+  or Sunday with no planned quantity it says "no deliveries planned for today".
+- The route table is hidden in big-screen mode (13 columns do not read at 6 m).
+- The header (brand bar) stays in big-screen mode.
 
-FILES (12)
-----------
-NEW     backend/costlines.py · backend/tests/test_costlines.py (32) ·
-        backend/tests/fixtures/cost_lines.json (written by that test)
-CHANGED backend/derived.py (unit_prices; eur_units / fair_units on week figures) ·
-        backend/lookahead.py (planned_units / fair_units on Account rows) ·
-        backend/main.py (GET /api/costing/lines) ·
-        backend/tests/parse_frontend.js (340) · render_frontend.js (85) ·
-        fixtures/lookahead_page.json · fixtures/lookahead_page_fuel.json (regenerated) ·
-        frontend/index.html (Dashboard rewritten; Forecasts cost column; Look-ahead units)
-        README.txt
+FILES (7)
+---------
+CHANGED backend/costlines.py (actuals per line-month, totals) ·
+        backend/tests/test_costlines.py (32 → 38) ·
+        backend/tests/fixtures/cost_lines.json (regenerated; carries a reported line) ·
+        backend/tests/parse_frontend.js (340 → 356) · render_frontend.js (85 → 95) ·
+        frontend/index.html (Dashboard rebuilt: DashboardToday, DashboardStockChart
+        replace DashboardStock; CommitMap gains title/height/flush props and a guarded
+        start; Portal folds the rail on big screen) · README.txt
 
 SUITE — every figure watched print, on a FRESH clone with this zip applied
 --------------------------------------------------------------------------
-test_costing 106 · test_costlines 32 · test_fairprice 47 · test_lookahead 242 ·
+test_costing 106 · test_costlines 38 · test_fairprice 47 · test_lookahead 242 ·
 test_phase2 160 · test_phase25a 104 · test_phase3 154 · test_phase4 220 ·
-test_phase45 144 · test_phase5a 215 · test_tenant_audit 32 · test_week1 317 = 1,773 py
-parse_frontend 340 · parse_map 484 · render_frontend 85 · test_ipt_overlay 140 = 1,049 js
-TOTAL 2,822 / 0 (+ test_help 16 / 1, the placeholder). Was 2,777 / 0.
+test_phase45 144 · test_phase5a 215 · test_tenant_audit 32 · test_week1 317 = 1,779 py
+parse_frontend 356 · parse_map 484 · render_frontend 95 · test_ipt_overlay 140 = 1,075 js
+TOTAL 2,854 / 0 (+ test_help 16 / 1, still the placeholder.pl). Was 2,822 / 0.
 Run the .py files before the .js ones — three fixtures are written by them.
 
-NOT TESTED
-----------
-- The Dashboard's charts (Chart.js never draws here) and its layout.
-- The HTTP parsing of ?from=&to=&status= (stubbed layer; the bodies run).
-- Two deliberate regressions run and caught: the access filter removed from the
-  cost-lines read (the IPT assertion fails); CO2 on half the km (the CO2 assertion fails).
+Four deliberate regressions run and caught: the tenant predicate dropped from the
+actuals read (tenant audit + costlines fail); an unreported month reading as 0
+delivered (3 fail); EUR added to the map's hover (1 fail); a KPI without a hover and
+a truncated KPI (4 fail).
+
+NOT TESTED / HOW THE BROWSER CHECK WAS DONE
+-------------------------------------------
+- This time the page WAS opened in a real browser (headless Chromium in the sandbox)
+  against a stub that serves the frontend and canned JSON from the test database,
+  with the CDN libraries served locally — so the layout, Chart.js drawing, the row
+  click, the focus chip, hover titles and big-screen mode were all seen at 1440 px
+  and 1920 px. Screenshots are in the chat.
+- NOT seen: Mapbox tiles (no network from the sandbox — the map frame rendered, the
+  tiles did not); the 5-minute refresh (not waited for); fullscreen (headless has no
+  fullscreen); the live site's real data volumes (the stub had 4 routes, 5 invented
+  stockpiles for the chart).
+- The HTTP layer is stubbed as always; the query-string parsing is not run.
