@@ -42,6 +42,7 @@ import access        # 2026-09-02 — IPT access codes (Task F)
 import config        # 2.5b — the editable copy of factors.json
 import costing       # 10 Sep evening — target rates + fuel settings (config key 'costing'), BAF
 import fuel          # 10 Sep evening — the EU Weekly Oil Bulletin diesel index, fetched server-side
+import costlines     # 11 Sep — one read of every forecast line's volume, haul and cost figures (Dashboard, Forecasts)
 
 ROOT = Path(__file__).resolve().parent.parent          # repo root
 HERE = Path(__file__).resolve().parent                 # backend/
@@ -1166,6 +1167,20 @@ def reset_fuel_base(updated_by: Optional[str] = None, token: Optional[str] = Non
     _check_admin(token)
     costing.reset_baf_base(by=updated_by)
     return _costing_payload()
+
+
+@app.get("/api/costing/lines")
+def costing_lines(from_: Optional[int] = Query(None, alias="from"), to: Optional[int] = None,
+                  status: Optional[str] = None):
+    """
+    11 Sep — every visible forecast line × month with volume, haul, carbon and the three
+    prices (planned / fair) each in € · €/t · €/trip · €/km, from the Look-ahead's own
+    functions. The Dashboard and the Forecasts page read THIS and derive nothing.
+    `status` = Approved | Pending | Rejected | All (default All). Any signed-in code;
+    the access filter is the same as /api/forecasts.
+    """
+    acc = _require_access()
+    return costlines.lines(acc, from_month=from_, to_month=to, status=status)
 
 
 # ------------------------------------------------------------------ public feed (map)

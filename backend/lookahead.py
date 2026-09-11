@@ -303,6 +303,11 @@ def page(bucket="commit", route_id=None, acc=None, with_tark_tee=True, today=Non
         r["planned_eur_adj"] = pf.get("eur_adj")
         r["planned_fair_eur"] = pf.get("fair_eur")
         r["fair_flags"] = list(((ctx.get("fair") or {}).get("flags")) or [])
+        # 11 Sep: the same figures per tonne / trip / km, for like-for-like comparison
+        _bk = (float(ctx.get("basis_km") or 0) * pf["trips"]) if ctx.get("baked") else None
+        r["planned_units"] = derived.unit_prices(pf.get("eur"), pf.get("tonnes"), pf["trips"], _bk)
+        r["fair_units"] = derived.unit_prices(pf.get("fair_eur"), pf.get("tonnes"), pf["trips"], _bk)
+        r["planned_trips"] = pf["trips"]
         r["planned_t"] = pf.get("tonnes")
         r["eur_variance"] = (round(float(pf["eur"]) - float(r["actual_cost_eur"]), 2)
                              if pf.get("eur") is not None and r.get("actual_cost_eur") is not None

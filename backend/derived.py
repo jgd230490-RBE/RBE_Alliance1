@@ -165,6 +165,18 @@ def _routes_and_names():
     return out
 
 
+def unit_prices(eur, tonnes, trips, km):
+    """{eur, per_t, per_trip, per_km} — None where the divisor is 0 or missing."""
+    e = _num(eur)
+    if e is None:
+        return {"eur": None, "per_t": None, "per_trip": None, "per_km": None}
+    t, n, k = _num(tonnes) or 0.0, _num(trips) or 0.0, _num(km) or 0.0
+    return {"eur": round(e, 2),
+            "per_t": (round(e / t, 2) if t > 0 else None),
+            "per_trip": (round(e / n, 2) if n > 0 else None),
+            "per_km": (round(e / k, 3) if k > 0 else None)}
+
+
 def costing_context():
     """
     The tenant's costing settings, the stored fuel index and the BAF they give — read
@@ -373,7 +385,7 @@ def decorate(res, factors=None):
               "km": (0.0 if ctx["baked"] else None),
               "tonne_km": (0.0 if ctx["baked"] else None),
               "eur": None, "eur_partial": False, "eur_adj": None, "fair_eur": None,
-              "rate_source": ctx.get("rate_source")}
+              "rate_source": ctx.get("rate_source"), "basis_km_total": (0.0 if ctx["baked"] else None)}
         for d in line.get("days", []) or []:
             f = day_figures(d.get("planned_qty"), ctx, factors)
             d["derived"] = f
@@ -390,6 +402,7 @@ def decorate(res, factors=None):
                 wk["vehicles_peak"] = max(wk["vehicles_peak"], f["vehicles"] or 0)
                 wk["km"] += f["km_day"] or 0.0
                 wk["tonne_km"] += f["tonne_km"] or 0.0
+                wk["basis_km_total"] += float(ctx.get("basis_km") or 0) * f["trips"]
                 by_day[d["day_date"]] = by_day.get(d["day_date"], 0) + (f["vehicles"] or 0)
         wk["tonnes"] = round(wk["tonnes"], 3)
         if wk["eur"] is not None:
@@ -401,6 +414,12 @@ def decorate(res, factors=None):
         if ctx["baked"]:
             wk["km"] = round(wk["km"], 2)
             wk["tonne_km"] = round(wk["tonne_km"], 1)
+            wk["basis_km_total"] = round(wk["basis_km_total"], 2)
+        # 11 Sep: every € also as €/t · €/trip · €/km, so Quote, Target and Fair compare
+        # in whatever unit the other side quotes in. per_km is over the km the trips run
+        # on the route's basis (round trip unless the route says loaded).
+        wk["eur_units"] = unit_prices(wk["eur"], wk["tonnes"], wk["trips"], wk["basis_km_total"])
+        wk["fair_units"] = unit_prices(wk["fair_eur"], wk["tonnes"], wk["trips"], wk["basis_km_total"])
         line["week_derived"] = wk
         tot["planned_t"] += wk["tonnes"]
         tot["trips"] += wk["trips"]
