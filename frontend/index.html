@@ -70,8 +70,8 @@ function fromTonnes(t, unit, m, v, f){ if(unit==="t") return t; if(unit==="m3") 
 const fmt = (n, unit) => unit==="vehicles" ? Math.round(n).toLocaleString() : (Math.round(n*10)/10).toLocaleString();
 
 // ---- dashboard helpers ----
-const emisFactor = (f,v) => (f.vehicle_emissions_kg_co2e_per_km?.[v] ?? f.vehicle_emissions_kg_co2e_per_km?._default ?? 0.9);
-const planningOf = (f) => (f.planning || {avg_haul_speed_kmh:45, load_minutes:12, unload_minutes:8, working_days_per_month:22, shift_hours_per_day:10});
+// (emisFactor and planningOf were the Dashboard's own CO₂ and planning constants; gone
+//  11 Sep — the server's /api/costing/lines carries CO₂e and the working-day figure.)
 const monthLabelAbs = (idx, startYear) => MONTHS[(idx-1)%12] + " " + String(startYear + Math.floor((idx-1)/12)).slice(2);
 const PALETTE = ["#003787","#039E86","#BF2E55","#C6841D","#6D28D9","#0E7490","#3398DB","#9AA7B4","#DB6D33","#1B7F5E"];
 const colorOf = (i) => PALETTE[i % PALETTE.length];
@@ -100,252 +100,293 @@ function Kpi({ label, value, sub, small }){
 }
 
 // ================================================================= Dashboard
-function Dashboard({ meta }){
-  const { routes, materials, vehicles, units, months, factors } = meta;
-  const routesById = useMemo(() => Object.fromEntries(routes.map(r => [r.route_id, r])), [routes]);
-
-  const [rows, setRows] = useState(null);
-  const [analysis, setAnalysis] = useState(null);   // /api/routes/analysis-batch
+// 11 Sep: the Dashboard READS and SUMS; it no longer derives. Every line-month comes from
+// GET /api/costing/lines — the Look-ahead's own functions (derived.py, fairprice.py):
+// trips rounded up, the route's own cycle, km only where the route is baked for the
+// line's vehicle, CO2 on the server's km, and the three prices (planned / fair) each in
+// € · €/t · €/trip · €/km. Two consequences the human chose: trips move up slightly
+// against the old fractional tonnes ÷ payload, and an unbaked line has NO km / CO2 /
+// fair € (the old fallback to the route's headline distance is gone) — the coverage line
+// says how many lines the totals exclude. The only conversion left in the browser is
+// tonnes → the chosen display unit for the material chart, which is presentation.
+// `initialData` exists for the render harness (useEffect never runs there).
+const eurK = (n) => (n == null || isNaN(+n)) ? "—" : (Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + " M" : Math.abs(n) >= 1e4 ? Math.round(n / 1e3).toLocaleString("en-US") + " k" : Math.round(n).toLocaleString("en-US"));
+const unitTriple = (u, opts) => {
+  if(!u || u.eur == null) return null;
+  const o = opts || {};
+  const parts = [];
+  if(u.per_t != null) parts.push(`€ ${(+u.per_t).toFixed(2)}/t`);
+  if(u.per_trip != null) parts.push(`€ ${grp(u.per_trip, 0)}/trip`);
+  if(u.per_km != null) parts.push(`€ ${(+u.per_km).toFixed(2)}/km`);
+  return parts.length ? parts.join(o.sep || " · ") : null;
+};
+function Dashboard({ meta, initialData }){
+  const { materials, vehicles, units, months, factors } = meta;
+  const [data, setData] = useState(initialData || null);
   const [err, setErr] = useState(false);
   const [status, setStatus] = useState("Approved");
   const [unit, setUnit] = useState("t");
   const [material, setMaterial] = useState("All");
   const [vehicle, setVehicle] = useState("All");
+  const [ipt, setIpt] = useState("All");
+  const [discipline, setDiscipline] = useState("All");
   const [fromM, setFromM] = useState(1);
   const [toM, setToM] = useState(months.count);
   const [sortKey, setSortKey] = useState("t");
   const [sortDir, setSortDir] = useState("desc");
 
   useEffect(() => {
+    if(initialData) return;
     let live = true;
-    fetch(`${API}/forecasts`).then(r => r.json()).then(rs => {
+    fetch(`${API}/costing/lines?status=All`).then(r => r.ok ? r.json() : Promise.reject(r.status)).then(j => {
       if(!live) return;
-      setRows(rs);
-      const idx = rs.map(x => x.month_index);
+      setData(j);
+      const idx = (j.lines || []).map(x => x.month_index);
       if(idx.length){ setFromM(Math.min(...idx)); setToM(Math.max(...idx)); }
     }).catch(() => setErr(true));
     return () => { live = false; };
   }, []);
 
-  // Haul-cycle figures come from the BACKEND now.
-  //
-  // This screen used to work its own out — round trip over a flat 45 km/h plus one
-  // global 12+8 minute turnaround for every vehicle — while the route analysis panel
-  // used HERE's real routed durations and each vehicle's own turnaround. The same route
-  // therefore had two different cycle times depending on which screen you opened. On a
-  // 70 km/h trunk road the local formula overstated the cycle by about a third, and it
-  // understated an Artic Flatbed's 45-minute turnaround by more than half.
-  //
-  // One request covers every route, so this costs one fetch rather than one per row.
-  useEffect(() => {
-    let live = true;
-    fetch(`${API}/routes/analysis-batch`).then(r => r.json()).then(j => {
-      if(live) setAnalysis(j);
-    }).catch(() => { if(live) setAnalysis({ analysis: {}, not_baked: [], error: true }); });
-    return () => { live = false; };
-  }, []);
-
   const unitLabel = unit === "t" ? "tonnes" : unit === "m3" ? "m³" : "vehicles";
+  const rows = (data && data.lines) || [];
+  const ipts = useMemo(() => [...new Set(rows.map(r => r.ipt).filter(Boolean))].sort(), [rows]);
+  const discs = useMemo(() => [...new Set(rows.map(r => r.discipline).filter(Boolean))].sort(), [rows]);
 
   const D = useMemo(() => {
-    if(!rows) return null;
-    const lo = Math.min(fromM,toM), hi = Math.max(fromM,toM);
-    const P = planningOf(factors);
+    if(!data) return null;
+    const lo = Math.min(fromM, toM), hi = Math.max(fromM, toM);
     const filtered = rows.filter(r =>
-      (status==="All" || r.status===status) &&
-      (material==="All" || r.material_type===material) &&
-      (vehicle==="All" || r.vehicle_type===vehicle) &&
-      r.month_index>=lo && r.month_index<=hi
+      (status === "All" || r.status === status) &&
+      (material === "All" || r.material_type === material) &&
+      (vehicle === "All" || r.vehicle_type === vehicle) &&
+      (ipt === "All" || (ipt === "none" ? !r.ipt : r.ipt === ipt)) &&
+      (discipline === "All" || r.discipline === discipline) &&
+      r.month_index >= lo && r.month_index <= hi
     );
     const n = hi - lo + 1;
-    const labels = []; for(let i=lo;i<=hi;i++) labels.push(monthLabelAbs(i, months.start_year));
+    const labels = []; for(let i = lo; i <= hi; i++) labels.push(monthLabelAbs(i, months.start_year));
     const mats = [...new Set(filtered.map(r => r.material_type))];
     const demand = {}; mats.forEach(m => demand[m] = new Array(n).fill(0));
-    const tripsM = new Array(n).fill(0);
-    const co2M = new Array(n).fill(0);
-    const tonnesM = new Array(n).fill(0);
+    const Z = () => new Array(n).fill(0);
+    const tripsM = Z(), co2M = Z(), tonnesM = Z(), plannedM = Z(), fairM = Z(), vehM = Z();
     const split = {}; mats.forEach(m => split[m] = 0);
     const rAgg = {};
-    const AN = (analysis && analysis.analysis) || {};
-    let totT=0, totTrips=0, totKm=0, totCo2=0;
+    const T = { t: 0, trips: 0, km: 0, co2: 0, tkm: 0, planned: 0, plannedT: 0, plannedTrips: 0, plannedKm: 0, plannedN: 0, targetN: 0,
+                fair: 0, fairT: 0, fairTrips: 0, fairKm: 0, fairN: 0, baked: 0, bakedT: 0 };
     filtered.forEach(r => {
-      const route = routesById[r.route_id] || {};
-      // the backend's routed distance for the vehicle on this line, falling back to the
-      // route's headline distance when that vehicle has not been baked
-      const an = (AN[r.route_id] || {})[r.vehicle_type];
-      const dist = an ? an.loaded_km : (route.distance_km ?? null);
-      const round = an ? (an.total_km || 0) : ((dist || 0) * 2);
-      const t = toTonnes(r.quantity, r.unit, r.material_type, r.vehicle_type, factors);
-      const trips = t / payload(factors, r.vehicle_type);
-      const km = trips * round;
-      const co2 = km * emisFactor(factors, r.vehicle_type);     // kg
-      const disp = fromTonnes(t, unit, r.material_type, r.vehicle_type, factors);
       const k = r.month_index - lo;
-      demand[r.material_type][k] += disp;
-      tripsM[k] += trips; co2M[k] += co2/1000; tonnesM[k] += t;
-      split[r.material_type] += disp;
-      totT += t; totTrips += trips; totKm += km; totCo2 += co2/1000;
-      // keyed per LINE — a route carrying two disciplines is two rows, not one row with
-      // both disciplines' traffic silently added together
-      const key = `${r.route_id}|${r.discipline||""}|${r.section_id||""}`;
+      const disp = fromTonnes(r.tonnes, unit, r.material_type, r.vehicle_type, factors);   // display only
+      demand[r.material_type][k] += disp; split[r.material_type] += disp;
+      tripsM[k] += r.trips; tonnesM[k] += r.tonnes; co2M[k] += r.co2_t || 0; vehM[k] += r.vehicles || 0;
+      plannedM[k] += (r.planned && r.planned.eur) || 0; fairM[k] += (r.fair && r.fair.eur) || 0;
+      T.t += r.tonnes; T.trips += r.trips; T.km += r.km || 0; T.co2 += r.co2_t || 0; T.tkm += r.tonne_km || 0;
+      const bk = (r.basis_km || 0) * r.trips;
+      if(r.baked){ T.baked += 1; T.bakedT += r.tonnes; }
+      if(r.planned && r.planned.eur != null){ T.planned += r.planned.eur; T.plannedT += r.tonnes; T.plannedTrips += r.trips; T.plannedKm += bk; T.plannedN += 1; if(r.planned.source === "target") T.targetN += 1; }
+      if(r.fair && r.fair.eur != null){ T.fair += r.fair.eur; T.fairT += r.tonnes; T.fairTrips += r.trips; T.fairKm += bk; T.fairN += 1; }
+      // keyed per LINE — a route carrying two disciplines is two rows
+      const key = `${r.route_id}|${r.discipline || ""}|${r.section_id || ""}`;
       const a = rAgg[key] || (rAgg[key] = {
-        key, route_id:r.route_id, discipline:r.discipline||"", section_id:r.section_id||"",
-        ipt:route.ipt||"—", dist, vehicle:r.vehicle_type,
-        cycleH:(an ? an.cycle_hr : null), capacityPerDay:(an ? an.trips_per_day : null),
-        baked:!!an, t:0, trips:0, km:0, co2:0, monthly:{},
+        key, route_id: r.route_id, discipline: r.discipline || "", section_id: r.section_id || "", ipt: r.ipt || "—",
+        origin: r.origin_name, dest: r.dest_name, vehicle: r.vehicle_type, vehicle_short: r.vehicle_short,
+        dist: r.km_trip, cycleH: (r.cycle_min != null ? r.cycle_min / 60 : null), capacityPerDay: r.cycles_per_vehicle_day,
+        baked: !!r.baked, t: 0, trips: 0, km: 0, bkm: 0, co2: 0, peakVeh: null, planned: null, fair: null, source: null, flags: new Set(),
       });
-      a.t += t; a.trips += trips; a.km += km; a.co2 += co2/1000;
-      a.monthly[r.month_index] = (a.monthly[r.month_index]||0) + trips;
+      a.t += r.tonnes; a.trips += r.trips; a.km += r.km || 0; a.bkm += bk; a.co2 += r.co2_t || 0;
+      if(r.vehicles != null) a.peakVeh = Math.max(a.peakVeh || 0, r.vehicles);
+      if(r.planned && r.planned.eur != null){ a.planned = (a.planned || 0) + r.planned.eur; a.source = r.planned.source; }
+      if(r.fair && r.fair.eur != null){ a.fair = (a.fair || 0) + r.fair.eur; (r.fair.flags || []).forEach(x => a.flags.add(x)); }
     });
-    const routeRows = Object.values(rAgg).map(a => {
-      const mv = Object.values(a.monthly);
-      const peakMonthTrips = mv.length ? Math.max(...mv) : 0;
-      // DEMAND per day — how many loads the tonnage needs. Distinct from the backend's
-      // capacityPerDay, which is how many one truck can physically do in a shift.
-      // Trucks needed = demand / capacity; showing only one of the two, as this screen
-      // used to, cannot answer a fleet-size question.
-      const peakPerDay = P.working_days_per_month>0 ? peakMonthTrips/P.working_days_per_month : 0;
-      const trucks = (a.capacityPerDay > 0) ? Math.ceil(peakPerDay / a.capacityPerDay) : null;
-      const intensity = a.t>0 ? (a.co2*1000/a.t) : 0;
-      return { ...a, peakPerDay, trucks, intensity };
-    });
-    let peakIdx = 0; for(let i=1;i<n;i++) if(tonnesM[i]>tonnesM[peakIdx]) peakIdx = i;
-    const peakMonth = tonnesM.some(x=>x>0) ? labels[peakIdx] : "—";
+    const per = (eur, t, trips, km) => eur == null ? null : { eur, per_t: t > 0 ? eur / t : null, per_trip: trips > 0 ? eur / trips : null, per_km: km > 0 ? eur / km : null };
+    const routeRows = Object.values(rAgg).map(a => ({
+      ...a, intensity: a.t > 0 && a.baked ? (a.co2 * 1000 / a.t) : null,
+      plannedU: per(a.planned, a.t, a.trips, a.bkm), fairU: per(a.fair, a.t, a.trips, a.bkm),
+      fairPerT: (a.fair != null && a.t > 0) ? a.fair / a.t : null, flags: [...a.flags],
+    }));
+    let peakIdx = 0; for(let i = 1; i < n; i++) if(tonnesM[i] > tonnesM[peakIdx]) peakIdx = i;
+    let fleetIdx = 0; for(let i = 1; i < n; i++) if(vehM[i] > vehM[fleetIdx]) fleetIdx = i;
     return {
-      lo, hi, labels, mats, demand, tripsM, co2M, split, routeRows,
-      kpis: { totT, totTrips, totKm, totCo2, intensity: totT>0 ? totCo2*1000/totT : 0, peakMonth },
-      empty: filtered.length===0,
-      unbaked: routeRows.filter(r => !r.baked).length,
+      lo, hi, labels, mats, demand, tripsM, co2M, tonnesM, plannedM, fairM, vehM, split, routeRows,
+      kpis: { totT: T.t, totTrips: T.trips, totKm: T.km, totCo2: T.co2, totTkm: T.tkm,
+              intensity: T.bakedT > 0 ? T.co2 * 1000 / T.bakedT : null,
+              peakMonth: tonnesM.some(x => x > 0) ? labels[peakIdx] : "—",
+              peakFleet: vehM.some(x => x > 0) ? vehM[fleetIdx] : 0, peakFleetMonth: vehM.some(x => x > 0) ? labels[fleetIdx] : "—",
+              planned: per(T.plannedN ? T.planned : null, T.plannedT, T.plannedTrips, T.plannedKm), plannedN: T.plannedN, targetN: T.targetN,
+              fair: per(T.fairN ? T.fair : null, T.fairT, T.fairTrips, T.fairKm), fairN: T.fairN },
+      lines: filtered.length, baked: T.baked, unbakedRoutes: routeRows.filter(r => !r.baked).length,
+      empty: filtered.length === 0,
     };
-  }, [rows, analysis, status, material, vehicle, fromM, toM, unit, factors, months, routesById]);
+  }, [data, status, material, vehicle, ipt, discipline, fromM, toM, unit, factors, months]);
 
-  if(err) return <div className="p-8 text-center text-slate-500">Couldn't load forecast data.</div>;
-  if(!rows || !D) return <div className="p-8 text-center text-slate-400">Loading dashboard…</div>;
-  if(!analysis) return <div className="p-8 text-center text-slate-400">Loading haul-cycle figures…</div>;
+  if(err) return <div className="p-8 text-center text-slate-500">Couldn't load the forecast figures.</div>;
+  if(!data || !D) return <div className="p-8 text-center text-slate-400">Loading dashboard…</div>;
 
-  const sortedRoutes = [...D.routeRows].sort((a,b) => {
-    const dir = sortDir==="asc" ? 1 : -1;
-    return (a[sortKey] > b[sortKey] ? 1 : a[sortKey] < b[sortKey] ? -1 : 0) * dir;
+  const sortedRoutes = [...D.routeRows].sort((a, b) => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    const av = a[sortKey], bv = b[sortKey];
+    if(av == null && bv == null) return 0; if(av == null) return 1; if(bv == null) return -1;
+    return (av > bv ? 1 : av < bv ? -1 : 0) * dir;
   });
-  const setSort = (k) => { if(sortKey===k) setSortDir(d => d==="asc"?"desc":"asc"); else { setSortKey(k); setSortDir("desc"); } };
-  const arrow = (k) => sortKey===k ? (sortDir==="asc" ? " ▲" : " ▼") : "";
+  const setSort = (k) => { if(sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(k); setSortDir("desc"); } };
+  const arrow = (k) => sortKey === k ? (sortDir === "asc" ? " ▲" : " ▼") : "";
 
-  const commonOpts = { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false } } };
-  const barScales = { scales:{ x:{ grid:{ display:false } }, y:{ ticks:{ font:{ size:11 } } } } };
-  const stackedOpts = { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:10, font:{ size:11 } } } }, scales:{ x:{ stacked:true, grid:{ display:false } }, y:{ stacked:true, ticks:{ font:{ size:11 } } } } };
+  const commonOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
+  const barScales = { scales: { x: { grid: { display: false } }, y: { ticks: { font: { size: 11 } } } } };
+  const stackedOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } } }, scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, ticks: { font: { size: 11 } } } } };
+  const legendOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } } }, scales: { x: { grid: { display: false } }, y: { ticks: { font: { size: 11 } } } } };
 
-  const demandCfg = { type:"bar", data:{ labels:D.labels, datasets:D.mats.map((m,i)=>({ label:m, data:D.demand[m], backgroundColor:colorOf(i), stack:"s", borderWidth:0 })) }, options:stackedOpts };
-  const tripsCfg  = { type:"bar", data:{ labels:D.labels, datasets:[{ label:"Trips", data:D.tripsM, backgroundColor:"#003787", borderWidth:0 }] }, options:{ ...commonOpts, ...barScales } };
-  const co2Cfg    = { type:"line", data:{ labels:D.labels, datasets:[{ label:"tCO₂e", data:D.co2M, borderColor:"#039E86", backgroundColor:"rgba(3,158,134,.12)", fill:true, tension:.3, pointRadius:2 }] }, options:{ ...commonOpts, ...barScales } };
-  const splitCfg  = { type:"doughnut", data:{ labels:D.mats, datasets:[{ data:D.mats.map(m=>D.split[m]), backgroundColor:D.mats.map((m,i)=>colorOf(i)), borderWidth:2, borderColor:"#fff" }] }, options:{ responsive:true, maintainAspectRatio:false, cutout:"62%", plugins:{ legend:{ position:"right", labels:{ boxWidth:10, font:{ size:11 } } } } } };
-  const topN = [...D.routeRows].sort((a,b)=>b.t-a.t).slice(0,10);
-  const topCfg = { type:"bar", data:{ labels:topN.map(r=>r.route_id), datasets:[{ label:"tonnes", data:topN.map(r=>r.t), backgroundColor:"#3398DB", borderWidth:0 }] }, options:{ indexAxis:"y", ...commonOpts, scales:{ x:{ grid:{ display:false }, ticks:{ font:{ size:10 } } }, y:{ ticks:{ font:{ size:9 } } } } } };
+  const demandCfg = { type: "bar", data: { labels: D.labels, datasets: D.mats.map((m, i) => ({ label: m, data: D.demand[m], backgroundColor: colorOf(i), stack: "s", borderWidth: 0 })) }, options: stackedOpts };
+  const tripsCfg  = { type: "bar", data: { labels: D.labels, datasets: [{ label: "Trips", data: D.tripsM, backgroundColor: "#003787", borderWidth: 0 }] }, options: { ...commonOpts, ...barScales } };
+  const fleetCfg  = { type: "bar", data: { labels: D.labels, datasets: [{ label: "Vehicles", data: D.vehM, backgroundColor: "#0E7490", borderWidth: 0 }] }, options: { ...commonOpts, ...barScales } };
+  const co2Cfg    = { type: "line", data: { labels: D.labels, datasets: [{ label: "tCO₂e", data: D.co2M, borderColor: "#039E86", backgroundColor: "rgba(3,158,134,.12)", fill: true, tension: .3, pointRadius: 2 }] }, options: { ...commonOpts, ...barScales } };
+  const costCfg   = { type: "bar", data: { labels: D.labels, datasets: [
+    { label: "Planned € (quote / target)", data: D.plannedM, backgroundColor: "#003787", borderWidth: 0 },
+    { label: "Fair € (model)", data: D.fairM, backgroundColor: "#3398DB", borderWidth: 0 }] }, options: legendOpts };
+  const splitCfg  = { type: "doughnut", data: { labels: D.mats, datasets: [{ data: D.mats.map(m => D.split[m]), backgroundColor: D.mats.map((m, i) => colorOf(i)), borderWidth: 2, borderColor: "#fff" }] }, options: { responsive: true, maintainAspectRatio: false, cutout: "62%", plugins: { legend: { position: "right", labels: { boxWidth: 10, font: { size: 11 } } } } } };
+  const topN = [...D.routeRows].sort((a, b) => b.t - a.t).slice(0, 10);
+  const topCfg = { type: "bar", data: { labels: topN.map(r => r.route_id), datasets: [{ label: "tonnes", data: topN.map(r => r.t), backgroundColor: "#3398DB", borderWidth: 0 }] }, options: { indexAxis: "y", ...commonOpts, scales: { x: { grid: { display: false }, ticks: { font: { size: 10 } } }, y: { ticks: { font: { size: 9 } } } } } };
 
   const sel = "border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm bg-white";
   const numTd = "px-3 py-2 text-right tabular-nums";
+  const cost = data.costing || {};
+  const K = D.kpis;
+  const srcChip = (s) => s === "target" ? <span className="ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600" title="No rate on the route — the target rate from Config">target</span>
+                        : s === "route" ? <span className="ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600" title="The rates typed on the route">quote</span> : null;
+  const Group = ({ title, children, tone }) => (
+    <div className="card p-3.5">
+      <div className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: tone || "#94a3b8" }}>{title}</div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2">{children}</div>
+    </div>
+  );
+  const Fig = ({ value, label, sub, title, tone }) => (
+    <div title={title} className="min-w-0">
+      <div className="kpi-num font-bold text-xl truncate" style={{ color: tone || "var(--navy-deep)" }}>{value}</div>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mt-0.5 truncate">{label}</div>
+      {sub && <div className="text-[11px] text-slate-400 truncate">{sub}</div>}
+    </div>
+  );
 
   return (
     <div className="max-w-7xl mx-auto p-5 space-y-5">
       <PageHeader title="Dashboard"
-        subtitle={`Strategic planning view · ${D.lo===D.hi ? D.labels[0] : (monthLabelAbs(D.lo,months.start_year)+" – "+monthLabelAbs(D.hi,months.start_year))} · ${status==="All" ? "all forecasts" : status.toLowerCase()+" only"}`}
+        subtitle={`Strategic planning view · ${D.lo === D.hi ? D.labels[0] : (monthLabelAbs(D.lo, months.start_year) + " – " + monthLabelAbs(D.hi, months.start_year))} · ${status === "All" ? "all forecasts" : status.toLowerCase() + " only"}${ipt !== "All" ? " · " + (ipt === "none" ? "no IPT" : ipt) : ""}${discipline !== "All" ? " · " + discipline : ""}`}
         actions={<div className="flex flex-wrap gap-2">
-          <select className={sel} value={status} onChange={e=>setStatus(e.target.value)}>{["Approved","Pending","All"].map(s=><option key={s}>{s}</option>)}</select>
-          <select className={sel} value={unit} onChange={e=>setUnit(e.target.value)}>{units.map(u=><option key={u} value={u}>{u==="t"?"tonnes":u==="m3"?"m³":"vehicles"}</option>)}</select>
-          <select className={sel} value={material} onChange={e=>setMaterial(e.target.value)}><option>All</option>{materials.map(m=><option key={m}>{m}</option>)}</select>
-          <select className={sel} value={vehicle} onChange={e=>setVehicle(e.target.value)}><option>All</option>{vehicles.map(v=><option key={v} value={v}>{vehLabel(v)}</option>)}</select>
-          <select className={sel} value={fromM} onChange={e=>setFromM(+e.target.value)}>{Array.from({length:months.count},(_,i)=>i+1).map(i=><option key={i} value={i}>{monthLabelAbs(i,months.start_year)}</option>)}</select>
+          <select className={sel} value={status} onChange={e => setStatus(e.target.value)}>{["Approved", "Pending", "All"].map(s => <option key={s}>{s}</option>)}</select>
+          <select className={sel} value={ipt} onChange={e => setIpt(e.target.value)} title="IPT"><option value="All">All IPTs</option>{ipts.map(i => <option key={i} value={i}>{i}</option>)}{rows.some(r => !r.ipt) && <option value="none">No IPT set</option>}</select>
+          <select className={sel} value={discipline} onChange={e => setDiscipline(e.target.value)} title="Discipline"><option value="All">All disciplines</option>{discs.map(d => <option key={d} value={d}>{d}</option>)}</select>
+          <select className={sel} value={unit} onChange={e => setUnit(e.target.value)}>{units.map(u => <option key={u} value={u}>{u === "t" ? "tonnes" : u === "m3" ? "m³" : "vehicles"}</option>)}</select>
+          <select className={sel} value={material} onChange={e => setMaterial(e.target.value)}><option>All</option>{materials.map(m => <option key={m}>{m}</option>)}</select>
+          <select className={sel} value={vehicle} onChange={e => setVehicle(e.target.value)}><option>All</option>{vehicles.map(v => <option key={v} value={v}>{vehLabel(v)}</option>)}</select>
+          <select className={sel} value={fromM} onChange={e => setFromM(+e.target.value)}>{Array.from({ length: months.count }, (_, i) => i + 1).map(i => <option key={i} value={i}>{monthLabelAbs(i, months.start_year)}</option>)}</select>
           <span className="self-center text-slate-400 text-sm">→</span>
-          <select className={sel} value={toM} onChange={e=>setToM(+e.target.value)}>{Array.from({length:months.count},(_,i)=>i+1).map(i=><option key={i} value={i}>{monthLabelAbs(i,months.start_year)}</option>)}</select>
-        </div>} />
+          <select className={sel} value={toM} onChange={e => setToM(+e.target.value)}>{Array.from({ length: months.count }, (_, i) => i + 1).map(i => <option key={i} value={i}>{monthLabelAbs(i, months.start_year)}</option>)}</select>
+        </div>}>
+        {/* coverage: what the totals include and exclude — the old amber box, moved to where the numbers are read */}
+        <div className="text-xs text-slate-500 mt-2 flex flex-wrap gap-x-3 gap-y-1">
+          <span><strong className="tabular-nums">{D.baked}</strong> of <strong className="tabular-nums">{D.lines}</strong> line-months on a baked route{D.lines > D.baked ? <span className="text-amber-700"> · km, CO₂e and fair € exclude the {D.lines - D.baked} unbaked ({D.unbakedRoutes} route{D.unbakedRoutes === 1 ? "" : "s"}) — bake them on the Routes page</span> : null}</span>
+          <span>· diesel {cost.index_eur_per_l != null ? <strong>€{(+cost.index_eur_per_l).toFixed(3)}/L</strong> : <span className="text-amber-700">index unavailable — no fair price</span>}{cost.index_bulletin_date ? ` (bulletin ${longDate(String(cost.index_bulletin_date).slice(0, 10))})` : ""}</span>
+        </div>
+      </PageHeader>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <Kpi label="Total material" value={Math.round(D.kpis.totT).toLocaleString()} sub="tonnes" />
-        <Kpi label="Total trips" value={Math.round(D.kpis.totTrips).toLocaleString()} sub="loaded runs" />
-        <Kpi label="Truck-km" value={Math.round(D.kpis.totKm).toLocaleString()} sub="round trips" />
-        <Kpi label="CO₂e" value={D.kpis.totCo2.toFixed(1)} sub="tonnes" />
-        <Kpi label="Intensity" value={D.kpis.intensity.toFixed(1)} sub="kg / tonne" />
-        <Kpi label="Peak month" value={D.kpis.peakMonth} sub="by tonnage" small />
+      <div className="grid lg:grid-cols-3 gap-3">
+        <Group title="Volume">
+          <Fig value={grp(K.totT)} label="tonnes" sub="all lines" />
+          <Fig value={grp(K.totTrips)} label="trips" sub="loaded runs, rounded up per month" title="ceil(tonnes ÷ payload) per line-month — the Look-ahead's figure" />
+          <Fig value={grp(K.totKm)} label="truck-km" sub="round trips · baked lines" />
+          <Fig value={K.peakFleet ? grp(K.peakFleet) : "—"} label="peak fleet" sub={K.peakFleet ? `vehicles · ${K.peakFleetMonth}` : "needs baked routes"} title="The largest same-month sum of vehicles needed across the visible lines: trips ÷ (working days × what one vehicle does in a shift)" />
+        </Group>
+        <Group title="Cost" tone="var(--navy)">
+          <Fig value={K.planned ? "€ " + eurK(K.planned.eur) : "—"} label="planned €" sub={K.planned ? `${K.plannedN} of ${D.lines} priced${K.targetN ? ` · ${K.targetN} at target` : ""}` : "no rate typed, no target set"} title={K.planned ? unitTriple(K.planned) : undefined} tone="var(--navy)" />
+          <Fig value={K.fair ? "€ " + eurK(K.fair.eur) : "—"} label="fair € (model)" sub={K.fair ? `${K.fairN} of ${D.lines} lines` : (cost.index_eur_per_l == null ? "no diesel index" : "no baked lines")} title={K.fair ? unitTriple(K.fair) : undefined} tone="var(--navy)" />
+          <Fig value={K.fair && K.fair.per_t != null ? "€ " + (+K.fair.per_t).toFixed(2) : "—"} label="fair € / t" sub={K.planned && K.planned.per_t != null ? `planned € ${(+K.planned.per_t).toFixed(2)} / t` : "weighted over priced tonnes"} />
+          <Fig value={K.fair && K.fair.per_km != null ? "€ " + (+K.fair.per_km).toFixed(2) : "—"} label="fair € / km" sub={K.fair && K.fair.per_trip != null ? `€ ${grp(K.fair.per_trip)} / trip` : "on the route basis km"} />
+        </Group>
+        <Group title="Carbon" tone="var(--green)">
+          <Fig value={K.totCo2.toFixed(1)} label="tCO₂e" sub="baked lines" tone="var(--green)" />
+          <Fig value={K.intensity == null ? "—" : K.intensity.toFixed(1)} label="kg / tonne" sub="over baked tonnes" />
+          <Fig value={grp(K.totTkm)} label="t·km" sub="route basis" />
+          <Fig value={K.peakMonth} label="peak month" sub="by tonnage" />
+        </Group>
       </div>
 
       {D.empty && <div className="card p-6 text-center text-slate-500 text-sm">No forecasts match these filters.</div>}
 
       <div className="grid lg:grid-cols-3 gap-4">
-        <div className="card p-4 lg:col-span-3">
+        <div className="card p-4 lg:col-span-2">
           <div className="text-sm font-semibold text-slate-700 mb-1">Material demand over time <span className="text-slate-400 font-normal">({unitLabel})</span></div>
           <ChartCanvas config={demandCfg} height={260} />
         </div>
         <div className="card p-4">
-          <div className="text-sm font-semibold text-slate-700 mb-1">Vehicle trips over time</div>
-          <ChartCanvas config={tripsCfg} height={240} />
+          <div className="text-sm font-semibold text-slate-700 mb-1">Cost over time <span className="text-slate-400 font-normal">(€ · planned vs fair)</span></div>
+          <ChartCanvas config={costCfg} height={260} />
+        </div>
+        <div className="card p-4">
+          <div className="text-sm font-semibold text-slate-700 mb-1">Trips over time</div>
+          <ChartCanvas config={tripsCfg} height={220} />
+        </div>
+        <div className="card p-4">
+          <div className="text-sm font-semibold text-slate-700 mb-1">Vehicles needed over time <span className="text-slate-400 font-normal">(baked lines)</span></div>
+          <ChartCanvas config={fleetCfg} height={220} />
         </div>
         <div className="card p-4">
           <div className="text-sm font-semibold text-slate-700 mb-1">Carbon over time <span className="text-slate-400 font-normal">(tCO₂e)</span></div>
-          <ChartCanvas config={co2Cfg} height={240} />
+          <ChartCanvas config={co2Cfg} height={220} />
         </div>
         <div className="card p-4">
           <div className="text-sm font-semibold text-slate-700 mb-1">Material split <span className="text-slate-400 font-normal">({unitLabel})</span></div>
           <ChartCanvas config={splitCfg} height={240} />
         </div>
-        <div className="card p-4 lg:col-span-3">
+        <div className="card p-4 lg:col-span-2">
           <div className="text-sm font-semibold text-slate-700 mb-1">Top routes by tonnage</div>
-          <ChartCanvas config={topCfg} height={300} />
+          <ChartCanvas config={topCfg} height={240} />
         </div>
       </div>
 
       <div className="card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-700">Route planning detail <span className="text-slate-400 font-normal">· click a column to sort</span></div>
+        <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-700">Route planning detail <span className="text-slate-400 font-normal">· click a column to sort · € as total, and €/t · €/trip · €/km on hover</span></div>
         <div className="overflow-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs">
               <tr>
-                <th className="px-3 py-2 text-left font-semibold cursor-pointer select-none" onClick={()=>setSort("route_id")}>Route{arrow("route_id")}</th>
-                <th className="px-3 py-2 text-left font-semibold cursor-pointer select-none" onClick={()=>setSort("discipline")}>Discipline{arrow("discipline")}</th>
+                <th className="px-3 py-2 text-left font-semibold cursor-pointer select-none" onClick={() => setSort("route_id")}>Route{arrow("route_id")}</th>
+                <th className="px-3 py-2 text-left font-semibold cursor-pointer select-none" onClick={() => setSort("discipline")}>Discipline{arrow("discipline")}</th>
                 <th className="px-3 py-2 text-left font-semibold">IPT</th>
-                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("dist")}>Dist km{arrow("dist")}</th>
-                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("cycleH")}>Cycle h{arrow("cycleH")}</th>
-                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("t")}>Tonnes{arrow("t")}</th>
-                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("trips")}>Trips{arrow("trips")}</th>
-                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("km")}>Truck-km{arrow("km")}</th>
-                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("co2")}>tCO₂e{arrow("co2")}</th>
-                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("intensity")}>kg/t{arrow("intensity")}</th>
-                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("peakPerDay")}>Peak/day{arrow("peakPerDay")}</th>
-                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={()=>setSort("trucks")} title="Peak demand per day divided by what one truck can physically do in a shift">Trucks{arrow("trucks")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("dist")} title="km per trip on the route's basis (round trip unless the route says loaded)">km/trip{arrow("dist")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("cycleH")}>Cycle h{arrow("cycleH")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("t")}>Tonnes{arrow("t")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("trips")}>Trips{arrow("trips")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("km")}>Truck-km{arrow("km")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("co2")}>tCO₂e{arrow("co2")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("peakVeh")} title="The most vehicles any one month needs on this line">Peak veh{arrow("peakVeh")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("planned")} title="The route's typed rates, or the target rate from Config where it has none">Planned €{arrow("planned")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("fair")} title="The fair-price model: vehicle, distance, tonnage, month, the live diesel index">Fair € (model){arrow("fair")}</th>
+                <th className="px-3 py-2 text-right font-semibold cursor-pointer select-none" onClick={() => setSort("fairPerT")}>Fair €/t{arrow("fairPerT")}</th>
               </tr>
             </thead>
             <tbody>
               {sortedRoutes.map(r => (
                 <tr key={r.key} className="border-t border-slate-100 hover:bg-slate-50">
-                  <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{r.route_id}</td>
+                  <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{r.route_id}<div className="text-[10px] text-slate-400 font-normal">{r.origin || "—"} → {r.dest || "—"} · {r.vehicle_short || vehLabel(r.vehicle)}</div></td>
                   <td className="px-3 py-2 text-slate-500 whitespace-nowrap">
                     {r.discipline
-                      ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap"
-                          style={{ background:"rgba(0,55,135,.08)", color:"var(--navy)" }}
-                          title={r.section_id ? `Section ${r.section_id}` : "No section set"}>
-                          {r.discipline}
-                        </span>
+                      ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap" style={{ background: "rgba(0,55,135,.08)", color: "var(--navy)" }} title={r.section_id ? `Section ${r.section_id}` : "No section set"}>{r.discipline}</span>
                       : <span className="text-slate-300" title="No discipline set on this forecast line">—</span>}
                   </td>
                   <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{r.ipt}</td>
-                  {/* an unbaked route has NO distance, which is not the same as zero — a
-                      zero would sum silently into every total above */}
-                  <td className={numTd}>{r.dist == null ? <span className="text-slate-300" title="No cached geometry — bake this route">—</span> : r.dist.toFixed(1)}</td>
-                  <td className={numTd}>
-                    {r.cycleH == null
-                      ? <span className="text-slate-300" title="Cycle time needs baked geometry for this vehicle">not baked</span>
-                      : r.cycleH.toFixed(2)}
-                  </td>
-                  <td className={numTd}>{Math.round(r.t).toLocaleString()}</td>
-                  <td className={numTd}>{Math.round(r.trips).toLocaleString()}</td>
-                  <td className={numTd}>{Math.round(r.km).toLocaleString()}</td>
-                  <td className={numTd}>{r.co2.toFixed(1)}</td>
-                  <td className={numTd}>{r.intensity.toFixed(1)}</td>
-                  <td className={numTd}>{r.peakPerDay.toFixed(1)}</td>
-                  <td className={numTd} title={r.capacityPerDay ? `${r.capacityPerDay} trips/day per truck` : undefined}>
-                    {r.trucks == null ? <span className="text-slate-300">—</span> : r.trucks}
-                  </td>
+                  {/* an unbaked route has NO distance, which is not the same as zero */}
+                  <td className={numTd}>{r.dist == null ? <span className="text-slate-300" title="No cached geometry for this vehicle — bake this route">—</span> : (+r.dist).toFixed(1)}</td>
+                  <td className={numTd}>{r.cycleH == null ? <span className="text-slate-300" title="Cycle time needs baked geometry for this vehicle">not baked</span> : r.cycleH.toFixed(2)}</td>
+                  <td className={numTd}>{grp(r.t)}</td>
+                  <td className={numTd}>{grp(r.trips)}</td>
+                  <td className={numTd}>{r.baked ? grp(r.km) : <span className="text-slate-300">—</span>}</td>
+                  <td className={numTd}>{r.baked ? r.co2.toFixed(1) : <span className="text-slate-300">—</span>}</td>
+                  <td className={numTd} title={r.capacityPerDay ? `${r.capacityPerDay} trips/day per vehicle` : undefined}>{r.peakVeh == null ? <span className="text-slate-300">—</span> : r.peakVeh}</td>
+                  <td className={numTd} title={r.plannedU ? unitTriple(r.plannedU) : "no rate typed on the route, no target set"}>{r.planned == null ? <span className="text-slate-300">rate not set</span> : <>€ {grp(r.planned)}{srcChip(r.source)}</>}</td>
+                  <td className={numTd} style={{ color: "var(--navy)" }} title={r.fairU ? unitTriple(r.fairU) + (r.flags.length ? " · " + r.flags.join(", ") : "") : (r.baked ? "no diesel index" : "not baked — no distance")}>{r.fair == null ? <span className="text-slate-300">—</span> : <>€ {grp(r.fair)}{r.flags.includes("WINTER") && <span className="ml-1 text-[9px] text-slate-400">winter</span>}{r.flags.includes("THAW") && <span className="ml-1 text-[9px] text-amber-700">thaw</span>}</>}</td>
+                  <td className={numTd}>{r.fairPerT == null ? <span className="text-slate-300">—</span> : (+r.fairPerT).toFixed(2)}</td>
                 </tr>
               ))}
-              {sortedRoutes.length===0 && <tr><td colSpan="12" className="px-3 py-6 text-center text-slate-400">No routes in range.</td></tr>}
+              {sortedRoutes.length === 0 && <tr><td colSpan="13" className="px-3 py-6 text-center text-slate-400">No routes in range.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -353,19 +394,10 @@ function Dashboard({ meta }){
 
       <DashboardStock meta={meta} />
 
-      {D.unbaked > 0 && (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-          {D.unbaked} forecast line(s) reference a route with no cached geometry for their
-          vehicle, so cycle time, fleet size and truck-km are blank rather than estimated.
-          Bake those routes on the Routes page.
-        </div>
-      )}
-
-      <p className="text-xs text-slate-400 px-1">Planning estimates only — no live deliveries or tracking. Distances and durations come from the routed HERE geometry via <code>/api/routes/analysis-batch</code>, the same source as the route analysis panel — this screen no longer estimates its own. Carbon from DEFRA-2025-based factors in backend/factors.json (round trip: loaded out, empty return). Cycle = laden out + empty back + that vehicle's own load and unload time. Trucks = peak demand per day ÷ what one truck can do in a shift.</p>
+      <p className="text-xs text-slate-400 px-1">Planning estimates only — no live deliveries or tracking. Every figure on this page comes from <code>/api/costing/lines</code>, the same functions the Look-ahead uses: trips = tonnes ÷ planning payload rounded up per line-month; km, cycle and vehicles from the baked HERE route for the line's vehicle (an unbaked line has none and is excluded from those totals, never estimated); CO₂e = km × the vehicle's DEFRA-based factor. Planned € = the route's typed rates (summed), or the Config target rate where the route has none. Fair € = the cost model on Config → Costing · fuel — a floor for negotiation, never a quote. Peak fleet = the largest same-month sum of vehicles needed (trips ÷ working days ÷ what one vehicle does in a shift).</p>
     </div>
   );
 }
-
 
 // ---- 10 Sep: stock held, READ-ONLY, on the Dashboard ---------------------------------
 // The forecast balance of every stockpile, week by week, for this month and the next.
@@ -1410,11 +1442,12 @@ function Matrix({ meta, who, editTarget, vehLang, access }){
 //   planner    approve / reject inline, withdraw anyone's
 // Grouped per line, NOT per line-and-year (a multi-year save is one submission), and
 // withdraw is scoped to the months the row actually shows.
-function Forecasts({ meta, who, access, onEdit, onChanged }){
+function Forecasts({ meta, who, access, onEdit, onChanged, initialCost, initialRows }){
   const { routes, months } = meta;
   const routeById = useMemo(() => Object.fromEntries(routes.map(r => [r.route_id, r])), [routes]);
   const canApprove = !!(access && access.can_approve);
-  const [rows, setRows] = useState(null);
+  const [rows, setRows] = useState(initialRows || null);     // initialRows / initialCost: the render harness only
+  const [cost, setCost] = useState(initialCost || null);       // 11 Sep: /api/costing/lines, joined per line
   const [err, setErr] = useState(false);
   const [tick, setTick] = useState(0);
   const [busy, setBusy] = useState("");
@@ -1422,11 +1455,34 @@ function Forecasts({ meta, who, access, onEdit, onChanged }){
 
   useEffect(() => {
     let live = true;
-    fetch(`${API}/forecasts`).then(r => r.ok ? r.json() : Promise.reject(r.status))
+    if(!initialRows) fetch(`${API}/forecasts`).then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(rs => { if(live){ setRows(rs); setErr(false); } })
       .catch(() => setErr(true));
+    // the cost of every line, from the same functions the Look-ahead and the Dashboard
+    // use — its own read, so a failure here never hides the list itself
+    if(!initialCost){
+      fetch(`${API}/costing/lines?status=All`).then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(j => { if(live) setCost(j); }).catch(() => { if(live) setCost({ lines: [], error: true }); });
+    }
     return () => { live = false; };
   }, [tick]);
+
+  // per LINE (route · discipline · section), summed over every month the line covers:
+  // planned € (route rates or the target), fair € (the model), tonnes — and the same
+  // per tonne / trip / km so lines quoted in different units still compare
+  const costByLine = useMemo(() => {
+    const m = {};
+    ((cost && cost.lines) || []).forEach(r => {
+      const key = [r.route_id, r.discipline || "", r.section_id || ""].join("|");
+      const e = m[key] || (m[key] = { t: 0, trips: 0, bkm: 0, planned: null, fair: null, source: null, baked: 0, n: 0, flags: new Set() });
+      e.n += 1; e.t += r.tonnes || 0; e.trips += r.trips || 0; e.bkm += (r.basis_km || 0) * (r.trips || 0); if(r.baked) e.baked += 1;
+      if(r.planned && r.planned.eur != null){ e.planned = (e.planned || 0) + r.planned.eur; e.source = r.planned.source; }
+      if(r.fair && r.fair.eur != null){ e.fair = (e.fair || 0) + r.fair.eur; (r.fair.flags || []).forEach(x => e.flags.add(x)); }
+    });
+    const per = (eur, e) => eur == null ? null : { eur, per_t: e.t > 0 ? eur / e.t : null, per_trip: e.trips > 0 ? eur / e.trips : null, per_km: e.bkm > 0 ? eur / e.bkm : null };
+    Object.values(m).forEach(e => { e.plannedU = per(e.planned, e); e.fairU = per(e.fair, e); e.flags = [...e.flags]; });
+    return m;
+  }, [cost]);
 
   const groups = useMemo(() => {
     if(!rows) return [];
@@ -1493,14 +1549,19 @@ function Forecasts({ meta, who, access, onEdit, onChanged }){
 
   const exportCsv = () => {
     const cols = ["Route", "From", "To", "Years", "IPT", "Discipline", "Section", "Material", "Description",
-                  "Vehicle", "Unit", "Quantity", "Months", "Status", "Submitted by", "Rejection reason"];
+                  "Vehicle", "Unit", "Quantity", "Months", "Status", "Submitted by", "Rejection reason",
+                  "Tonnes", "Trips", "Planned €", "Planned source", "Planned €/t", "Fair € (model)", "Fair €/t", "Fair €/trip", "Fair €/km"];
     const esc = (v) => { const s = (v == null ? "" : String(v)); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const lines = [cols.join(",")];
     shown.forEach(g => {
       const r = routeById[g.routeId] || {};
+      const c = costByLine[g.key] || {};
+      const r2 = (v) => (v == null ? "" : Math.round(v * 100) / 100);
       lines.push([g.routeId, r.origin || "", r.dest || "", g.yearLabel, g.ipt, g.discipline, g.sectionId,
         g.material || "", g.material_description || "", g.vehicle || "", g.unit || "",
-        Math.round(g.quantity * 10) / 10, g.months, g.status, g.submittedBy, g.rejectReason || ""].map(esc).join(","));
+        Math.round(g.quantity * 10) / 10, g.months, g.status, g.submittedBy, g.rejectReason || "",
+        r2(c.t), c.trips ?? "", r2(c.planned), c.source || "", r2(c.plannedU && c.plannedU.per_t),
+        r2(c.fair), r2(c.fairU && c.fairU.per_t), r2(c.fairU && c.fairU.per_trip), r2(c.fairU && c.fairU.per_km)].map(esc).join(","));
     });
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
@@ -1575,6 +1636,7 @@ function Forecasts({ meta, who, access, onEdit, onChanged }){
                   <th className="px-3 py-2 text-left font-semibold">Years</th>
                   <th className="px-3 py-2 text-left font-semibold">Material · vehicle</th>
                   <th className="px-3 py-2 text-right font-semibold">Total</th>
+                  <th className="px-3 py-2 text-right font-semibold whitespace-nowrap" title="Planned € = the route's typed rates or the Config target; Fair € = the cost model (vehicle, distance, tonnage, month, diesel index). Hover a figure for €/t · €/trip · €/km.">Cost</th>
                   <th className="px-3 py-2 text-left font-semibold">Status</th>
                   <th className="px-3 py-2 text-right font-semibold">Actions</th>
                 </tr>
@@ -1616,6 +1678,14 @@ function Forecasts({ meta, who, access, onEdit, onChanged }){
                         <div className="text-[11px] text-slate-500 truncate" title={g.vehicle}>{vehLabel(g.vehicle)}</div>
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{fmt(g.quantity, g.unit)} <span className="text-slate-400 text-xs">{g.unit === "m3" ? "m³" : g.unit}</span></td>
+                      {/* 11 Sep: what the line costs — planned (typed) and fair (the model), each with
+                          €/t · €/trip · €/km on hover, over every month the line covers */}
+                      <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap text-xs" data-cost-cell="1">
+                        {(() => { const c = costByLine[g.key]; if(!cost) return <span className="text-slate-300">…</span>; if(!c) return <span className="text-slate-300">—</span>; return (<>
+                          <div title={c.plannedU ? unitTriple(c.plannedU) : "no rate on the route, no target on Config"}>{c.planned == null ? <span className="text-slate-300">rate not set</span> : <>€ {grp(c.planned)}{c.source === "target" && <span className="ml-1 text-[9px] font-semibold px-1 py-0.5 rounded-full bg-slate-100 text-slate-600">target</span>}</>}</div>
+                          <div style={{ color: "var(--navy)" }} title={c.fairU ? "fair (model): " + unitTriple(c.fairU) + (c.flags.length ? " · " + c.flags.join(", ") : "") : (c.baked < c.n ? "not baked for this vehicle — no distance, no fair price" : "no diesel index")}>{c.fair == null ? <span className="text-slate-300">fair —</span> : <>fair € {grp(c.fair)}{c.fairU && c.fairU.per_t != null && <span className="text-slate-400"> · {(+c.fairU.per_t).toFixed(2)}/t</span>}</>}</div>
+                        </>); })()}
+                      </td>
                       <td className="px-3 py-2">
                         {badge(g.status)}
                         {g.rejectReason && <div className="text-[11px] mt-1 max-w-[180px]" style={{ color: "var(--red)" }}>{g.rejectReason}</div>}
@@ -1638,7 +1708,7 @@ function Forecasts({ meta, who, access, onEdit, onChanged }){
                     </tr>
                   );
                 })}
-                {shown.length === 0 && <tr><td colSpan="7" className="px-3 py-8 text-center text-slate-400">Nothing matches these filters.</td></tr>}
+                {shown.length === 0 && <tr><td colSpan="8" className="px-3 py-8 text-center text-slate-400">Nothing matches these filters.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -2624,7 +2694,7 @@ function LookAhead({ meta, who, access, initialPage, initialView }){
                                     {grp(c.km_trip)} km/trip{c.return_baked ? "" : " (outbound only — return not baked)"} · {grp(wd.km)} km/week
                                     · {grp(wd.vehicles_peak)} veh peak · {grp(wd.tonne_km)} t·km ({c.km_basis === "loaded" ? "loaded leg" : "round trip"})
                                     · cycle {grp(c.cycle_min)} min {c.cycle_source === "here" ? "HERE" : "HERE‡ (return estimated)"}
-                                    · {c.cycles_per_vehicle_day} cycles/veh/day · {wd.eur == null ? "rate not set" : `€ ${grp(wd.eur)}${c.rate_source === "target" ? " (target rate)" : ""}${wd.eur_partial ? " (per-km term missing)" : ""} this week${wd.eur_adj != null ? ` · + BAF € ${grp(wd.eur_adj)}` : ""}`}{wd.fair_eur != null && c.fair && <span title={`fair (model): € ${grp(c.fair.eur_trip)} / trip · € ${grp(c.fair.eur_per_t, 2)} / t · ${grp(c.fair.litres_trip, 1)} L / trip at €${c.fair.index_eur_per_l} · fuel ${grp(c.fair.fuel_share_pct)} % of cost${c.fair.flags.length ? " · " + c.fair.flags.join(", ") : ""}`}> · <span className="text-[color:var(--navy)] font-semibold">fair € {grp(wd.fair_eur)}</span> (model{c.fair.flags.includes("WINTER") ? ", winter" : ""}{c.fair.flags.includes("THAW") ? ", thaw restrictions may apply" : ""})</span>}
+                                    · {c.cycles_per_vehicle_day} cycles/veh/day · {wd.eur == null ? "rate not set" : `€ ${grp(wd.eur)}${c.rate_source === "target" ? " (target rate)" : ""}${wd.eur_partial ? " (per-km term missing)" : ""} this week${wd.eur_adj != null ? ` · + BAF € ${grp(wd.eur_adj)}` : ""}`}{wd.fair_eur != null && c.fair && <span title={`fair (model): ${grp(c.fair.litres_trip, 1)} L / trip at €${c.fair.index_eur_per_l} · fuel ${grp(c.fair.fuel_share_pct)} % of cost${c.fair.flags.length ? " · " + c.fair.flags.join(", ") : ""}`}> · <span className="text-[color:var(--navy)] font-semibold">fair € {grp(wd.fair_eur)}</span> (model{c.fair.flags.includes("WINTER") ? ", winter" : ""}{c.fair.flags.includes("THAW") ? ", thaw restrictions may apply" : ""}){wd.fair_units && wd.fair_units.per_t != null ? ` = ${unitTriple(wd.fair_units)}` : ""}</span>}{wd.eur != null && wd.eur_units && wd.eur_units.per_t != null && <span className="text-slate-500"> · {c.rate_source === "target" ? "target" : "quote"} = {unitTriple(wd.eur_units)}</span>}
                                   </>
                                 ) : (
                                   <span className="text-amber-700">km — until the route is baked · trips still from {grp(c.payload_t, 1)} t planning payload{c.payload_fallback ? ` (${c.payload_fallback} fallback)` : ""}{wd.eur != null ? ` · € ${grp(wd.eur)}${c.rate_source === "target" ? " (target rate)" : ""}${wd.eur_partial ? " without the per-km term" : ""}${wd.eur_adj != null ? ` · + BAF € ${grp(wd.eur_adj)}` : ""}` : ""}</span>
@@ -2709,12 +2779,14 @@ function LookAhead({ meta, who, access, initialPage, initialView }){
                           <td className="px-2 py-2 text-right tabular-nums text-slate-600">
                             {r.planned_eur == null ? <span className="text-slate-300">rate not set</span> : <>
                               <div>€ {grp(r.planned_eur)}{r.rate_source === "target" && <span className="ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full text-slate-600 bg-slate-100" title="No rate on this route — priced at the target rate from Config">target</span>}</div>
+                              {r.planned_units && r.planned_units.per_t != null && <div className="text-[10px] text-slate-400 whitespace-nowrap">{unitTriple(r.planned_units)}</div>}
                               {r.planned_eur_adj != null && <div className="text-[10px] text-slate-500" title="Quote × (1 + BAF). The quote above is unchanged.">+ BAF € {grp(r.planned_eur_adj)}</div>}
                             </>}
                           </td>
                           <td className="px-2 py-2 text-right tabular-nums" style={{ color: "var(--navy)" }}>
                             {r.planned_fair_eur == null ? <span className="text-slate-300" title="No fair price: the route is not baked for this vehicle, or the diesel index is missing">—</span>
-                              : <>€ {grp(r.planned_fair_eur)}{(r.fair_flags || []).includes("WINTER") && <span className="ml-1 text-[9px] text-slate-400" title="winter consumption uplift applied">winter</span>}{(r.fair_flags || []).includes("THAW") && <span className="ml-1 text-[9px] text-amber-700" title="Spring load restrictions (8 t) may apply on gravel and municipal roads — permits are free">thaw</span>}</>}
+                              : <>€ {grp(r.planned_fair_eur)}{(r.fair_flags || []).includes("WINTER") && <span className="ml-1 text-[9px] text-slate-400" title="winter consumption uplift applied">winter</span>}{(r.fair_flags || []).includes("THAW") && <span className="ml-1 text-[9px] text-amber-700" title="Spring load restrictions (8 t) may apply on gravel and municipal roads — permits are free">thaw</span>}
+                                  {r.fair_units && r.fair_units.per_t != null && <div className="text-[10px] text-slate-400 whitespace-nowrap">{unitTriple(r.fair_units)}</div>}</>}
                           </td>
                           <td className="px-2 py-2 text-right">
                             <input className={fld + " max-w-[110px] ml-auto"} inputMode="decimal" placeholder="€ —"
