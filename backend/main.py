@@ -1169,6 +1169,26 @@ def reset_fuel_base(updated_by: Optional[str] = None, token: Optional[str] = Non
     return _costing_payload()
 
 
+class CostPreview(BaseModel):
+    route_id: str
+    vehicle_type: str
+    material_type: Optional[str] = None
+    unit: str = "t"
+    cells: List[Cell] = []
+
+
+@app.post("/api/costing/preview")
+def costing_preview(body: CostPreview):
+    """
+    11 Sep pm — the Submit-forecast matrix's price while typing: the body's cells priced
+    as the saved line will be (same functions as /api/costing/lines). A read that takes a
+    body; it stores nothing. Any signed-in code.
+    """
+    _require_access()
+    return costlines.preview(body.route_id, body.vehicle_type, body.material_type, body.unit,
+                             [c.model_dump() if hasattr(c, "model_dump") else c.dict() for c in body.cells])
+
+
 @app.get("/api/costing/lines")
 def costing_lines(from_: Optional[int] = Query(None, alias="from"), to: Optional[int] = None,
                   status: Optional[str] = None):

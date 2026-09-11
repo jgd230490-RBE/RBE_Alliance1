@@ -201,3 +201,63 @@ def lines(acc=None, from_month=None, to_month=None, status=None, factors=None):
     }
     return {"lines": out, "totals": totals, "costing": cost,
             "working_days_per_month": work_days}
+
+
+def preview(route_id, vehicle_type, material_type, unit, cells, factors=None):
+    """
+    11 Sep pm — the Submit-forecast matrix's cost preview: the typed cells of ONE line
+    (route · vehicle · material · unit), priced exactly as they will be once saved — the
+    same line_context() / day_figures() / unit_prices() as lines() above, so what the
+    submitter sees while typing is what the Look-ahead, Dashboard and Forecasts will show.
+    Reads nothing from the forecasts table (the cells are the body); writes nothing.
+    Unbaked route ⇒ fair None, planned partial (the per-km term missing) — flagged, never
+    estimated. No diesel index ⇒ fair None. A cell with no quantity is skipped.
+    """
+    factors = factors or conversions.load_factors()
+    routes = derived._routes_and_names()
+    cost = derived.costing_context()
+    cache = {}
+    out, tot = [], {"tonnes": 0.0, "trips": 0, "planned_eur": None, "planned_km": 0.0, "planned_trips": 0, "planned_tonnes": 0.0,
+                    "fair_eur": None, "fair_km": 0.0, "fair_trips": 0, "fair_tonnes": 0.0, "target": 0, "flags": set()}
+    baked, rate_source, vehicle_class = None, None, None
+    for c in cells or []:
+        q = _num(c.get("quantity") if isinstance(c, dict) else getattr(c, "quantity", None))
+        mi = int(c.get("month_index") if isinstance(c, dict) else getattr(c, "month_index"))
+        if not q or q <= 0:
+            continue
+        line = {"route_id": route_id, "unit": unit, "material_type": material_type, "vehicle_type": vehicle_type,
+                "month_index": mi, "week": {"planned_qty": q}}
+        ctx = derived.line_context(line, factors, routes=routes, cache=cache, cost=cost)
+        f = derived.day_figures(q, ctx, factors)
+        baked = bool(ctx.get("baked")); rate_source = ctx.get("rate_source"); vehicle_class = ctx.get("vehicle_class")
+        bk = (float(ctx.get("basis_km") or 0) * f["trips"]) if baked else None
+        planned = unit_prices(f.get("eur"), f["tonnes"], f["trips"], bk)
+        planned["source"] = rate_source; planned["partial"] = bool(f.get("eur_partial"))
+        fair = unit_prices(f.get("fair_eur"), f["tonnes"], f["trips"], bk)
+        fair["flags"] = list(((ctx.get("fair") or {}).get("flags")) or [])
+        out.append({"month_index": mi, "quantity": q, "tonnes": f["tonnes"], "trips": f["trips"],
+                    "planned": planned, "fair": fair})
+        tot["tonnes"] += f["tonnes"]; tot["trips"] += f["trips"]
+        if planned["eur"] is not None:
+            tot["planned_eur"] = (tot["planned_eur"] or 0.0) + planned["eur"]; tot["planned_tonnes"] += f["tonnes"]
+            tot["planned_trips"] += f["trips"]; tot["planned_km"] += bk or 0.0
+            if rate_source == "target":
+                tot["target"] += 1
+        if fair["eur"] is not None:
+            tot["fair_eur"] = (tot["fair_eur"] or 0.0) + fair["eur"]; tot["fair_tonnes"] += f["tonnes"]
+            tot["fair_trips"] += f["trips"]; tot["fair_km"] += bk or 0.0; tot["flags"].update(fair["flags"])
+    totals = {
+        "cells": len(out), "tonnes": round(tot["tonnes"], 3), "trips": tot["trips"],
+        "planned": (unit_prices(tot["planned_eur"], tot["planned_tonnes"], tot["planned_trips"], tot["planned_km"])
+                    if tot["planned_eur"] is not None else unit_prices(None, 0, 0, 0)),
+        "planned_source": rate_source, "planned_target_cells": tot["target"],
+        "fair": (unit_prices(tot["fair_eur"], tot["fair_tonnes"], tot["fair_trips"], tot["fair_km"])
+                 if tot["fair_eur"] is not None else unit_prices(None, 0, 0, 0)),
+        "fair_flags": sorted(tot["flags"]),
+    }
+    reason = (None if totals["fair"]["eur"] is not None else
+              ("no cells" if not out else "not baked" if not baked else
+               "no diesel index" if (cost or {}).get("index_eur_per_l") is None else "no fair price"))
+    return {"route_id": route_id, "vehicle_type": vehicle_type, "vehicle_class": vehicle_class, "baked": baked,
+            "cells": out, "totals": totals, "fair_reason": reason,
+            "index_eur_per_l": (cost or {}).get("index_eur_per_l"), "index_bulletin_date": (cost or {}).get("index_bulletin_date")}
