@@ -12,7 +12,7 @@
   "month_index": 9,
   "week_index": 2
  },
- "today": "2026-09-10",
+ "today": "2026-09-11",
  "commit": {
   "commit_week": {
    "month_index": 9,
@@ -29,24 +29,24 @@
   },
   "totals": {
    "planned_t": 3180.0,
-   "trips": 160,
-   "vehicles_peak": 7,
-   "vehicles_peak_date": "2026-09-10",
+   "trips": 159,
+   "vehicles_peak": 8,
+   "vehicles_peak_date": "2026-09-11",
    "vehicles_by_day": {
     "2026-09-07": 6,
     "2026-09-08": 6,
     "2026-09-09": 6,
-    "2026-09-10": 7,
-    "2026-09-11": 7,
+    "2026-09-10": 6,
+    "2026-09-11": 8,
     "2026-09-12": 0,
     "2026-09-13": 0
    },
    "tonne_km": 176300.0,
-   "km": 9625.0,
+   "km": 9565.0,
    "lines": 3,
    "unbaked_lines": 0,
    "excludes_unbaked": false,
-   "eur": 25085.0,
+   "eur": 24950.0,
    "eur_lines": 3,
    "eur_partial": false,
    "eur_target_lines": 0,
@@ -77,34 +77,34 @@
    "baf_pct": null,
    "baf_reason": "no index",
    "fair_params": {
-    "consumption": {
-     "l_per_100km_per_tonne": 0.4,
-     "rigid": {
-      "l_per_100km_empty": 27.0
-     },
-     "artic": {
-      "l_per_100km_empty": 23.6
-     }
-    },
     "season": {
+     "thaw_months": [
+      3,
+      4
+     ],
+     "winter_consumption_uplift_pct": 8.0,
      "winter_months": [
       11,
       12,
       1,
       2,
       3
-     ],
-     "winter_consumption_uplift_pct": 8.0,
-     "thaw_months": [
-      3,
-      4
      ]
     },
-    "driver_eur_per_h": 20.0,
     "vehicle_standing_eur_per_h": 16.0,
+    "driver_eur_per_h": 20.0,
+    "vehicle_new_price_eur": 190000,
     "margin_pct": 8.0,
     "running_eur_per_km": 0.12,
-    "vehicle_new_price_eur": 190000
+    "consumption": {
+     "artic": {
+      "l_per_100km_empty": 23.6
+     },
+     "l_per_100km_per_tonne": 0.4,
+     "rigid": {
+      "l_per_100km_empty": 27.0
+     }
+    }
    },
    "fair": {
     "index_eur_per_l": null,
@@ -456,7 +456,20 @@
      "eur_partial": false,
      "eur_adj": null,
      "fair_eur": null,
-     "rate_source": "route"
+     "rate_source": "route",
+     "basis_km_total": 3000.0,
+     "eur_units": {
+      "eur": 8750.0,
+      "per_t": 8.75,
+      "per_trip": 175.0,
+      "per_km": 2.917
+     },
+     "fair_units": {
+      "eur": null,
+      "per_t": null,
+      "per_trip": null,
+      "per_km": null
+     }
     }
    },
    {
@@ -603,7 +616,7 @@
       "discipline": "earthworks",
       "section_id": "WS2",
       "day_date": "2026-09-10",
-      "planned_qty": 390.0,
+      "planned_qty": 300.0,
       "actual_qty": null,
       "actual_note": null,
       "actual_by": null,
@@ -617,13 +630,13 @@
       "week_planned_now": 1680.0,
       "week_changed": false,
       "derived": {
-       "tonnes": 390.0,
-       "trips": 20,
-       "vehicles": 4,
-       "km_day": 1200.0,
+       "tonnes": 300.0,
+       "trips": 15,
+       "vehicles": 3,
+       "km_day": 900.0,
        "km_per_vehicle": 300.0,
-       "tonne_km": 23400.0,
-       "eur": 3480.0,
+       "tonne_km": 18000.0,
+       "eur": 2625.0,
        "eur_partial": false,
        "eur_adj": null,
        "fair_eur": null
@@ -635,7 +648,7 @@
       "discipline": "earthworks",
       "section_id": "WS2",
       "day_date": "2026-09-11",
-      "planned_qty": 390.0,
+      "planned_qty": 480.0,
       "actual_qty": null,
       "actual_note": null,
       "actual_by": null,
@@ -649,13 +662,13 @@
       "week_planned_now": 1680.0,
       "week_changed": false,
       "derived": {
-       "tonnes": 390.0,
-       "trips": 20,
-       "vehicles": 4,
-       "km_day": 1200.0,
-       "km_per_vehicle": 300.0,
-       "tonne_km": 23400.0,
-       "eur": 3480.0,
+       "tonnes": 480.0,
+       "trips": 24,
+       "vehicles": 5,
+       "km_day": 1440.0,
+       "km_per_vehicle": 288.0,
+       "tonne_km": 28800.0,
+       "eur": 4200.0,
        "eur_partial": false,
        "eur_adj": null,
        "fair_eur": null
@@ -776,15 +789,28 @@
     },
     "week_derived": {
      "tonnes": 1680.0,
-     "trips": 85,
-     "vehicles_peak": 4,
-     "km": 5100.0,
+     "trips": 84,
+     "vehicles_peak": 5,
+     "km": 5040.0,
      "tonne_km": 100800.0,
-     "eur": 14835.0,
+     "eur": 14700.0,
      "eur_partial": false,
      "eur_adj": null,
      "fair_eur": null,
-     "rate_source": "route"
+     "rate_source": "route",
+     "basis_km_total": 5040.0,
+     "eur_units": {
+      "eur": 14700.0,
+      "per_t": 8.75,
+      "per_trip": 175.0,
+      "per_km": 2.917
+     },
+     "fair_units": {
+      "eur": null,
+      "per_t": null,
+      "per_trip": null,
+      "per_km": null
+     }
     }
    },
    {
@@ -1112,7 +1138,20 @@
      "eur_partial": false,
      "eur_adj": null,
      "fair_eur": null,
-     "rate_source": "route"
+     "rate_source": "route",
+     "basis_km_total": 775.0,
+     "eur_units": {
+      "eur": 1500.0,
+      "per_t": 3.0,
+      "per_trip": 60.0,
+      "per_km": 1.935
+     },
+     "fair_units": {
+      "eur": null,
+      "per_t": null,
+      "per_trip": null,
+      "per_km": null
+     }
     }
    }
   ],
@@ -1171,6 +1210,19 @@
     "planned_eur_adj": null,
     "planned_fair_eur": null,
     "fair_flags": [],
+    "planned_units": {
+     "eur": 8750.0,
+     "per_t": 8.75,
+     "per_trip": 175.0,
+     "per_km": 2.917
+    },
+    "fair_units": {
+     "eur": null,
+     "per_t": null,
+     "per_trip": null,
+     "per_km": null
+    },
+    "planned_trips": 50,
     "planned_t": 1000.0,
     "eur_variance": 7515.5
    },
@@ -1215,6 +1267,19 @@
     "planned_eur_adj": null,
     "planned_fair_eur": null,
     "fair_flags": [],
+    "planned_units": {
+     "eur": 13125.0,
+     "per_t": 8.75,
+     "per_trip": 175.0,
+     "per_km": 2.917
+    },
+    "fair_units": {
+     "eur": null,
+     "per_t": null,
+     "per_trip": null,
+     "per_km": null
+    },
+    "planned_trips": 75,
     "planned_t": 1500.0,
     "eur_variance": null
    },
@@ -1259,6 +1324,19 @@
     "planned_eur_adj": null,
     "planned_fair_eur": null,
     "fair_flags": [],
+    "planned_units": {
+     "eur": 1500.0,
+     "per_t": 3.0,
+     "per_trip": 60.0,
+     "per_km": 1.935
+    },
+    "fair_units": {
+     "eur": null,
+     "per_t": null,
+     "per_trip": null,
+     "per_km": null
+    },
+    "planned_trips": 25,
     "planned_t": 500.0,
     "eur_variance": null
    }
@@ -1313,34 +1391,34 @@
   "baf_pct": null,
   "baf_reason": "no index",
   "fair_params": {
-   "consumption": {
-    "l_per_100km_per_tonne": 0.4,
-    "rigid": {
-     "l_per_100km_empty": 27.0
-    },
-    "artic": {
-     "l_per_100km_empty": 23.6
-    }
-   },
    "season": {
+    "thaw_months": [
+     3,
+     4
+    ],
+    "winter_consumption_uplift_pct": 8.0,
     "winter_months": [
      11,
      12,
      1,
      2,
      3
-    ],
-    "winter_consumption_uplift_pct": 8.0,
-    "thaw_months": [
-     3,
-     4
     ]
    },
-   "driver_eur_per_h": 20.0,
    "vehicle_standing_eur_per_h": 16.0,
+   "driver_eur_per_h": 20.0,
+   "vehicle_new_price_eur": 190000,
    "margin_pct": 8.0,
    "running_eur_per_km": 0.12,
-   "vehicle_new_price_eur": 190000
+   "consumption": {
+    "artic": {
+     "l_per_100km_empty": 23.6
+    },
+    "l_per_100km_per_tonne": 0.4,
+    "rigid": {
+     "l_per_100km_empty": 27.0
+    }
+   }
   },
   "fair": {
    "index_eur_per_l": null,
@@ -2426,9 +2504,9 @@
     "discipline": "earthworks",
     "section_id": "WS1",
     "ipt": "IPT1",
-    "text": "R1 2026-09-10: 6 veh against a cap of 4",
+    "text": "R1 2026-09-10: 5 veh against a cap of 4",
     "day_date": "2026-09-10",
-    "vehicles": 6,
+    "vehicles": 5,
     "cap": 4
    },
    {
@@ -2438,9 +2516,9 @@
     "discipline": "earthworks",
     "section_id": "WS2",
     "ipt": "IPT2",
-    "text": "R1 2026-09-10: 6 veh against a cap of 4",
+    "text": "R1 2026-09-10: 5 veh against a cap of 4",
     "day_date": "2026-09-10",
-    "vehicles": 6,
+    "vehicles": 5,
     "cap": 4
    },
    {
@@ -2450,9 +2528,9 @@
     "discipline": "earthworks",
     "section_id": "WS1",
     "ipt": "IPT1",
-    "text": "R1 2026-09-11: 6 veh against a cap of 4",
+    "text": "R1 2026-09-11: 7 veh against a cap of 4",
     "day_date": "2026-09-11",
-    "vehicles": 6,
+    "vehicles": 7,
     "cap": 4
    },
    {
@@ -2462,9 +2540,9 @@
     "discipline": "earthworks",
     "section_id": "WS2",
     "ipt": "IPT2",
-    "text": "R1 2026-09-11: 6 veh against a cap of 4",
+    "text": "R1 2026-09-11: 7 veh against a cap of 4",
     "day_date": "2026-09-11",
-    "vehicles": 6,
+    "vehicles": 7,
     "cap": 4
    },
    {
