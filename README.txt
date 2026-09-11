@@ -1,8 +1,29 @@
-rbe-dashboard-bigscreen-0911.zip
-=================================
-Delivered 2026-09-11 (afternoon). Extract over the repo root. Cut against HEAD as of
-11 Sep 13:00 UK (your costlines zip applied — the screenshot you sent is that build).
-Seven files. NO new dependency, NO schema change, factors.json NOT in this zip.
+rbe-dashboard-bigscreen-0911.zip  (v2 — the first cut + the two items you added)
+================================================================================
+Delivered 2026-09-11 (afternoon, second cut). Extract over the repo root. Cut against
+HEAD 21ce026 — I can see you applied the FIRST cut at 09:13 UK, so on top of that this
+zip actually changes NINE files (main.py, costlines.py, test_costlines.py, the new
+cost_preview.json fixture, parse_map.js, render_frontend.js, frontend/index.html,
+map/index.html, README.txt); the other two are identical to HEAD. NO new dependency,
+NO schema change, factors.json NOT in this zip. Verified on a fresh clone of 21ce026.
+
+THE TWO SMALL ITEMS YOU ADDED BEFORE DEPLOYING
+----------------------------------------------
+A. FAIR PRICE ON THE FORECAST SUBMISSION. As you type, the Submit-forecast matrix now
+   prices the cells: a strip under the movements cards — Fair EUR (model) for the range,
+   fair EUR/t, EUR/trip, EUR/km, and Planned EUR with its source (route quote / target
+   rate) — and a small "fair EUR …" under every month cell (hover: the triple, trips,
+   winter/thaw, the planned figure). Debounced 400 ms; nothing is priced in the browser:
+   NEW POST /api/costing/preview runs the typed cells through the SAME functions the
+   saved line is priced with, so what the submitter sees is what the Look-ahead, the
+   Dashboard and the Forecasts page will show. An unbaked route says "no fair price —
+   this route is not baked for <vehicle>; bake it on the Routes page"; no diesel index
+   says so too. Nothing stored; any signed-in code.
+B. PLAY SPEED ON THE PUBLIC MAP TIMELINE. A small select in the timeline bar: 1/4x,
+   1/2x, 1x, 2x, 4x (1x = the old 750 ms per month). Changing it while playing restarts
+   at the new pace without jumping the month; the choice is remembered in that browser.
+
+(Below: the big-screen Dashboard, unchanged from the first cut.)
 
 WHAT YOU ASKED FOR, AND WHAT WAS DONE
 -------------------------------------
@@ -94,29 +115,34 @@ NOT BUILT / OPEN
 - The route table is hidden in big-screen mode (13 columns do not read at 6 m).
 - The header (brand bar) stays in big-screen mode.
 
-FILES (7)
----------
-CHANGED backend/costlines.py (actuals per line-month, totals) ·
-        backend/tests/test_costlines.py (32 → 38) ·
+FILES (11)
+----------
+CHANGED backend/costlines.py (actuals per line-month, totals; NEW preview()) ·
+        backend/main.py (NEW POST /api/costing/preview) ·
+        backend/tests/test_costlines.py (32 → 48) ·
         backend/tests/fixtures/cost_lines.json (regenerated; carries a reported line) ·
-        backend/tests/parse_frontend.js (340 → 356) · render_frontend.js (85 → 95) ·
+        backend/tests/parse_frontend.js (340 → 356) · parse_map.js (484 → 488) ·
+        render_frontend.js (85 → 104) ·
         frontend/index.html (Dashboard rebuilt: DashboardToday, DashboardStockChart
         replace DashboardStock; CommitMap gains title/height/flush props and a guarded
-        start; Portal folds the rail on big screen) · README.txt
+        start; Portal folds the rail on big screen; Matrix cost strip + per-cell fair) ·
+        map/index.html (timeline play speed) · README.txt
+NEW     backend/tests/fixtures/cost_preview.json (written by test_costlines.py)
 
 SUITE — every figure watched print, on a FRESH clone with this zip applied
 --------------------------------------------------------------------------
-test_costing 106 · test_costlines 38 · test_fairprice 47 · test_lookahead 242 ·
+test_costing 106 · test_costlines 48 · test_fairprice 47 · test_lookahead 242 ·
 test_phase2 160 · test_phase25a 104 · test_phase3 154 · test_phase4 220 ·
-test_phase45 144 · test_phase5a 215 · test_tenant_audit 32 · test_week1 317 = 1,779 py
-parse_frontend 356 · parse_map 484 · render_frontend 95 · test_ipt_overlay 140 = 1,075 js
-TOTAL 2,854 / 0 (+ test_help 16 / 1, still the placeholder.pl). Was 2,822 / 0.
-Run the .py files before the .js ones — three fixtures are written by them.
+test_phase45 144 · test_phase5a 215 · test_tenant_audit 32 · test_week1 317 = 1,789 py
+parse_frontend 356 · parse_map 488 · render_frontend 104 · test_ipt_overlay 140 = 1,088 js
+TOTAL 2,877 / 0 (+ test_help 16 / 1, still the placeholder.pl). Was 2,822 / 0.
+Run the .py files before the .js ones — four fixtures are written by them.
 
-Four deliberate regressions run and caught: the tenant predicate dropped from the
+Five deliberate regressions run and caught: the tenant predicate dropped from the
 actuals read (tenant audit + costlines fail); an unreported month reading as 0
 delivered (3 fail); EUR added to the map's hover (1 fail); a KPI without a hover and
-a truncated KPI (4 fail).
+a truncated KPI (4 fail); the timeline interval hard-coded again, ignoring the speed
+(1 fail).
 
 NOT TESTED / HOW THE BROWSER CHECK WAS DONE
 -------------------------------------------
@@ -129,4 +155,11 @@ NOT TESTED / HOW THE BROWSER CHECK WAS DONE
   tiles did not); the 5-minute refresh (not waited for); fullscreen (headless has no
   fullscreen); the live site's real data volumes (the stub had 4 routes, 5 invented
   stockpiles for the chart).
-- The HTTP layer is stubbed as always; the query-string parsing is not run.
+- The Submit matrix's strip was also seen in the browser (the stub answers the preview
+  with a fixed fixture, so its figures there do not match the typed cells — the real
+  endpoint prices what is sent; test_costlines proves a previewed cell equals the saved
+  line-month). The map's speed select is asserted at source only (the public map is not
+  in the browser stub).
+- The HTTP layer is stubbed as always; the query-string parsing and pydantic body
+  validation of POST /api/costing/preview are not run (the body model is built
+  directly in the test).
