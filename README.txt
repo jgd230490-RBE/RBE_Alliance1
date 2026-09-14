@@ -1,165 +1,133 @@
-rbe-dashboard-bigscreen-0911.zip  (v2 — the first cut + the two items you added)
+rbe-map-gate-0914.zip  —  /map/ gets a password, /help/ goes behind the staff sign-in
 ================================================================================
-Delivered 2026-09-11 (afternoon, second cut). Extract over the repo root. Cut against
-HEAD 21ce026 — I can see you applied the FIRST cut at 09:13 UK, so on top of that this
-zip actually changes NINE files (main.py, costlines.py, test_costlines.py, the new
-cost_preview.json fixture, parse_map.js, render_frontend.js, frontend/index.html,
-map/index.html, README.txt); the other two are identical to HEAD. NO new dependency,
-NO schema change, factors.json NOT in this zip. Verified on a fresh clone of 21ce026.
+Delivered 2026-09-14. Extract over the repo root. Cut against HEAD e88b58a
+(2026-09-11 11:49). FIVE files change, one of them a test fix that is NOT part of this
+slice (see "ONE THING I FIXED THAT YOU DID NOT ASK FOR", below).
 
-THE TWO SMALL ITEMS YOU ADDED BEFORE DEPLOYING
-----------------------------------------------
-A. FAIR PRICE ON THE FORECAST SUBMISSION. As you type, the Submit-forecast matrix now
-   prices the cells: a strip under the movements cards — Fair EUR (model) for the range,
-   fair EUR/t, EUR/trip, EUR/km, and Planned EUR with its source (route quote / target
-   rate) — and a small "fair EUR …" under every month cell (hover: the triple, trips,
-   winter/thaw, the planned figure). Debounced 400 ms; nothing is priced in the browser:
-   NEW POST /api/costing/preview runs the typed cells through the SAME functions the
-   saved line is priced with, so what the submitter sees is what the Look-ahead, the
-   Dashboard and the Forecasts page will show. An unbaked route says "no fair price —
-   this route is not baked for <vehicle>; bake it on the Routes page"; no diesel index
-   says so too. Nothing stored; any signed-in code.
-B. PLAY SPEED ON THE PUBLIC MAP TIMELINE. A small select in the timeline bar: 1/4x,
-   1/2x, 1x, 2x, 4x (1x = the old 750 ms per month). Changing it while playing restarts
-   at the new pace without jumping the month; the choice is remembered in that browser.
+  backend/gate.py                  NEW — the whole policy, pure, no framework, no DB
+  backend/main.py                  the middleware, the refusal pages, /api/map-auth
+  backend/tests/test_gate.py       NEW — 111 assertions
+  backend/tests/test_lookahead.py  a date-bomb assertion fixed (pre-existing failure)
+  env.example                      MAP_PASSWORD / GATE_SECRET / MAP_GATE documented
 
-(Below: the big-screen Dashboard, unchanged from the first cut.)
+NO schema change. NO new dependency. factors.json NOT in this zip.
 
-WHAT YOU ASKED FOR, AND WHAT WAS DONE
--------------------------------------
-1. "Remove the stock held table, replace with a stockpile capacity bar chart."
-   DONE. The table is gone. One horizontal bar per stockpile = how full it is at the
-   end of the chosen week, as a % of its RECORDED capacity: green, amber from 90 %,
-   red past 100 %, a dashed line at capacity. Chips pick the week (this month + next;
-   "now" marks the week that holds today). Hover a bar for the absolute figures
-   (held / max / in / out / room). A stockpile with NO capacity recorded cannot be a
-   % — it is listed beside the chart with its balance and "max —", never drawn as
-   0 % or as full (your rule: no capacity recorded is not zero capacity). Same
-   /api/stockpiles read model as before; nothing typed here.
 
-2. "The cost KPIs need info on hover."
-   DONE — for EVERY KPI figure on the page, not only Cost (16 on the four cards, 4
-   on the Today card). Each hover gives the exact figure and how it is made, e.g.
-   planned EUR: "EUR 111 234 = EUR 4.92/t · EUR 135/trip · EUR 2.25/km — the route's
-   typed rates summed, or the Config target where the route has none (6 line-months
-   at target)". Asserted at source and in the render: a figure without a hover fails.
+WHAT YOU MUST DO AFTER UPLOADING
+--------------------------------
+Set ONE environment variable on Render, or the map stays shut to everyone outside
+the alliance:
 
-3. "Scaling isn't correct on my screen, numbers are cut off."
-   Reproduced in a real browser at 1440 px (see NOT TESTED for how). Two causes:
-   a) each KPI card packed FOUR figures in one row with `truncate` — 90 px per
-      figure at 1440 px, so "1 017 425" became "1 017 …". Now two figures per row,
-      no truncate anywhere, the value sized with clamp() so it scales with the
-      screen, millions printed compact ("1.02 M") with the exact figure on hover.
-   b) the filter row sat in the page header and the vehicle <select> is as wide as
-      its longest option (a 50-character vehicle name) — it pushed the month pickers
-      off the right edge. The filters are now their own wrapping toolbar under the
-      header, each select capped at 13 rem.
+    MAP_PASSWORD = <the string you hand to stakeholders>
 
-4. "Further detail and interactiveness; a big screen; a look-ahead / today's
-   deliveries section with a small map; research similar dashboards; positive,
-   exciting data."
-   BUILT (it is additive — nothing you had is lost, the table and filters are still
-   there in the working view):
-   - TODAY strip at the top: tonnes, trips, vehicles on the road and lines reported
-     for today, from the Look-ahead's own read (/api/lookahead, commit bucket, Tark
-     Tee off); "this week to date" and "last week" bars (planned vs reported, the
-     account's hold count and shortfall); today's deliveries listed (line, material,
-     t, trips, veh, confirmed / edited / planned / reported); and the Look-ahead's
-     week map beside it (same CommitMap component, so it draws exactly what the
-     Look-ahead draws; cost never reaches the map — asserted).
-   - DELIVERED TO DATE card (first card): tonnes moved, % of plan, actual EUR typed,
-     and delivered ÷ planned on the reported months. This is the "positive" number —
-     it is the sum of the week actuals typed on Look-ahead → Account (a day actual
-     rolls into its week). Nothing is assumed: until an actual is typed it says
-     "nothing reported yet", and an unreported month counts as not yet delivered.
-   - "Delivered against plan" chart (planned t as outlined bars, reported t filled)
-     and a Delivered % column in the route table.
-   - INTERACTIVE: click any row of the route table (or a bar in "Top routes") and
-     every chart and KPI narrows to that line; the table stays whole so you can pick
-     another; the chip in the header (or clicking the row again) clears it. The
-     subtitle names the focus.
-   - BIG SCREEN button (header): fullscreen, the rail folded, filters and the route
-     table hidden, larger type, both reads refreshed every 5 minutes with an
-     "updated hh:mm" stamp. Esc (or leaving fullscreen) returns to the working view.
-   Research notes: the wall-display guidance (Klipfolio; DataCamp/Toptal dashboard
-   principles; TransportWorks on logistics KPI dashboards) says: readable in three
-   seconds, high contrast, suffixes on big numbers ("34.2 M"), few defended KPIs,
-   no interaction expected on the wall, refresh automatically, tie each figure to an
-   action. Rail Baltica's own "Progress today" page presents progress as km /
-   percentage counters plus a map per country. That shaped the build: the Today
-   strip and Delivered-to-date lead; the map is beside them; big-screen mode hides
-   what needs a mouse. What the guidance recommends and the product does NOT hold
-   is on-time / OTIF and live vehicle positions — see NOT BUILT.
+Nothing else is required. Then restart and check the three things under "FIRST LOOK".
 
-WHAT THIS CHANGES ON THE SERVER (small)
----------------------------------------
-GET /api/costing/lines now also returns, per line-month: actual_qty, actual_tonnes,
-actual_eur, weeks_reported; totals gain actual_tonnes, actual_eur, reported_lines,
-delivered_pct. One extra statement (forecast_weeks, tenant-scoped, no materialise).
-Existing fields unchanged; the Forecasts page ignores the new ones.
+⚠️ THIS FAILS CLOSED, AND THAT IS DELIBERATE. If you forget MAP_PASSWORD, an outside
+visitor to /map/ gets "The map is closed" — not the map. That is the opposite of how
+ADMIN_TOKEN behaves (unset = every admin endpoint open, which is open question C11 and
+is not a pattern worth copying). Your own team is never affected: a valid access code,
+or the cookie a staff sign-in sets, opens the map whether or not a password exists.
 
-ACTION ON YOUR SIDE
--------------------
-- Apply, deploy. Open the Dashboard on your screen first, then press "Big screen".
-- If a stockpile is missing from the chart, it has no capacity recorded: set one on
-  the Locations page.
-- If "Delivered to date" says nothing reported: that is true until a week actual is
-  typed on Look-ahead → Account.
 
-NOT BUILT / OPEN
-----------------
-- On-time / in-full and live truck positions: the product has no arrival times and
-  no tracking. Today's rows show the planned figures and the day's status only.
-- The Today strip shows the commit week (the week that holds today). On a Saturday
-  or Sunday with no planned quantity it says "no deliveries planned for today".
-- The route table is hidden in big-screen mode (13 columns do not read at 6 m).
-- The header (brand bar) stays in big-screen mode.
+HOW IT WORKS, IN FOUR LINES
+---------------------------
+  /map/   opens for: a valid access code, OR the staff cookie, OR the map password.
+  /help/  opens for: a valid access code, OR the staff cookie. The map password does
+          NOT open the guide — it is staff documentation.
+  One cookie, rbe_gate, carrying a level (staff | map) and an expiry, signed with
+  HMAC-SHA256 so it can be neither forged nor extended.
+  Staff cookie lasts 12 hours; the map password cookie lasts 30 days.
 
-FILES (11)
+⭐ THE BIT THAT MATTERS FOR THE APP: a successful /api/auth now also sets the staff
+cookie. That is what keeps the map working INSIDE the staff dashboard. The app iframes
+/map/, and an iframe's document request carries cookies but NOT the X-Access-Code
+header — so without this, a signed-in planner would have been asked for a second
+credential to see the map on their own page. It is asserted, but only at source level
+(see WHAT IS NOT PROVEN).
+
+The map's DATA is gated too, not just its page — /api/public/*, /api/zones,
+/api/restrictions/*, /api/routes/restrictions, /api/streetview. Gating the page alone
+would have been theatre; every figure on it is readable straight off those endpoints.
+
+TWO ENDPOINTS ARE DELIBERATELY LEFT OPEN:
+  /api/meta    the staff app fetches it on mount, BEFORE anyone signs in, to build its
+               dropdowns. Gating it empties the login screen. It carries units,
+               material names and vehicle labels out of factors.json — no location, no
+               route, no forecast, nothing about the project.
+  /api/health  Render polls it.
+
+
+ROTATING THE PASSWORD SIGNS EVERYONE OUT
+----------------------------------------
+The signing key is derived from MAP_PASSWORD, so changing it invalidates every cookie
+already issued. That is the feature, not a bug: it is how you take the map away from
+someone who should no longer have it. If you would rather rotate the password WITHOUT
+signing everyone out, set GATE_SECRET to any fixed random string and the cookie
+survives rotation.
+
+
+FIRST LOOK (in this order)
+--------------------------
+1. Open /map/ in a private window. You should get a navy password page, not the map.
+   Type the wrong password — a red line. Type the right one — the map loads.
+2. Open /help/ in that same private window. You should be told to sign in, NOT given
+   a password box.
+3. Sign in to the app normally, then look at the Dashboard. ⭐ THE MAP MUST STILL DRAW
+   INSIDE THE APP with no second prompt. If it does not, that is the iframe/cookie path
+   and it is the single most likely thing to be wrong — tell me and do not fight it.
+4. Still signed in, open /help/ directly. It should open.
+
+
+WHAT IS NOT PROVEN
+------------------
+  * THE HTTP LAYER IS STUBBED IN THE SANDBOX. The middleware never executed here. No
+    real request was routed, response.set_cookie() was never called, and no Set-Cookie
+    header was ever produced. The policy (gate.decide) is exercised exhaustively as a
+    pure function; the WIRING is asserted by reading main.py as text. Step 3 above is
+    the only thing that proves the wiring.
+  * Nothing in a browser. The password page's fetch() has never run.
+  * secure=True on the cookie is asserted as a value in a dict, not observed on a wire.
+  * ⚠️ I COULD NOT DO THE FRESH-CLONE CHECK. The standing rule is to extract the zip
+    over a clean clone and re-run the suite before sending. The repo went private this
+    morning and the sandbox has no credentials, so it was verified against the clone I
+    took at 07:39 today (HEAD e88b58a) and not against a fresh one. If you have uploaded
+    anything since that time, diff before extracting.
+
+
+ASSERTIONS
 ----------
-CHANGED backend/costlines.py (actuals per line-month, totals; NEW preview()) ·
-        backend/main.py (NEW POST /api/costing/preview) ·
-        backend/tests/test_costlines.py (32 → 48) ·
-        backend/tests/fixtures/cost_lines.json (regenerated; carries a reported line) ·
-        backend/tests/parse_frontend.js (340 → 356) · parse_map.js (484 → 488) ·
-        render_frontend.js (85 → 104) ·
-        frontend/index.html (Dashboard rebuilt: DashboardToday, DashboardStockChart
-        replace DashboardStock; CommitMap gains title/height/flush props and a guarded
-        start; Portal folds the rail on big screen; Matrix cost strip + per-cell fair) ·
-        map/index.html (timeline play speed) · README.txt
-NEW     backend/tests/fixtures/cost_preview.json (written by test_costlines.py)
+  3,004 passed, 1 failed, across 18 files (14 python + 4 node).
+  The 1 failure is test_help.py's "no media file is orphaned" — it is
+  frontend/help/media/placeholder.pl, which a zip cannot delete. DELETE THAT FILE in
+  the GitHub web UI and test_help goes 17 / 0. It has been outstanding since 10 Sep.
 
-SUITE — every figure watched print, on a FRESH clone with this zip applied
---------------------------------------------------------------------------
-test_costing 106 · test_costlines 48 · test_fairprice 47 · test_lookahead 242 ·
-test_phase2 160 · test_phase25a 104 · test_phase3 154 · test_phase4 220 ·
-test_phase45 144 · test_phase5a 215 · test_tenant_audit 32 · test_week1 317 = 1,789 py
-parse_frontend 356 · parse_map 488 · render_frontend 104 · test_ipt_overlay 140 = 1,088 js
-TOTAL 2,877 / 0 (+ test_help 16 / 1, still the placeholder.pl). Was 2,822 / 0.
-Run the .py files before the .js ones — four fixtures are written by them.
+  Baseline for comparison: plain HEAD was 2,892 passed, 2 failed.
+  This zip adds 111 (test_gate.py) and turns one pre-existing failure into a pass.
 
-Five deliberate regressions run and caught: the tenant predicate dropped from the
-actuals read (tenant audit + costlines fail); an unreported month reading as 0
-delivered (3 fail); EUR added to the map's hover (1 fail); a KPI without a hover and
-a truncated KPI (4 fail); the timeline interval hard-coded again, ignoring the speed
-(1 fail).
 
-NOT TESTED / HOW THE BROWSER CHECK WAS DONE
--------------------------------------------
-- This time the page WAS opened in a real browser (headless Chromium in the sandbox)
-  against a stub that serves the frontend and canned JSON from the test database,
-  with the CDN libraries served locally — so the layout, Chart.js drawing, the row
-  click, the focus chip, hover titles and big-screen mode were all seen at 1440 px
-  and 1920 px. Screenshots are in the chat.
-- NOT seen: Mapbox tiles (no network from the sandbox — the map frame rendered, the
-  tiles did not); the 5-minute refresh (not waited for); fullscreen (headless has no
-  fullscreen); the live site's real data volumes (the stub had 4 routes, 5 invented
-  stockpiles for the chart).
-- The Submit matrix's strip was also seen in the browser (the stub answers the preview
-  with a fixed fixture, so its figures there do not match the typed cells — the real
-  endpoint prices what is sent; test_costlines proves a previewed cell equals the saved
-  line-month). The map's speed select is asserted at source only (the public map is not
-  in the browser stub).
-- The HTTP layer is stubbed as always; the query-string parsing and pydantic body
-  validation of POST /api/costing/preview are not run (the body model is built
-  directly in the test).
+ONE THING I FIXED THAT YOU DID NOT ASK FOR
+------------------------------------------
+test_lookahead.py had an assertion that hard-coded the PDF's five day headings as
+"MON 7 SEP ... FRI 11 SEP". It is built from the CURRENT commit week, so it passed
+only during the week of 7 September and started failing on Monday 14th — today — when
+the week rolled over. It is a stale test, not a code regression, and the PDF is fine.
+
+I derived the five headings from the same week the PDF was built from (via the XLSX's
+own date column, which the test had already parsed) instead of hard-coding them. The
+assertion is not weakened: it still requires five distinct Mon-Fri columns, all present
+in the PDF text, and no collapse rule.
+
+It is one self-contained hunk. If you would rather I had left it alone, revert that
+file and the count goes to 3,003 / 2.
+
+
+STILL OPEN AFTER THIS
+---------------------
+  * The help page ships 22 PLACEHOLDER images under captions reading "Captured from
+    the live deployment" (open question E32). The gate stops strangers seeing them; it
+    does not make the captions true. Fix before you send anyone the link.
+  * Per-person logins (Phase 6) still replace all of this properly. A shared code per
+    role and a shared map password are shared secrets, with no identity and no audit
+    trail. Do not describe the deployment as secure on the strength of this zip.
+  * There is no rate limit on /api/map-auth. Someone who wants to brute-force a short
+    password can. Use a long one.
