@@ -1005,14 +1005,29 @@ ok("nothing on the Dashboard writes", !/fetch\(`\$\{API\}[^`]*`,\s*\{\s*method/.
 // It has been served at /help/ since 10 Sep and NOTHING linked to it: the only way in
 // was to type the URL. That is why the human could not find it.
 ok("\u2b50 the rail links to the user guide at /help/, exactly once",
-   (src.match(/href="\/help\/"/g) || []).length === 1);
+   (src.match(/href=\{"\/help\/\?role="/g) || []).length === 1);
+ok("...carrying the signed-in role, so the guide opens on the right view",
+   /href=\{"\/help\/\?role=" \+ encodeURIComponent\(\(role && role\.role\) \|\| ""\)\}/.test(src));
 ok("...as an ANCHOR, not a NAV entry \u2014 /help/ is a separate document, not a React view, "
    + "so a 'help' id would fail the allowed-page check and bounce to the dashboard",
-   !/\{\s*id:\s*"help"/.test(src) && /<a href="\/help\/"/.test(src));
+   !/\{\s*id:\s*"help"/.test(src) && /<a href=\{"\/help\//.test(src));
 ok("...opening in a new tab, with rel=noopener, so the app's state is not lost",
-   /href="\/help\/"[^>]*target="_blank"/.test(src) && /href="\/help\/"[^>]*rel="noopener/.test(src));
+   /\/help\/\?role=[\s\S]{0,120}target="_blank"/.test(src) && /\/help\/\?role=[\s\S]{0,140}rel="noopener/.test(src));
+
+// ---- 2026-09-14: deep links. The guide links at a screen, so the URL names the page. ----
+ok("\u2b50 the hash names the page, and the id list is DERIVED from NAV so the two cannot drift",
+   /const PAGE_IDS = new Set\(NAV\.flatMap/.test(src) && /function pageFromHash\(\)/.test(src));
+ok("...an unknown hash is ignored rather than blanking the app",
+   /PAGE_IDS\.has\(h\) \? h : null/.test(src));
+ok("...the hash wins over the remembered page on first load, and the remembered page is "
+   + "still the fallback",
+   /const h = pageFromHash\(\);\s*\n\s*if\(h\) return h;[\s\S]{0,160}localStorage\.getItem\("rbe_page"\)/.test(src));
+ok("\U0001f534 ...and it REPLACES rather than pushes \u2014 the rail is not browser history",
+   /history\.replaceState/.test(src) && !/history\.pushState/.test(src));
+ok("...a hashchange (a second link from the guide into the same tab) moves the page",
+   /addEventListener\("hashchange"/.test(src) && /removeEventListener\("hashchange"/.test(src));
 ok("...and it collapses with the rail like every other item (label behind railOpen)",
-   /href="\/help\/"[\s\S]{0,420}?\{railOpen && <span className="truncate">User guide<\/span>\}/.test(src));
+   /\/help\/\?role=[\s\S]{0,460}?\{railOpen && <span className="truncate">User guide<\/span>\}/.test(src));
 
 // ---- report ------------------------------------------------------------------
 console.log();
