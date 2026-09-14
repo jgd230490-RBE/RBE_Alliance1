@@ -1,14 +1,32 @@
-rbe-map-gate-0914.zip  —  /map/ gets a password, /help/ goes behind the staff sign-in
+rbe-map-gate-0914.zip  v2  —  /map/ password, /help/ behind sign-in, + a way IN to /help/
 ================================================================================
-Delivered 2026-09-14. Extract over the repo root. Cut against HEAD e88b58a
-(2026-09-11 11:49). FIVE files change, one of them a test fix that is NOT part of this
-slice (see "ONE THING I FIXED THAT YOU DID NOT ASK FOR", below).
+Delivered 2026-09-14 (second cut). Extract over the repo root. Cut against HEAD e88b58a
+(2026-09-11 11:49). SEVEN files.
+
+*** THIS REPLACES THE FIRST CUT. DISCARD IT. ***  The first cut was never applied (I
+checked the live site: /map/ and /help/ both still served to an anonymous request from
+outside). This is a strict superset, so nothing is lost by binning the first one.
 
   backend/gate.py                  NEW — the whole policy, pure, no framework, no DB
   backend/main.py                  the middleware, the refusal pages, /api/map-auth
+  frontend/index.html              ⭐ NEW IN v2 — a "User guide" link in the rail
   backend/tests/test_gate.py       NEW — 111 assertions
+  backend/tests/parse_frontend.js  ⭐ NEW IN v2 — 4 assertions on that link
   backend/tests/test_lookahead.py  a date-bomb assertion fixed (pre-existing failure)
   env.example                      MAP_PASSWORD / GATE_SECRET / MAP_GATE documented
+
+
+⭐ WHY v2 EXISTS: THE GUIDE HAD NO WAY IN
+-----------------------------------------
+You asked how to open the help page. The answer was: you could not. It has been served
+at /help/ since 10 September and NOTHING in the app ever linked to it — zero occurrences
+of "/help/" anywhere in frontend/index.html. The only way in was to type the URL.
+
+That is a separate fault from the gate, and it would have survived a perfect deployment.
+v2 adds a "User guide" link at the foot of the left rail, above Collapse. It is an
+ANCHOR opening in a new tab, not a NAV entry: /help/ is a separate document, not a React
+view, and a 'help' page id would fail the allowed-page check and bounce you to the
+Dashboard.
 
 NO schema change. NO new dependency. factors.json NOT in this zip.
 
@@ -68,6 +86,8 @@ survives rotation.
 
 FIRST LOOK (in this order)
 --------------------------
+0. FIRST, CONFIRM IT LANDED: /map/ in a private window must NOT show the map. As of
+   14 Sep 10:30 it still did — the first cut was never applied.
 1. Open /map/ in a private window. You should get a navy password page, not the map.
    Type the wrong password — a red line. Type the right one — the map loads.
 2. Open /help/ in that same private window. You should be told to sign in, NOT given
@@ -75,7 +95,11 @@ FIRST LOOK (in this order)
 3. Sign in to the app normally, then look at the Dashboard. ⭐ THE MAP MUST STILL DRAW
    INSIDE THE APP with no second prompt. If it does not, that is the iframe/cookie path
    and it is the single most likely thing to be wrong — tell me and do not fight it.
-4. Still signed in, open /help/ directly. It should open.
+4. Still signed in, look at the FOOT OF THE LEFT RAIL: a "? User guide" link above
+   Collapse. Click it — the guide opens in a new tab. That link did not exist before v2,
+   which is why you could not find the guide.
+5. Sign out (or use a private window) and open /help/ directly: you should be told to
+   sign in, NOT shown the guide.
 
 
 WHAT IS NOT PROVEN
@@ -96,13 +120,26 @@ WHAT IS NOT PROVEN
 
 ASSERTIONS
 ----------
-  3,004 passed, 1 failed, across 18 files (14 python + 4 node).
+  3,008 passed, 1 failed, across 18 files (14 python + 4 node).
   The 1 failure is test_help.py's "no media file is orphaned" — it is
   frontend/help/media/placeholder.pl, which a zip cannot delete. DELETE THAT FILE in
   the GitHub web UI and test_help goes 17 / 0. It has been outstanding since 10 Sep.
 
   Baseline for comparison: plain HEAD was 2,892 passed, 2 failed.
-  This zip adds 111 (test_gate.py) and turns one pre-existing failure into a pass.
+  This zip adds 111 (test_gate.py) + 4 (parse_frontend.js, the guide link) and turns one
+  pre-existing failure into a pass.
+
+⚠️ THE BABEL CHECK COULD NOT BE RUN TODAY. The standing rule is to compile the frontend
+with the browser's own compiler, because TypeScript accepts things Babel refuses — that
+is how a duplicate `function Kpi` blanked the page on 9 September. npm now answers 403
+("forbidden by your security policy") for @babel/standalone in this sandbox, so it was
+not installable. What WAS run instead: render_frontend.js (which transpiles and
+server-renders the whole block through TypeScript, so a JSX syntax error would fail), and
+an explicit AST scan for duplicate top-level declarations — 103 declarations, no
+duplicates, 0 syntactic diagnostics. The v2 change adds no new function, only markup
+inside an existing component, so the 9 Sep failure mode is not in play. The residual risk
+is a Babel-specific rejection of something TypeScript accepts. IF THE APP GOES BLANK
+AFTER APPLYING THIS, that is the cause and the rail link is the only frontend change.
 
 
 ONE THING I FIXED THAT YOU DID NOT ASK FOR
