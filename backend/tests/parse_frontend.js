@@ -1001,6 +1001,19 @@ ok("a Delivered-against-plan chart (planned t as bars, reported t over them) and
   _dbBody.includes("Delivered against plan") && _dbBody.includes("actualM") && _dbBody.includes('setSort("deliveredPct")'));
 ok("nothing on the Dashboard writes", !/fetch\(`\$\{API\}[^`]*`,\s*\{\s*method/.test(_dbBody + _tdBody + _dsBody));
 
+// ---- 2026-09-14: the user guide is reachable from the app --------------------
+// It has been served at /help/ since 10 Sep and NOTHING linked to it: the only way in
+// was to type the URL. That is why the human could not find it.
+ok("\u2b50 the rail links to the user guide at /help/, exactly once",
+   (src.match(/href="\/help\/"/g) || []).length === 1);
+ok("...as an ANCHOR, not a NAV entry \u2014 /help/ is a separate document, not a React view, "
+   + "so a 'help' id would fail the allowed-page check and bounce to the dashboard",
+   !/\{\s*id:\s*"help"/.test(src) && /<a href="\/help\/"/.test(src));
+ok("...opening in a new tab, with rel=noopener, so the app's state is not lost",
+   /href="\/help\/"[^>]*target="_blank"/.test(src) && /href="\/help\/"[^>]*rel="noopener/.test(src));
+ok("...and it collapses with the rail like every other item (label behind railOpen)",
+   /href="\/help\/"[\s\S]{0,420}?\{railOpen && <span className="truncate">User guide<\/span>\}/.test(src));
+
 // ---- report ------------------------------------------------------------------
 console.log();
 for (const f of fail) console.log("  FAIL:", f);
