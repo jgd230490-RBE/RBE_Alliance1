@@ -39,6 +39,7 @@ import lookahead    # Look-ahead v2 slices 3-6 — the page's read model, clashe
 import export       # Look-ahead v2 slice 4 — XLSX + PDF of the commit week
 import stockpiles    # Week 1 — stockpile capacity and typed consumption (Task D2)
 import access        # 2026-09-02 — IPT access codes (Task F)
+import gate          # 2026-09-14 — the /map/ password and the /help/ staff gate
 import config        # 2.5b — the editable copy of factors.json
 import costing       # 10 Sep evening — target rates + fuel settings (config key 'costing'), BAF
 import fuel          # 10 Sep evening — the EU Weekly Oil Bulletin diesel index, fetched server-side
@@ -130,6 +131,81 @@ app.add_middleware(
 )
 
 
+# ------------------------------------------------------------------ gate pages (2026-09-14)
+# Served when the gate refuses. They are string constants rather than files under map/
+# or frontend/help/ ON PURPOSE: anything inside those directories is itself behind the
+# gate, so a password page living there could never be shown to the person who needs it.
+_GATE_CSS = """
+  :root { color-scheme: light; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#0A1446; color:#fff;
+         font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  .box { width:min(92vw,380px); background:#fff; color:#1B2430; border-radius:10px;
+         padding:28px 26px; box-shadow:0 10px 40px rgba(0,0,0,.35); }
+  h1 { margin:0 0 6px; font-size:19px; color:#003787; }
+  p  { margin:0 0 18px; font-size:13.5px; color:#5A6572; }
+  label { display:block; font-size:12px; font-weight:600; color:#003787; margin-bottom:6px; }
+  input { width:100%; box-sizing:border-box; padding:10px 12px; font-size:15px;
+          border:1px solid #DCE3EC; border-radius:6px; }
+  input:focus { outline:2px solid #3398DB; outline-offset:1px; border-color:#3398DB; }
+  button { margin-top:14px; width:100%; padding:11px; font-size:15px; font-weight:600;
+           color:#fff; background:#003787; border:0; border-radius:6px; cursor:pointer; }
+  button:hover { background:#0A1446; }
+  .err { display:none; margin-top:12px; font-size:13px; color:#BF2E55; }
+  .foot { margin-top:16px; font-size:12px; color:#8A97A6; }
+  a { color:#003787; }
+"""
+
+_MAP_PASSWORD_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RBE Alliance 1 Logistics — map access</title><style>%s</style>
+<div class="box">
+  <h1>Alliance 1 route map</h1>
+  <p>This map is not public. Enter the access password you were given.</p>
+  <form id="f" autocomplete="off">
+    <label for="p">Password</label>
+    <input id="p" name="p" type="password" autofocus>
+    <button type="submit">Open the map</button>
+    <div class="err" id="e">That password was not recognised.</div>
+  </form>
+  <div class="foot">Alliance staff: sign in to the app at <a href="/">the main page</a> and
+  the map opens with it.</div>
+</div>
+<script>
+document.getElementById('f').addEventListener('submit', async function (ev) {
+  ev.preventDefault();
+  var e = document.getElementById('e'); e.style.display = 'none';
+  var r = await fetch('/api/map-auth', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: document.getElementById('p').value })
+  });
+  if (r.ok) { location.reload(); } else { e.style.display = 'block'; }
+});
+</script></html>""" % _GATE_CSS
+
+_HELP_SIGNIN_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RBE Alliance 1 Logistics — user guide</title><style>%s</style>
+<div class="box">
+  <h1>The user guide is for signed-in staff</h1>
+  <p>It documents every staff screen, so it sits behind the same sign-in.</p>
+  <button onclick="location.href='/'">Go to the app and sign in</button>
+  <div class="foot">Once you are signed in, come back to <code>/help/</code> — or use the
+  Help link in the app.</div>
+</div></html>""" % _GATE_CSS
+
+_MAP_UNCONFIGURED_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RBE Alliance 1 Logistics — map closed</title><style>%s</style>
+<div class="box">
+  <h1>The map is closed</h1>
+  <p>No map password has been configured on this deployment, so the map cannot be opened
+  to anyone outside the alliance. This is the safe state, not a fault.</p>
+  <div class="foot">Set <code>MAP_PASSWORD</code> in the environment to open it. Staff can
+  still see the map by signing in at <a href="/">the main page</a>.</div>
+</div></html>""" % _GATE_CSS
+
+
 # ------------------------------------------------------------------ access (Task F)
 # The X-Access-Code header is resolved ONCE per request into a contextvar, the same
 # shape the tenant uses, so no endpoint takes a code argument — each one asks
@@ -143,11 +219,51 @@ except Exception:      # stubbed fastapi in the sandbox harnesses
     _Request = None
 
 if _Request is not None and hasattr(app, "middleware"):
+    from fastapi.responses import HTMLResponse as _HTML, JSONResponse as _JSON
+
+    # 2026-09-14 — the gate for /map/ and /help/. The policy lives in gate.decide(),
+    # which is pure and fully asserted in the sandbox; everything here is the wiring
+    # that turns a decision into a response, and the wiring is what the harness cannot
+    # run. Registered on the SAME middleware as the access contextvar so the gate can
+    # see whether the X-Access-Code resolved.
+    def _gate_refusal(decision, path):
+        doc = gate.is_document(path)
+        if decision == gate.NEED_MAP_PASSWORD:
+            return _HTML(_MAP_PASSWORD_PAGE, status_code=401) if doc else _JSON(
+                {"detail": "the map is password protected"}, status_code=401)
+        if decision == gate.NEED_STAFF:
+            return _HTML(_HELP_SIGNIN_PAGE, status_code=401) if doc else _JSON(
+                {"detail": "sign in to the app to read the guide"}, status_code=401)
+        # UNCONFIGURED — nobody set MAP_PASSWORD. Closed, and says why. Staff are
+        # unaffected: a valid code or a staff cookie never reaches this branch.
+        return _HTML(_MAP_UNCONFIGURED_PAGE, status_code=503) if doc else _JSON(
+            {"detail": "map access is not configured"}, status_code=503)
+
     @app.middleware("http")
     async def _access_middleware(request, call_next):
         token = access.set_current(request.headers.get(access.HEADER))
         try:
-            return await call_next(request)
+            path = request.url.path
+            decision = gate.decide(
+                path,
+                has_valid_code=bool(access.current()),
+                cookie=request.cookies.get(gate.COOKIE),
+            )
+            if decision != gate.ALLOW:
+                return _gate_refusal(decision, path)
+
+            response = await call_next(request)
+
+            # The cookie is set HERE rather than in the endpoint so that auth() and
+            # map_auth() stay plain functions the harness can call directly. A staff
+            # sign-in opens the map as well, which is what keeps the iframe on the
+            # staff dashboard working without a second credential.
+            if getattr(response, "status_code", None) == 200:
+                if path == "/api/auth":
+                    response.set_cookie(**gate.cookie_kwargs(gate.LEVEL_STAFF))
+                elif path == "/api/map-auth":
+                    response.set_cookie(**gate.cookie_kwargs(gate.LEVEL_MAP))
+            return response
         finally:
             access.reset_current(token)
 
@@ -191,6 +307,33 @@ def auth(body: AuthIn):
     if not acc:
         raise HTTPException(401, "unknown access code")
     return access.describe(acc)
+
+
+class MapAuthIn(BaseModel):
+    password: str
+
+
+@app.post("/api/map-auth")
+def map_auth(body: MapAuthIn):
+    """
+    The shared password for the public map. On 200 the middleware attaches the `map`
+    cookie; this returns nothing but the fact that it worked.
+
+    Deliberately says the same thing on a wrong password as on an unset one — an
+    unconfigured map is not a map whose password is empty.
+    """
+    if not gate.password_ok(body.password):
+        raise HTTPException(401, "wrong password")
+    return {"ok": True, "opens": "/map/"}
+
+
+@app.post("/api/gate-signout")
+def gate_signout():
+    """Drop the gate cookie — for testing the gate, and for a shared machine."""
+    from fastapi.responses import JSONResponse as _J
+    r = _J({"ok": True})
+    r.delete_cookie(gate.COOKIE, path="/")
+    return r
 
 
 # ------------------------------------------------------------------ schemas
