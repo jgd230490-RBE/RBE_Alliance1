@@ -937,6 +937,15 @@ const NAV = [
   ]},
 ];
 const DATA_PAGES = ["locations", "routes", "zones"];
+// 2026-09-14 — deep links. Derived from NAV so a new page cannot be linkable-but-unknown
+// or known-but-unlinkable; the two lists cannot drift.
+const PAGE_IDS = new Set(NAV.flatMap(g => g.items.map(i => i.id)));
+function pageFromHash(){
+  try {
+    const h = decodeURIComponent((window.location.hash || "").replace(/^#\/?/, "")).trim();
+    return PAGE_IDS.has(h) ? h : null;
+  } catch(e){ return null; }
+}
 
 // One header for every page: title, one line of purpose, actions on the right.
 function PageHeader({ title, subtitle, actions, children }){
@@ -965,8 +974,30 @@ function EmptyState({ title, body, action }){
 
 function Portal({ role, who, meta, metaErr, vehLang }){
   const canApprove = !!(role && role.can_approve);
-  const [page, setPageState] = useState(() => { try { return localStorage.getItem("rbe_page") || "dashboard"; } catch(e){ return "dashboard"; } });
-  const setPage = (p) => { setPageState(p); try { localStorage.setItem("rbe_page", p); } catch(e){} };
+  // 2026-09-14: the URL hash names the page, so the user guide can link straight at a
+  // screen ("#lookahead") and a page can be bookmarked. The hash WINS over the
+  // remembered page on first load; after that the two are kept in step. Unknown or
+  // absent hash falls back to what was remembered, exactly as before.
+  const [page, setPageState] = useState(() => {
+    const h = pageFromHash();
+    if(h) return h;
+    try { return localStorage.getItem("rbe_page") || "dashboard"; } catch(e){ return "dashboard"; }
+  });
+  const setPage = (p) => {
+    setPageState(p);
+    try { localStorage.setItem("rbe_page", p); } catch(e){}
+    // replace, not push: the rail is not browser history, and a back button that walked
+    // back through every page you clicked would be worse than one that leaves the app.
+    try { if(pageFromHash() !== p) history.replaceState(null, "", "#" + p); } catch(e){}
+  };
+  // someone edits the hash, or follows a second link from the guide into the same tab
+  useEffect(() => {
+    const onHash = () => { const h = pageFromHash(); if(h && h !== page) setPageState(h); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [page]);
+  // and put the hash on the URL for the page we actually opened with
+  useEffect(() => { try { if(pageFromHash() !== page) history.replaceState(null, "", "#" + page); } catch(e){} }, []);
   const [railOpen, setRailOpen] = useState(() => { try { return localStorage.getItem("rbe_rail") !== "closed"; } catch(e){ return true; } });
   const toggleRail = () => { const v = !railOpen; setRailOpen(v); try { localStorage.setItem("rbe_rail", v ? "open" : "closed"); } catch(e){} };
   // {routeId, year, toYear, discipline, sectionId} handed to the Matrix. `year` is the
@@ -1032,7 +1063,7 @@ function Portal({ role, who, meta, metaErr, vehLang }){
               10 Sep and nothing in the app linked to it, so the only way to reach it was
               to type the URL. An ANCHOR, not a NAV entry: /help/ is a separate document,
               not a React view, and a new tab keeps the app's state. */}
-          <a href="/help/" target="_blank" rel="noopener noreferrer"
+          <a href={"/help/?role=" + encodeURIComponent((role && role.role) || "")} target="_blank" rel="noopener noreferrer"
              title={railOpen ? "Opens in a new tab" : "User guide"}
              className="w-full flex items-center gap-3 px-2 py-1.5 mb-1 text-xs rounded text-slate-500 hover:bg-slate-50 hover:text-[color:var(--navy)] transition">
             <span className="w-4 text-center text-sm leading-none opacity-80">?</span>
