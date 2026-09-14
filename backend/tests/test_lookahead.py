@@ -1147,9 +1147,18 @@ _txt = subprocess.run(["pdftotext", "-layout", "-", "-"], input=pb, capture_outp
 ok("...and carries the disclaimer, the flags heading, the footer lines and a page number",
    "not a delivery note" in _txt and "not a stop" in _txt and "Vignette is time-based" in _txt
    and "Re-open the week" in _txt and "page 1" in _txt)
+# 2026-09-14: these five headings used to be hard-coded as MON 7 SEP..FRI 11 SEP, which
+# made the assertion a date bomb — it passed only during the week of 7 September and began
+# failing on Monday 14th when the commit week rolled over. Derived from the SAME week the
+# PDF was built from now (via the XLSX's own date column, already parsed above), so it
+# still asserts five distinct Mon-Fri columns and no collapse, in any week.
+_pdf_days = sorted({datetime.date.fromisoformat(str(ws.cell(row=i, column=1).value)[:10])
+                    for i in range(2, ws.max_row + 1)})
+_pdf_heads = [d.strftime("%a %-d %b").upper() for d in _pdf_days]
 ok("⭐ one row per LINE with Mon…Fri as five separate columns — no collapse rule",
-   "FRI EACH DAY" not in _txt and all(k in _txt for k in ("MON 7 SEP", "TUE 8 SEP", "WED 9 SEP", "THU 10 SEP", "FRI 11 SEP"))
-   and _txt.count("Small aggregate") == 3)
+   "FRI EACH DAY" not in _txt and len(_pdf_heads) == 5 and all(k in _txt for k in _pdf_heads)
+   and _txt.count("Small aggregate") == 3,
+   f"expected {_pdf_heads}")
 ok("⭐ origin and destination carry their coordinates from the locations table",
    "58.50000, 24.00000" in _txt and "58.60000, 24.40000" in _txt and "ORIGIN" in _txt and "DESTINATION" in _txt)
 ok("...today's column is named, the week column totals, and a TOTAL row closes the table",
