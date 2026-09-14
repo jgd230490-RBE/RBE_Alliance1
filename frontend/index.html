@@ -1028,6 +1028,16 @@ function Portal({ role, who, meta, metaErr, vehLang }){
           ))}
         </div>
         <div className="border-t border-slate-200 p-2">
+          {/* 2026-09-14: the user guide had no way in. It has been served at /help/ since
+              10 Sep and nothing in the app linked to it, so the only way to reach it was
+              to type the URL. An ANCHOR, not a NAV entry: /help/ is a separate document,
+              not a React view, and a new tab keeps the app's state. */}
+          <a href="/help/" target="_blank" rel="noopener noreferrer"
+             title={railOpen ? "Opens in a new tab" : "User guide"}
+             className="w-full flex items-center gap-3 px-2 py-1.5 mb-1 text-xs rounded text-slate-500 hover:bg-slate-50 hover:text-[color:var(--navy)] transition">
+            <span className="w-4 text-center text-sm leading-none opacity-80">?</span>
+            {railOpen && <span className="truncate">User guide</span>}
+          </a>
           <button onClick={toggleRail} className="w-full text-xs text-slate-400 hover:text-slate-700 py-1" title={railOpen ? "Collapse" : "Expand"}>
             {railOpen ? "‹ Collapse" : "›"}
           </button>
