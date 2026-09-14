@@ -25,19 +25,46 @@ figure{margin:14px 0 22px;text-align:center}figure img{max-width:100%;border:1px
 #top{position:fixed;right:18px;bottom:18px;background:var(--navy);color:#fff;text-decoration:none;padding:8px 12px;border-radius:20px;font-size:12px}
 @media (max-width:900px){#nav{position:static;width:auto}main{margin-left:0;padding:18px 16px 60px}}
 @media print{#nav,#top{display:none}main{margin:0;padding:0;max-width:none}h1{page-break-before:always}h1:first-child{page-break-before:avoid}}
+
+/* 2026-09-14 — role switcher, troubleshooting, deep links */
+#roles{position:sticky;top:0;z-index:5;background:var(--paper);border-bottom:1px solid var(--line);margin:-28px -44px 18px;padding:12px 44px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#roles .lab{font-size:12px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.08em}
+#roles button{font:inherit;font-size:13px;padding:5px 13px;border-radius:16px;border:1px solid var(--line);background:#fff;color:var(--grey);cursor:pointer}
+#roles button[aria-pressed="true"]{background:var(--navy);border-color:var(--navy);color:#fff;font-weight:600}
+#roles .who{font-size:12px;color:var(--grey);margin-left:auto}
+.ts-q{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:10px;margin:14px 0 8px}
+.ts-q button{font:inherit;font-size:13.5px;text-align:left;padding:11px 13px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);cursor:pointer;line-height:1.35}
+.ts-q button:hover{border-color:var(--blue);background:#F7FBFF}
+.ts-q button[aria-expanded="true"]{border-color:var(--navy);background:var(--panel);font-weight:600}
+.ts-a{display:none;border-left:5px solid var(--blue);background:#EEF4FB;border-radius:8px;padding:12px 15px;margin:4px 0 18px}
+.ts-a.on{display:block}
+.ts-a .verdict{font-weight:700;margin-bottom:5px}
+.ts-a .verdict.fine{color:var(--green)}.ts-a .verdict.fault{color:var(--red)}
+figcaption .go{font-style:normal;white-space:nowrap}
+.rolehide{display:none !important}
+@media print{#roles{display:none}.rolehide{display:revert !important}.ts-a{display:block}}
+@media (max-width:900px){#roles{margin:-18px -16px 14px;padding:10px 16px}}
 </style></head>
 <body>
-<nav id="nav"><div class="brand">RBE Alliance 1 Logistics<span>User guide</span></div><ol><li class="l1"><a href="#1-welcome">1. Welcome</a></li><li class="l2"><a href="#1-1-the-two-surfaces">1.1 The two surfaces</a></li><li class="l2"><a href="#1-2-roles">1.2 Roles</a></li><li class="l2"><a href="#1-3-how-the-numbers-are-built-in-one-picture">1.3 How the numbers are built — in one picture</a></li><li class="l1"><a href="#2-getting-started">2. Getting started</a></li><li class="l2"><a href="#2-1-signing-in">2.1 Signing in</a></li><li class="l2"><a href="#2-2-finding-your-way-around">2.2 Finding your way around</a></li><li class="l1"><a href="#3-the-dashboard">3. The Dashboard</a></li><li class="l1"><a href="#4-submitting-a-forecast">4. Submitting a forecast</a></li><li class="l2"><a href="#4-1-the-totals-strip">4.1 The totals strip</a></li><li class="l2"><a href="#4-2-warnings-you-may-see">4.2 Warnings you may see</a></li><li class="l2"><a href="#4-3-saving-editing-and-withdrawing">4.3 Saving, editing and withdrawing</a></li><li class="l1"><a href="#5-the-forecasts-page">5. The Forecasts page</a></li><li class="l2"><a href="#5-1-for-planners-approving-and-rejecting">5.1 For planners: approving and rejecting</a></li><li class="l1"><a href="#6-the-look-ahead">6. The Look-ahead</a></li><li class="l2"><a href="#6-1-how-weeks-work">6.1 How weeks work</a></li><li class="l2"><a href="#6-2-the-weekly-rhythm">6.2 The weekly rhythm</a></li><li class="l2"><a href="#6-3-commit-view-this-week-by-day">6.3 Commit view — this week by day</a></li><li class="l2"><a href="#6-4-account-view-what-actually-happened-last-week">6.4 Account view — what actually happened last week</a></li><li class="l2"><a href="#6-5-horizon-view">6.5 Horizon view</a></li><li class="l1"><a href="#7-data-pages-planners-and-admins">7. Data pages (planners and admins)</a></li><li class="l2"><a href="#7-1-locations">7.1 Locations</a></li><li class="l2"><a href="#7-2-routes">7.2 Routes</a></li><li class="l2"><a href="#7-3-zones-and-temporary-haul-roads">7.3 Zones and temporary haul roads</a></li><li class="l2"><a href="#7-4-config">7.4 Config</a></li><li class="l1"><a href="#8-the-public-map">8. The public map</a></li><li class="l2"><a href="#8-1-reading-the-map">8.1 Reading the map</a></li><li class="l2"><a href="#8-2-filters-basemaps-and-overlays">8.2 Filters, basemaps and overlays</a></li><li class="l2"><a href="#8-3-road-restrictions">8.3 Road restrictions</a></li><li class="l2"><a href="#8-4-the-forecast-timeline-and-kpi-panel">8.4 The forecast timeline and KPI panel</a></li><li class="l2"><a href="#8-5-street-view">8.5 Street View</a></li><li class="l1"><a href="#9-understanding-the-numbers">9. Understanding the numbers</a></li><li class="l1"><a href="#10-flags-chips-and-warnings">10. Flags, chips and warnings</a></li><li class="l2"><a href="#10-1-the-look-ahead-clash-rail">10.1 The Look-ahead clash rail</a></li><li class="l2"><a href="#10-2-chips-and-marks">10.2 Chips and marks</a></li><li class="l2"><a href="#10-3-the-public-map-s-warning-levels">10.3 The public map's warning levels</a></li><li class="l1"><a href="#11-troubleshooting">11. Troubleshooting</a></li><li class="l1"><a href="#appendix-a-methods-and-assumptions">Appendix A — Methods and assumptions</a></li><li class="l2"><a href="#a-1-data-sources">A.1 Data sources</a></li><li class="l2"><a href="#a-2-planning-assumptions">A.2 Planning assumptions</a></li><li class="l2"><a href="#a-3-what-the-platform-does-not-do">A.3 What the platform does not do</a></li><li class="l1"><a href="#appendix-b-glossary">Appendix B — Glossary</a></li><li class="l1"><a href="#appendix-c-figures">Appendix C — Figures</a></li></ol></nav>
+<nav id="nav"><div class="brand">RBE Alliance 1 Logistics<span>User guide</span></div><ol><li class="l1"><a href="#1-welcome">1. Welcome</a></li><li class="l2"><a href="#1-1-the-two-surfaces">1.1 The two surfaces</a></li><li class="l2"><a href="#1-2-roles">1.2 Roles</a></li><li class="l2"><a href="#1-3-how-the-numbers-are-built-in-one-picture">1.3 How the numbers are built — in one picture</a></li><li class="l1"><a href="#2-getting-started">2. Getting started</a></li><li class="l2"><a href="#2-1-signing-in">2.1 Signing in</a></li><li class="l2"><a href="#2-2-finding-your-way-around">2.2 Finding your way around</a></li><li class="l1"><a href="#3-the-dashboard">3. The Dashboard</a></li><li class="l1"><a href="#4-submitting-a-forecast">4. Submitting a forecast</a></li><li class="l2"><a href="#4-1-the-totals-strip">4.1 The totals strip</a></li><li class="l2"><a href="#4-2-warnings-you-may-see">4.2 Warnings you may see</a></li><li class="l2"><a href="#4-3-saving-editing-and-withdrawing">4.3 Saving, editing and withdrawing</a></li><li class="l1"><a href="#5-the-forecasts-page">5. The Forecasts page</a></li><li class="l2"><a href="#5-1-for-planners-approving-and-rejecting">5.1 For planners: approving and rejecting</a></li><li class="l1"><a href="#6-the-look-ahead">6. The Look-ahead</a></li><li class="l2"><a href="#6-1-how-weeks-work">6.1 How weeks work</a></li><li class="l2"><a href="#6-2-the-weekly-rhythm">6.2 The weekly rhythm</a></li><li class="l2"><a href="#6-3-commit-view-this-week-by-day">6.3 Commit view — this week by day</a></li><li class="l2"><a href="#6-4-account-view-what-actually-happened-last-week">6.4 Account view — what actually happened last week</a></li><li class="l2"><a href="#6-5-horizon-view">6.5 Horizon view</a></li><li class="l1"><a href="#7-data-pages-planners-and-admins">7. Data pages (planners and admins)</a></li><li class="l2"><a href="#7-1-locations">7.1 Locations</a></li><li class="l2"><a href="#7-2-routes">7.2 Routes</a></li><li class="l2"><a href="#7-3-zones-and-temporary-haul-roads">7.3 Zones and temporary haul roads</a></li><li class="l2"><a href="#7-4-config">7.4 Config</a></li><li class="l1"><a href="#8-the-public-map">8. The public map</a></li><li class="l2"><a href="#8-1-reading-the-map">8.1 Reading the map</a></li><li class="l2"><a href="#8-2-filters-basemaps-and-overlays">8.2 Filters, basemaps and overlays</a></li><li class="l2"><a href="#8-3-road-restrictions">8.3 Road restrictions</a></li><li class="l2"><a href="#8-4-the-forecast-timeline-and-kpi-panel">8.4 The forecast timeline and KPI panel</a></li><li class="l2"><a href="#8-5-street-view">8.5 Street View</a></li><li class="l1"><a href="#9-understanding-the-numbers">9. Understanding the numbers</a></li><li class="l1"><a href="#10-flags-chips-and-warnings">10. Flags, chips and warnings</a></li><li class="l2"><a href="#10-1-the-look-ahead-clash-rail">10.1 The Look-ahead clash rail</a></li><li class="l2"><a href="#10-2-chips-and-marks">10.2 Chips and marks</a></li><li class="l2"><a href="#10-3-the-public-map-s-warning-levels">10.3 The public map's warning levels</a></li><li class="l1"><a href="#11-troubleshooting">11. Troubleshooting</a></li><li class="l1"><a href="#appendix-a-methods-and-assumptions">Appendix A — Methods and assumptions</a></li><li class="l2"><a href="#a-1-data-sources">A.1 Data sources</a></li><li class="l2"><a href="#a-2-planning-assumptions">A.2 Planning assumptions</a></li><li class="l2"><a href="#a-3-what-the-platform-does-not-do">A.3 What the platform does not do</a></li><li class="l1"><a href="#appendix-b-glossary">Appendix B — Glossary</a></li><li class="l1"><a href="#appendix-c-figures">Appendix C — Figures</a></li><li class="l1" data-navrole="admin"><a href="#appendix-d-technical-reference">Appendix D — Technical (admins)</a></li></ol></nav>
 <main>
+<div id="roles" hidden>
+  <span class="lab">Showing</span>
+  <button type="button" data-role="submitter" aria-pressed="false">IPT submitter</button>
+  <button type="button" data-role="planner" aria-pressed="false">Planner</button>
+  <button type="button" data-role="admin" aria-pressed="false">Admin</button>
+  <a href="#11-troubleshooting" style="font-size:13px">Something looks wrong &rarr;</a>
+  <span class="who" id="whoami"></span>
+</div>
 <p class="muted">User guide v1.0 · 10 September 2026 · <a href="/">back to the app</a> · <a href="/map/">public map</a></p>
 <h1 id="1-welcome">1. Welcome</h1>
 <p>RBE Alliance 1 Logistics is the shared planning tool for road haulage on the Rail Baltica Estonia Alliance 1 programme. Every IPT forecasts its material movements into it, planners approve them, and the week's haulage commitment — how much moves on which route, on which day, with how many trucks — comes out of it. A public map shows anyone where the hauls run, what is in the way on the roads, and which works package owns each stretch of the alignment.</p>
 <p>This guide is for the people who use the platform: IPT submitters, planners and anyone who reads the public map. It explains each screen, what to type, what the numbers mean and where they come from. It deliberately leaves out internal names — the technical guide has those.</p>
 <h2 id="1-1-the-two-surfaces">1.1 The two surfaces</h2>
-<div class="tbl"><table><thead><tr><th>Surface</th><th>Address</th><th>Who</th><th>What it answers</th></tr></thead><tbody><tr><td>Staff app</td><td>the site address (sign in with your access code)</td><td>IPT submitters, planners, admins</td><td>What are we hauling, from where, to where, in which month — is it approved — and what does the week ahead look like day by day?</td></tr><tr><td>Public map</td><td>the site address followed by /map/</td><td>anyone — no sign-in</td><td>Where do the hauls run, what restrictions are on the roads, which IPT owns the ground, and what is moving month by month?</td></tr></tbody></table></div>
+<div class="tbl"><table><thead><tr><th>Surface</th><th>Address</th><th>Who</th><th>What it answers</th></tr></thead><tbody><tr><td>Staff app</td><td>the site address (sign in with your access code)</td><td>IPT submitters, planners, admins</td><td>What are we hauling, from where, to where, in which month — is it approved — and what does the week ahead look like day by day?</td></tr><tr><td>Public map</td><td>the site address followed by /map/</td><td>staff, and anyone given the map password</td><td>Where do the hauls run, what restrictions are on the roads, which IPT owns the ground, and what is moving month by month?</td></tr></tbody></table></div>
 <h2 id="1-2-roles">1.2 Roles</h2>
 <div class="tbl"><table><thead><tr><th>Role</th><th>You sign in with</th><th>You can</th><th>You cannot</th></tr></thead><tbody><tr><td>IPT submitter</td><td>your IPT's access code</td><td>submit, edit and withdraw your IPT's forecast lines; use the Look-ahead for your lines; type actuals, spread a shortfall, type stock consumption; see the Dashboard and the public map</td><td>see another IPT's quantities; approve; open the Data pages</td></tr><tr><td>Planner</td><td>the planner code</td><td>everything above for every IPT; approve or reject lines; maintain Locations, Routes, Zones and Config</td><td>change the admin settings that need the admin token unless you have it</td></tr><tr><td>Admin</td><td>the admin code</td><td>as planner, plus the admin token for baking routes, zones, haul roads and configuration saves</td><td>—</td></tr></tbody></table></div>
-<div class="callout note"><div class="ct">A note on access</div><p>Access codes are shared per role and checked by the server on every request. Your IPT code shows you only your IPT's lines, wherever you look. Per-person logins with passwords are planned as the next security phase; until then treat your code as you would a shared key.</p></div>
+<div class="callout note"><div class="ct">Since 14 September: the map is no longer public</div><p>The route map and this guide used to be reachable by anyone with the address. They are not any more. Signing in to the app opens both. Someone outside the alliance — a client or a stakeholder — can be given the separate <strong>map password</strong>, which opens the map and nothing else; it does not open this guide.</p></div><div class="callout note"><div class="ct">A note on access</div><p>Access codes are shared per role and checked by the server on every request. Your IPT code shows you only your IPT's lines, wherever you look. Per-person logins with passwords are planned as the next security phase; until then treat your code as you would a shared key.</p></div>
 <h2 id="1-3-how-the-numbers-are-built-in-one-picture">1.3 How the numbers are built — in one picture</h2>
 <figure><img src="media/fig-numbers.png" alt="From a typed quantity to trucks on the road" loading="lazy"><figcaption>Figure 1 — From a typed quantity to trucks on the road</figcaption></figure>
 <p>Everything you type is a quantity per month on one route for one material and one vehicle type. The platform converts it to tonnes using the material's density, to trips using the vehicle's payload, and to vehicles using how many trips one truck can make in a 10-hour shift on that route's measured cycle. Distances and drive times come from truck routing for the exact vehicle, out laden and back empty. Section 9 explains each step and what "planning figure" means.</p>
@@ -50,13 +77,13 @@ figure{margin:14px 0 22px;text-align:center}figure img{max-width:100%;border:1px
 <p>The left rail is grouped: <strong>Plan</strong> (Dashboard, Submit forecast, Forecasts), <strong>Track</strong> (Look-ahead), <strong>Data</strong> (Locations, Routes, Zones, Config — planners and admins only) and <strong>Map</strong> (the public map inside the app). The rail can be collapsed to icons with the button at its foot; it remembers the page you were on. The Forecasts entry carries a badge with the number of lines waiting for approval when you are a planner.</p>
 <ul><li><strong>Vehicle names</strong> can be shown in English trade names or as EU vehicle categories — the EN / EU / EE toggle in the header changes the label only; nothing stored changes. Estonian labels are not filled in yet and fall back to the EU string with a star.</li><li>The header shows your role and, for an IPT code, your IPT. <strong>Sign out</strong> is in the header.</li><li>The app works in a desktop browser at 1440 px wide or more; the staff app has no phone layout. The public map does.</li></ul>
 <h1 id="3-the-dashboard">3. The Dashboard</h1>
-<figure><img src="media/S02.png" alt="The Dashboard — KPI tiles and charts" loading="lazy"><figcaption>Figure 4 — The Dashboard — KPI tiles and charts</figcaption></figure>
+<figure><img src="media/S02.png" alt="The Dashboard — KPI tiles and charts" loading="lazy"><figcaption>Figure 4 — The Dashboard — KPI tiles and charts &nbsp;·&nbsp; <a class="go" href="/#dashboard" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <p>The Dashboard is the strategic view of the forecast. Filter by status (Approved, Pending or all), unit, material, vehicle and month range. The six tiles read <strong>Total material</strong>, <strong>Total trips</strong>, <strong>Truck-km</strong>, <strong>CO₂e</strong>, <strong>Intensity</strong> and <strong>Peak month</strong>; below them are charts for material demand over time, vehicle trips over time, carbon over time, the material split and the top routes by tonnage, then a per-route table (<strong>Route planning detail</strong>) with the cycle time, trips per day and vehicles for each route and vehicle.</p>
 <ul><li>Truck-km, CO₂e and vehicles use the routed distance and cycle for each line's route and vehicle. A route that is not yet baked for that vehicle shows "not baked" rather than a figure.</li><li>Vehicles are trucks, not trips: peak demand per day divided by what one truck can physically do in a shift. Hover the tile for the rule.</li><li>The Dashboard does not calculate anything of its own; it reads the same figures the Look-ahead and the public map use, so the three cannot disagree.</li></ul>
-<figure><img src="media/S03.png" alt="The Stock held panel at the foot of the Dashboard" loading="lazy"><figcaption>Figure 5 — The Stock held panel at the foot of the Dashboard</figcaption></figure>
+<figure><img src="media/S03.png" alt="The Stock held panel at the foot of the Dashboard" loading="lazy"><figcaption>Figure 5 — The Stock held panel at the foot of the Dashboard &nbsp;·&nbsp; <a class="go" href="/#dashboard" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <p><strong>Stock held</strong> lists every stockpile for this month and next: the balance at the end of each week, what came in, what went out, and the remaining capacity — or <strong>OVER</strong> in red when a stockpile's recorded capacity is exceeded. "no cap" means nobody has recorded a capacity for it. This panel is read-only; consumption is typed on the Look-ahead's Account view (§6.4).</p>
 <h1 id="4-submitting-a-forecast">4. Submitting a forecast</h1>
-<figure><img src="media/S04.png" alt="Submit forecast — one line across a year, with the totals strip" loading="lazy"><figcaption>Figure 6 — Submit forecast — one line across a year, with the totals strip</figcaption></figure>
+<figure><img src="media/S04.png" alt="Submit forecast — one line across a year, with the totals strip" loading="lazy"><figcaption>Figure 6 — Submit forecast — one line across a year, with the totals strip &nbsp;·&nbsp; <a class="go" href="/#submit" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <p>A forecast line is one material moving on one route with one vehicle type, month by month. If the same material will move on two vehicle types, that is two lines. Fill the form top to bottom:</p>
 <div class="tbl"><table><thead><tr><th>Field</th><th>What to choose</th><th>Notes</th></tr></thead><tbody><tr><td>Origin → Destination</td><td>Where the material moves from and to</td><td>The <strong>Route reference</strong> fills in by itself. Only pairs that exist on the network are offered — an origin must supply the material category and the destination must receive it. If there is no route for a pair, ask a planner to create it.</td></tr><tr><td>Discipline</td><td>Earthworks, substructure, utilities, structures, superstructure, stations, temporary works</td><td>Two disciplines can share a route and month; you will see a caution on save so both are visible.</td></tr><tr><td>Work section</td><td>WS1 … WS15</td><td>Bands overlap on the ground, so the section belongs to the line, not the site.</td></tr><tr><td>Material category</td><td>Earthworks / soil, Small aggregate, Large aggregate / ballast, Precast / concrete, Steel / rail, General / imported</td><td>Sets the density used for m³ ↔ tonnes and which vehicles are allowed.</td></tr><tr><td>Material description</td><td>free text, optional</td><td>For your own reference on the line.</td></tr><tr><td>Vehicle</td><td>The planning vehicles (EU categories) are listed first, other vehicles below</td><td>A vehicle greyed out and labelled "not used for this material" is not allowed for that category. The payload of the vehicle you pick is what turns quantity into trips.</td></tr><tr><td>Input unit</td><td>m³, tonnes or vehicles</td><td>Steel / rail and General / imported are entered in tonnes (not volume-convertible). The strip shows the conversion.</td></tr><tr><td>From year / To year</td><td>Any range in the five-year horizon</td><td>One row of twelve monthly cells per year. Narrowing the range later never deletes months outside it.</td></tr><tr><td>IPT</td><td>Locked to your IPT for an IPT code</td><td>Planners must choose which IPT the line belongs to.</td></tr></tbody></table></div>
 <h2 id="4-1-the-totals-strip">4.1 The totals strip</h2>
@@ -66,7 +93,7 @@ figure{margin:14px 0 22px;text-align:center}figure img{max-width:100%;border:1px
 <h2 id="4-3-saving-editing-and-withdrawing">4.3 Saving, editing and withdrawing</h2>
 <p><strong>Save</strong> writes every month in the range; a cell left at 0 removes that month. The line appears on the Forecasts page as <strong>Pending</strong> until a planner approves it. To change it later, open the line from the Forecasts page with <strong>Edit</strong> — the whole year range reopens in this form. <strong>Withdraw</strong> removes the whole line across every year it covers; the confirmation tells you the span and the number of months.</p>
 <h1 id="5-the-forecasts-page">5. The Forecasts page</h1>
-<figure><img src="media/S05.png" alt="Forecasts — the ledger with status chips and actions (planner view)" loading="lazy"><figcaption>Figure 7 — Forecasts — the ledger with status chips and actions (planner view)</figcaption></figure>
+<figure><img src="media/S05.png" alt="Forecasts — the ledger with status chips and actions (planner view)" loading="lazy"><figcaption>Figure 7 — Forecasts — the ledger with status chips and actions (planner view) &nbsp;·&nbsp; <a class="go" href="/#forecasts" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <p>Every forecast line you are allowed to see, grouped per route, discipline and work section across every year it covers. Filter by status (the count chips are clickable), IPT, discipline, "mine only" and free text. <strong>Export CSV</strong> downloads what is on screen.</p>
 <div class="tbl"><table><thead><tr><th>Status</th><th>Meaning</th></tr></thead><tbody><tr><td>Pending</td><td>Submitted, not yet approved. Nothing downstream (the map timeline, the Look-ahead, stock) reads a Pending line.</td></tr><tr><td>Approved</td><td>Approved by a planner. Weeks are created for it, it plays on the public map timeline and it appears in the Look-ahead.</td></tr><tr><td>Rejected</td><td>Returned with a reason, which the submitter can read on the line. Edit and resubmit.</td></tr><tr><td>Mixed</td><td>A line that spans several months with different statuses.</td></tr><tr><td>no IPT</td><td>An older line with no IPT set — visible to planners only until one is set.</td></tr></tbody></table></div>
 <h2 id="5-1-for-planners-approving-and-rejecting">5.1 For planners: approving and rejecting</h2>
@@ -79,62 +106,62 @@ figure{margin:14px 0 22px;text-align:center}figure img{max-width:100%;border:1px
 <h2 id="6-2-the-weekly-rhythm">6.2 The weekly rhythm</h2>
 <figure><img src="media/fig-rhythm.png" alt="What a planner does on the Look-ahead through the week" loading="lazy"><figcaption>Figure 9 — What a planner does on the Look-ahead through the week</figcaption></figure>
 <h2 id="6-3-commit-view-this-week-by-day">6.3 Commit view — this week by day</h2>
-<figure><img src="media/S06.png" alt="Commit view — KPI strip, clash rail and the Monday–Friday grid" loading="lazy"><figcaption>Figure 10 — Commit view — KPI strip, clash rail and the Monday–Friday grid</figcaption></figure>
+<figure><img src="media/S06.png" alt="Commit view — KPI strip, clash rail and the Monday–Friday grid" loading="lazy"><figcaption>Figure 10 — Commit view — KPI strip, clash rail and the Monday–Friday grid &nbsp;·&nbsp; <a class="go" href="/#lookahead" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <p>The header shows the week's dates. The <strong>KPI strip</strong> reads: planned this week (tonnes), trips, vehicles per day at the peak, t·km, planned € (or "no rate typed"), last week's shortage, and <strong>last week delivered: n of m lines</strong> — a line counts as delivered when the actual reached 98 % of the plan.</p>
 <p>The <strong>clash rail</strong> under the strip lists flags for the week — up to three, then "+N more". Flags never block anything; they tell you what to look at (§10 lists them all). The most important for an IPT is <strong>IPT SHARE</strong>: another IPT is on the same route, or the same origin and destination, on the same day. You are told you share it without seeing the other IPT's quantities.</p>
 <p>Each row of the <strong>grid</strong> is one line: origin → destination, an IPT chip, a work-section chip, the material and the vehicle. The Monday–Friday cells show the quantity and, beneath it, <strong>trips · vehicles</strong> for that day — for example <code>17 tr · 3 veh</code>. Today's column is tinted.</p>
-<figure><img src="media/S07.png" alt="A row expanded, and the map of this week's lines under the grid" loading="lazy"><figcaption>Figure 11 — A row expanded, and the map of this week's lines under the grid</figcaption></figure>
+<figure><img src="media/S07.png" alt="A row expanded, and the map of this week's lines under the grid" loading="lazy"><figcaption>Figure 11 — A row expanded, and the map of this week's lines under the grid &nbsp;·&nbsp; <a class="go" href="/#lookahead" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <ul><li><strong>Click a row</strong> to see km per trip, km per day, km per vehicle, t·km, the cycle time and the € for the line — or "rate not set" if no rate has been typed on the route.</li><li><strong>Type over a day</strong> when the site's plan differs from the even split. The cell shows a typed marker and the day no longer follows the week total. If the days then no longer add up to the week, the line shows <strong>DAYS ≠ WEEK</strong> — a flag, not an error; you can still confirm.</li><li><strong>Unbaked line</strong> — a route with no measured geometry for the vehicle shows trips but <code>veh —</code>, and the flag UNBAKED. Nothing is estimated in its place; ask a planner to bake the route.</li><li>The <strong>week map</strong> under the grid draws this week's lines in their IPT colour, origin dot navy and destination dot red; hover a line for its quantity and trips. A line with no geometry is listed under the map rather than drawn as a straight line.</li></ul>
 <h3>Confirming the week</h3>
-<figure><img src="media/S10.png" alt="The Confirm week dialog" loading="lazy"><figcaption>Figure 12 — The Confirm week dialog</figcaption></figure>
+<figure><img src="media/S10.png" alt="The Confirm week dialog" loading="lazy"><figcaption>Figure 12 — The Confirm week dialog &nbsp;·&nbsp; <a class="go" href="/#lookahead" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <p><strong>Confirm week</strong> (the green button, top right) is one act for the whole week: every planned cell locks, actuals stay typeable, and the sheet becomes the commitment. The dialog names the week and the number of lines and has four free-text notes — weather, wetness, traffic, other — for the record. <strong>Confirm remaining lines</strong> appears when some lines are already confirmed. A confirmed week can be <strong>re-opened</strong> to change the plan; nothing is deleted.</p>
 <h3>This week / next week</h3>
 <p>On Thursday you may want to commit next week while this week is still running. Switch the pill to <strong>Commit · next week</strong>: its days are created on demand and can be typed and confirmed in the same way. A shortfall spread on Thursday with a partial actual and again on Friday with the full figure carries only the difference — the platform never counts the same shortfall twice.</p>
 <h3>Exporting for hauliers</h3>
-<figure><img src="media/S15.png" alt="The supplier PDF — one row per line, Monday to Friday, coordinates, route map" loading="lazy"><figcaption>Figure 13 — The supplier PDF — one row per line, Monday to Friday, coordinates, route map</figcaption></figure>
+<figure><img src="media/S15.png" alt="The supplier PDF — one row per line, Monday to Friday, coordinates, route map" loading="lazy"><figcaption>Figure 13 — The supplier PDF — one row per line, Monday to Friday, coordinates, route map &nbsp;·&nbsp; <a class="go" href="/#lookahead" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <ul><li><strong>Export XLSX</strong> — a workbook with one row per line per day (quantity, tonnes, trips, vehicles, km, t·km, €, cycle and its source, day status), a Clashes sheet and an About sheet. Weekdays only.</li><li><strong>PDF</strong> — the one-week commitment sheet: landscape, a route map on the first page, one row per line sorted by origin, Monday to Friday columns with quantity and <code>trips tr · veh</code>, origin and destination with coordinates, the week total, km per trip and € where a rate is typed, then the flags and the footer caveats. It says CONFIRMED only when every line is. It is a commitment sheet, not a delivery note: payloads are planning figures, not plated weights, and km come from truck routing.</li><li>If the PDF's map is a drawn schematic rather than a photo map, the caption says the map service could not be reached; the sheet is otherwise identical.</li></ul>
 <h2 id="6-4-account-view-what-actually-happened-last-week">6.4 Account view — what actually happened last week</h2>
-<figure><img src="media/S08.png" alt="Account view — planned, actual, variance, cost, and the Stockpiles block" loading="lazy"><figcaption>Figure 14 — Account view — planned, actual, variance, cost, and the Stockpiles block</figcaption></figure>
+<figure><img src="media/S08.png" alt="Account view — planned, actual, variance, cost, and the Stockpiles block" loading="lazy"><figcaption>Figure 14 — Account view — planned, actual, variance, cost, and the Stockpiles block &nbsp;·&nbsp; <a class="go" href="/#lookahead" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <p>Account shows last week per line: planned, an <strong>actual</strong> box, the variance (green when over-delivered, red when short; an empty actual means "not reported", never zero), an <strong>actual €</strong> box for the invoiced or agreed cost of the week, a note, and the status of the shortfall — held, carried or remaining.</p>
 <ul><li><strong>Type the actual quantity</strong> as it was delivered. Saving an actual never changes next week's plan by itself.</li><li><strong>spread on this week</strong> carries a shortfall into the commit week, spread evenly over the remaining weekdays from today. Press it once the figure is known; pressing it again after a correction carries only the difference. It refuses if the target week is already confirmed — re-open the week first.</li><li><strong>Actual €</strong> is the first place the platform records money spent rather than planned; the KPI strip compares it with the planned € where rates exist.</li><li>The <strong>Stockpiles</strong> block at the foot lists each stockpile for the account week: opening balance, inbound (from the typed actuals on routes delivering there — a route nobody reported counts as nothing), an <strong>out</strong> box for what was consumed, the closing balance and the remaining capacity. Type the consumption once a week; the Dashboard's Stock held panel and the public map's stockpile gauges read it.</li></ul>
 <h2 id="6-5-horizon-view">6.5 Horizon view</h2>
-<figure><img src="media/S09.png" alt="Horizon — week totals for this month and next" loading="lazy"><figcaption>Figure 15 — Horizon — week totals for this month and next</figcaption></figure>
+<figure><img src="media/S09.png" alt="Horizon — week totals for this month and next" loading="lazy"><figcaption>Figure 15 — Horizon — week totals for this month and next &nbsp;·&nbsp; <a class="go" href="/#lookahead" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <p>Horizon shows week totals for this month and the next — four or five columns per month, each headed with its Monday–Sunday dates — with the commit week highlighted. Nothing is confirmed here; it is the look-ahead in the ordinary sense: what is coming, so make-ready and early warning can happen.</p>
 <div class="callout tip"><div class="ct">Good habits</div><p>Open the Look-ahead before a meeting: the page reads a lot of data and can take several seconds to load on first open.</p><p>Type actuals on Monday, confirm the week once the grid is right, export the PDF for hauliers, and use the next-week switch on Thursday.</p><p>Read the clash rail before confirming. A ROUTE CAP or STOCKPILE OVER flag will not stop you — it is a planner's call.</p></div>
 <h1 id="7-data-pages-planners-and-admins">7. Data pages (planners and admins)</h1>
 <p>Locations, Routes and Zones share one map; switching between them keeps your view. Writes on these pages need the <strong>admin token</strong> typed into the box on the page (it is remembered in this browser). Paste it into the box, never into the address bar.</p>
 <h2 id="7-1-locations">7.1 Locations</h2>
-<figure><img src="media/S11.png" alt="Locations — the map and the edit form with gates and stockpile capacity" loading="lazy"><figcaption>Figure 16 — Locations — the map and the edit form with gates and stockpile capacity</figcaption></figure>
+<figure><img src="media/S11.png" alt="Locations — the map and the edit form with gates and stockpile capacity" loading="lazy"><figcaption>Figure 16 — Locations — the map and the edit form with gates and stockpile capacity &nbsp;·&nbsp; <a class="go" href="/#locations" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <ul><li>Add a location by clicking on the map in add mode, then complete the form: name, type (Quarry, Port, Compound, Site, Railhead, Stockpile, Other), what it <strong>supplies</strong> and <strong>receives</strong> (material categories — a route can only be created between an origin that supplies and a destination that receives the same category), operator and detail.</li><li><strong>Drag</strong> a marker to move a location; every route using it is re-routed automatically.</li><li><strong>Gates</strong> — a location can have several. Each has a direction (access, egress or both), a default flag, and two planning times: <strong>induction</strong> (safety briefing, applied once per arrival at that gate) and <strong>gate-to-face</strong> travel (ignored on routes that use a drawn haul road, which carries its own time). Routes start and end at gates, not at the site marker. A route can name a specific gate at either end; otherwise the location's default gate is used. A deactivated gate that a route still names stops that route from routing until the route is re-pointed.</li><li><strong>Stockpile capacity</strong> — for stockpiles and other storage, record the capacity (tonnes or m³) and the opening quantity. Without a capacity a stockpile can never show as over; the map draws it with a dashed outline to say so.</li><li>Deleting a location cascades to its routes; the confirmation says what goes.</li></ul>
 <h2 id="7-2-routes">7.2 Routes</h2>
-<figure><img src="media/S12.png" alt="Routes — a route expanded: bake status, analysis, alternatives, vehicles, planning block, Tark Tee" loading="lazy"><figcaption>Figure 17 — Routes — a route expanded: bake status, analysis, alternatives, vehicles, planning block, Tark Tee</figcaption></figure>
+<figure><img src="media/S12.png" alt="Routes — a route expanded: bake status, analysis, alternatives, vehicles, planning block, Tark Tee" loading="lazy"><figcaption>Figure 17 — Routes — a route expanded: bake status, analysis, alternatives, vehicles, planning block, Tark Tee &nbsp;·&nbsp; <a class="go" href="/#routes" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <ul><li><strong>Create</strong> a route from an origin and destination (only valid pairs are offered; the id is assigned as R001, R002 …). Set the material category and, if the route belongs to one IPT, the IPT.</li><li><strong>Bake</strong> — pressing Bake asks the routing service for the route as driven by each ticked vehicle: out laden and back empty, both as a truck of that weight, height and axle count. "Baked" is per vehicle; the chips show fully baked (green) or outbound-only (amber). <strong>Bake all</strong> runs the whole network in batches; the cost estimate counts calls, and a route with a temporary haul road costs more.</li><li><strong>Route analysis</strong> row — km and drive time per leg, turnaround, cycle time, trips per day, tonnes per day and per month for each vehicle. A ‡ marks a cycle that includes a gate induction figure or an estimated return leg.</li><li><strong>Alternatives</strong> — the routing service returns up to three options; the extra ones are shown when a route is selected. <strong>Use this option</strong> promotes an alternative to be the primary. A promotion is lost when the route is next baked (a moved location, an edited endpoint, a zone change, a vehicle change or Bake all).</li><li><strong>Vehicles</strong> — tick or untick the vehicles a route is baked for. The confirmation names the forecast lines that use each vehicle and warns when the last vehicle would go.</li><li><strong>Edit</strong> origin, destination, material or IPT in place. The impact dialog shows what will change — forecasts and weeks are kept; moving an endpoint clears the cached geometry and that end's gate, and the affected vehicles are re-baked.</li><li><strong>Planning · Look-ahead</strong> block — the optional figures the Look-ahead prices and checks against: <strong>max vehicles per day</strong> (a planning cap that raises ROUTE CAP, never a block), <strong>€ per load</strong>, <strong>€ per tonne</strong>, <strong>€ per km</strong> (the three add up — type what the haulier actually quotes, typically a base per load plus a per-km rate), and the <strong>km basis</strong> for €/km and t·km (round trip, the default, or loaded leg only). Nothing is pre-filled; a route reads "rate not set" until you type one.</li><li><strong>Road restrictions (Tark Tee)</strong> — <strong>check now</strong> runs the route against the Transport Administration's live restriction data in the background and stores the result with its time; the Look-ahead and the exports show the hits and their age. A re-bake clears the stored check.</li><li><strong>Diagnostics</strong> card — "Check factors" confirms every vehicle is matched to its configuration entry; "Probe" runs a live routing call for one route and shows what the service returned.</li></ul>
 <h2 id="7-3-zones-and-temporary-haul-roads">7.3 Zones and temporary haul roads</h2>
-<figure><img src="media/S13.png" alt="Zones — a disruption zone and a haul road with speed and mode" loading="lazy"><figcaption>Figure 18 — Zones — a disruption zone and a haul road with speed and mode</figcaption></figure>
+<figure><img src="media/S13.png" alt="Zones — a disruption zone and a haul road with speed and mode" loading="lazy"><figcaption>Figure 18 — Zones — a disruption zone and a haul road with speed and mode &nbsp;·&nbsp; <a class="go" href="/#zones" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <ul><li><strong>Disruption zone</strong> — draw a polygon on the map, give it a name, a kind (closure, weight limit, works, other), an optional date window and whether it <strong>affects routing</strong>. When it does, its bounding box is sent to the routing service as an area to avoid, every route crossing it is re-routed, and it draws red on both maps; otherwise it is drawn grey for information. The panel prints the exact box that will be sent before you save. Because the service takes boxes, not shapes, a long diagonal zone blocks more than it should — draw several small ones. Deleting a zone does not put the old route back; deactivating is usually the better choice.</li><li><strong>Temporary haul road</strong> — draw a line, give it an <strong>assigned speed</strong>, and attach it to routes from the route's expanded row (in order, if a route uses more than one). The routing service does not know a road cut last week exists; the platform routes to the road's end, uses your line at your speed, and routes on from the other end. The service's own time is kept alongside so the change is auditable. A road with no speed adds distance but no time and is flagged.</li><li>Zones and haul roads change routes, not forecasts: an approved forecast is not re-warned when its route gets longer. Look at the Dashboard or the Look-ahead after a change.</li></ul>
 <h2 id="7-4-config">7.4 Config</h2>
-<figure><img src="media/S14.png" alt="Config — the Vehicles tab" loading="lazy"><figcaption>Figure 19 — Config — the Vehicles tab</figcaption></figure>
+<figure><img src="media/S14.png" alt="Config — the Vehicles tab" loading="lazy"><figcaption>Figure 19 — Config — the Vehicles tab &nbsp;·&nbsp; <a class="go" href="/#config" target="_blank" rel="noopener">open it in the app &rarr;</a></figcaption></figure>
 <p>Config holds every number the platform calculates from, on five tabs: <strong>Vehicles</strong> (gross weight, payload, kg CO₂e per km, load and unload minutes, routing dimensions, labels), <strong>Materials</strong> (density, default unit, which vehicles are allowed), <strong>Planning</strong> (working days per month, shift hours per day, fallback load and unload minutes), <strong>Seasonal restrictions</strong> (month windows, restricted vehicles, the message shown) and <strong>Everything (JSON)</strong> for anything the forms do not cover. <strong>Save</strong> applies the whole document, everywhere, for everyone, immediately; <strong>Reset to file</strong> restores the defaults shipped with the software. The page says whether the live configuration currently differs from those defaults.</p>
 <div class="callout warn"><div class="ct">Config refuses some edits, deliberately</div><p>You cannot remove a vehicle that has baked routes (every figure on those routes would silently fall to a hidden default and read the same), set a gross weight below a payload, name a vehicle that does not exist in a material category or a seasonal window, or remove the default routing vehicle. The error lists the problems; nothing is stored until they are fixed.</p></div>
 <h1 id="8-the-public-map">8. The public map</h1>
-<figure><img src="media/M01.png" alt="The public map — corridor view with the control panel open" loading="lazy"><figcaption>Figure 20 — The public map — corridor view with the control panel open</figcaption></figure>
-<p>The public map needs no sign-in. Open the site address followed by <code>/map/</code>, or use the Map entry in the staff app. The <strong>Control Panel</strong> on the left is grouped top to bottom: Route filtering, Basemap, Overlays, Haul routes, Road restrictions and Forecast traffic volume. On a phone the panel is closed by default; the ☰ button opens it.</p>
+<figure><img src="media/M01.png" alt="The public map — corridor view with the control panel open" loading="lazy"><figcaption>Figure 20 — The public map — corridor view with the control panel open &nbsp;·&nbsp; <a class="go" href="/map/" target="_blank" rel="noopener">open the map &rarr;</a></figcaption></figure>
+<p>The public map opens with your staff sign-in — signed in to the app, it opens with no further prompt. Someone outside the alliance needs the separate <strong>map password</strong>, which opens the map and nothing else. Until 14 September 2026 it needed no credential at all. Open the site address followed by <code>/map/</code>, or use the Map entry in the staff app. The <strong>Control Panel</strong> on the left is grouped top to bottom: Route filtering, Basemap, Overlays, Haul routes, Road restrictions and Forecast traffic volume. On a phone the panel is closed by default; the ☰ button opens it.</p>
 <h2 id="8-1-reading-the-map">8.1 Reading the map</h2>
 <div class="tbl"><table><thead><tr><th>What you see</th><th>Meaning</th></tr></thead><tbody><tr><td>Coloured line along the corridor</td><td>The Rail Baltica alignment, coloured by the IPT that owns each stretch (six colours; slate outside Alliance 1). Ticks with labels mark work-section boundaries at global chainage. Click the line for the IPT, the work section, its official name and the chainage range. Where the survey has no track yet (about 60 km in total) the line is bridged and the popup says it is not measured geometry.</td></tr><tr><td>Site marks</td><td>Seven types, always drawn on top: quarry (circle with a pick), port, site, railhead and compound (squares), stockpile (a gauge), other. A <strong>stockpile fills to its recorded stock</strong>, turns red over capacity, and has a dashed outline when nobody has recorded a capacity. Click a mark for its details, stock balance and Street View.</td></tr><tr><td>Dotted green and amber lines</td><td>Haul routes: <strong>Laden (out)</strong> in green and <strong>Empty (return)</strong> in amber, routed separately for the vehicle. Nothing shows direction — the colours do. Click a route for its analysis (km, drive time per leg, cycle, trips per day) and its forecast detail.</td></tr><tr><td>Thin grey lines under routes</td><td>Alternative routes the routing service offered (off by default).</td></tr><tr><td>Amber dashed line</td><td>A temporary haul road drawn by a planner.</td></tr><tr><td>Red or grey shapes</td><td>Disruption zones: red when they affect routing, grey when informational. With the timeline open, only zones in force that month are shown.</td></tr><tr><td>Grey dashed corridor</td><td>The existing rail network (EVR) — provisional reference geometry, not survey, several km out in places. Click it for the caveat.</td></tr><tr><td>Coloured points and lines on roads</td><td>Road restrictions from the Estonian Transport Administration (Tark Tee): weak bridges, mass, height and width limits, traffic restrictions, diversions. See §8.3.</td></tr><tr><td>Small grey dots at sites</td><td>Site gates (from zoom 10); hollow when deactivated.</td></tr></tbody></table></div>
-<figure><img src="media/M02.png" alt="The alignment popup — IPT, work section and chainage" loading="lazy"><figcaption>Figure 21 — The alignment popup — IPT, work section and chainage</figcaption></figure>
-<figure><img src="media/M03.png" alt="Sites and assets — the stockpile gauge and its popup" loading="lazy"><figcaption>Figure 22 — Sites and assets — the stockpile gauge and its popup</figcaption></figure>
+<figure><img src="media/M02.png" alt="The alignment popup — IPT, work section and chainage" loading="lazy"><figcaption>Figure 21 — The alignment popup — IPT, work section and chainage &nbsp;·&nbsp; <a class="go" href="/map/" target="_blank" rel="noopener">open the map &rarr;</a></figcaption></figure>
+<figure><img src="media/M03.png" alt="Sites and assets — the stockpile gauge and its popup" loading="lazy"><figcaption>Figure 22 — Sites and assets — the stockpile gauge and its popup &nbsp;·&nbsp; <a class="go" href="/map/" target="_blank" rel="noopener">open the map &rarr;</a></figcaption></figure>
 <h2 id="8-2-filters-basemaps-and-overlays">8.2 Filters, basemaps and overlays</h2>
 <ul><li><strong>Route filtering</strong> — origin, destination, discipline and sector IPT. The filters apply to routes, the timeline callouts and the KPI panel. Filter to your IPT and the timeline shows your traffic only. <strong>Reset filters</strong> clears them.</li><li><strong>Basemap</strong> — Light (default), Standard (3D), Dark, Satellite (Mapbox) and the Estonia orthophoto (Maa-amet). Every overlay survives a basemap switch. 3D buildings are available on the vector basemaps only.</li><li><strong>Overlays</strong> — Rail alignment (by IPT) with its legend; Work section boundaries; Alignment (survey, continuous) — the raw survey with every track type, off by default; Chainage markers (thinned by zoom so the corridor is not a smear); Sites &amp; assets with its legend; 3D buildings; Site gates; Disruption zones; Rail network (EVR).</li><li><strong>Haul routes</strong> — Laden (out), Empty (return), Temporary haul, Alternative routes.</li><li>A red banner above the IPT legend means the map's overlay files are out of step after an update — hard-refresh the page.</li></ul>
-<figure><img src="media/M07.png" alt="The Estonia orthophoto basemap under routes and alignment" loading="lazy"><figcaption>Figure 23 — The Estonia orthophoto basemap under routes and alignment</figcaption></figure>
+<figure><img src="media/M07.png" alt="The Estonia orthophoto basemap under routes and alignment" loading="lazy"><figcaption>Figure 23 — The Estonia orthophoto basemap under routes and alignment &nbsp;·&nbsp; <a class="go" href="/map/" target="_blank" rel="noopener">open the map &rarr;</a></figcaption></figure>
 <h2 id="8-3-road-restrictions">8.3 Road restrictions</h2>
-<figure><img src="media/M05.png" alt="A road restriction and its verdict for the vehicle" loading="lazy"><figcaption>Figure 24 — A road restriction and its verdict for the vehicle</figcaption></figure>
+<figure><img src="media/M05.png" alt="A road restriction and its verdict for the vehicle" loading="lazy"><figcaption>Figure 24 — A road restriction and its verdict for the vehicle &nbsp;·&nbsp; <a class="go" href="/map/" target="_blank" rel="noopener">open the map &rarr;</a></figcaption></figure>
 <p>Tick a layer under <strong>Road restrictions</strong> to draw it; the value (for example a 3.2 m height limit) is labelled from zoom 11. Click a restriction near a route for its details and the verdict against the vehicle — "3.2 m limit, vehicle 4.0 m, EXCEEDS by 0.8 m" — for mass, height and width. Weak bridges carry a load *class* rather than a tonnage, so their verdict is "unknown" with the class quoted. The data is live from tarktee.ee and refreshes itself every 30 minutes; only restrictions currently in force are shown. It is advisory: routes are not re-planned around it.</p>
 <h2 id="8-4-the-forecast-timeline-and-kpi-panel">8.4 The forecast timeline and KPI panel</h2>
-<figure><img src="media/M06.png" alt="The timeline playing — the KPI panel, callouts and in-use marks" loading="lazy"><figcaption>Figure 25 — The timeline playing — the KPI panel, callouts and in-use marks</figcaption></figure>
+<figure><img src="media/M06.png" alt="The timeline playing — the KPI panel, callouts and in-use marks" loading="lazy"><figcaption>Figure 25 — The timeline playing — the KPI panel, callouts and in-use marks &nbsp;·&nbsp; <a class="go" href="/map/" target="_blank" rel="noopener">open the map &rarr;</a></figcaption></figure>
 <p>Under <strong>Forecast traffic volume</strong>, choose a month range and press <strong>▶ Play forecast timeline</strong>. The map steps month by month through the approved forecasts: routes carrying volume are drawn, the sites in use get a white ring while everything else dims, small callouts name the busiest origins and destinations, and the KPI panel at the top left reads the month — <strong>Movements / day</strong>, <strong>Vehicles needed</strong>, <strong>Material / day</strong> and <strong>Active routes</strong>. Use the switcher under the cards to cut the month by <strong>Discipline</strong>, <strong>IPT</strong> or <strong>Work section</strong>. ◀ and ▶▶ step a month; × closes the timeline. <strong>Forecast detail table</strong> opens the month-by-month matrix.</p>
 <ul><li>Vehicles needed is the sum, line by line, of movements per day divided by what one truck can do on that route's cycle — a route that is not baked is counted as unknown and the label says how many lines are unbaked. An empty month shows dashes, not zero.</li><li>At a wide zoom a busy month shows fewer callouts than there are sites: labels that would overlap are dropped, busiest first. Zoom in and they come back.</li><li>The timeline plays approved monthly forecasts. It is a plan, not a live feed.</li></ul>
 <h2 id="8-5-street-view">8.5 Street View</h2>
-<figure><img src="media/M08.png" alt="Street View from a site popup" loading="lazy"><figcaption>Figure 26 — Street View from a site popup</figcaption></figure>
+<figure><img src="media/M08.png" alt="Street View from a site popup" loading="lazy"><figcaption>Figure 26 — Street View from a site popup &nbsp;·&nbsp; <a class="go" href="/map/" target="_blank" rel="noopener">open the map &rarr;</a></figcaption></figure>
 <p>Click a site mark and press <strong>Street View</strong> for the nearest imagery. "No Street View here" means none exists within 50 m; the map checks for imagery before it fetches a picture, so nothing is spent on empty lookups.</p>
 <h1 id="9-understanding-the-numbers">9. Understanding the numbers</h1>
 <figure><img src="media/fig-haul-cycle.png" alt="The haul cycle — where trips per day and vehicles come from" loading="lazy"><figcaption>Figure 27 — The haul cycle — where trips per day and vehicles come from</figcaption></figure>
@@ -148,6 +175,13 @@ figure{margin:14px 0 22px;text-align:center}figure img{max-width:100%;border:1px
 <h2 id="10-3-the-public-map-s-warning-levels">10.3 The public map's warning levels</h2>
 <p>When the timeline is playing, a stack above it can show up to three warnings for the month on screen: <strong>Clash</strong> — a stockpile past its capacity; <strong>Warning</strong> — a road restriction that a visible route's vehicle exceeds; <strong>Caution</strong> — a seasonal window (spring thaw) matching the month and vehicle. Each can be dismissed for that month. If the stack stays empty for a month you would expect to show something, the sources may not have loaded; reload the page.</p>
 <h1 id="11-troubleshooting">11. Troubleshooting</h1>
+<p>Most of what looks broken here is the platform telling you something true about the
+data. Pick what you are seeing and it will say which it is.</p>
+<div class="ts-q" id="tsq"></div>
+<div id="tsa"></div>
+<p class="muted">Still stuck after this? Note which screen, which IPT and which route, and send it on —
+that is enough to reproduce almost anything in here.</p>
+
 <div class="tbl"><table><thead><tr><th>Symptom</th><th>Likely cause</th><th>What to do</th></tr></thead><tbody><tr><td>"That access code isn't recognised"</td><td>A typo, a trailing space, or the code was rotated.</td><td>Retype it; ask a planner for the current code. The old demo codes no longer work.</td></tr><tr><td>The Look-ahead is empty</td><td>No approved line has a week containing today, or your IPT has no lines.</td><td>Check the Forecasts page for Approved lines in this month. The Look-ahead reads Approved lines only.</td></tr><tr><td>The Look-ahead takes several seconds to open</td><td>It reads every line, its days and its routed figures in one go.</td><td>Expected on first open; keep the tab open during the meeting.</td></tr><tr><td>A line shows trips but "veh —"</td><td>The route is not baked for that vehicle.</td><td>Planner: Routes page → tick the vehicle → Bake.</td></tr><tr><td>Saving on a Data page returns 403</td><td>The admin token is missing or was pasted incorrectly.</td><td>Paste it into the token box on the page (not the address bar) and try one Bake. After a rotation, clear the old token from the box.</td></tr><tr><td>A page looks stale after an update</td><td>The browser cached the old page.</td><td>Hard-refresh (empty cache and reload) or open a private window.</td></tr><tr><td>The PDF map is a drawn schematic</td><td>The map image service could not be reached from the server.</td><td>The sheet is still correct; the caption says why. Try again later.</td></tr><tr><td>Map layers vanished after switching the basemap</td><td>They re-add automatically; 3D buildings are unavailable on the orthophoto.</td><td>Wait a moment; if a red banner appears above the IPT legend, hard-refresh.</td></tr><tr><td>Every vehicle on a route shows the same payload and CO₂</td><td>A vehicle name in Config no longer matches its entry, so it fell to a hidden default.</td><td>Planner: Routes page → Diagnostics → Check factors; fix the entry in Config.</td></tr><tr><td>I edited the defaults file but nothing changed</td><td>The live configuration is the saved Config, not the file.</td><td>Use the Config page; "Reset to file" reloads the defaults.</td></tr><tr><td>A stockpile never shows as over</td><td>No capacity is recorded for it.</td><td>Locations → the stockpile → record a capacity and opening quantity.</td></tr></tbody></table></div>
 <h1 id="appendix-a-methods-and-assumptions">Appendix A — Methods and assumptions</h1>
 <p>This annex states the data sources and assumptions behind the figures, for anyone who has to quote or defend a number. It contains no system internals.</p>
@@ -161,6 +195,233 @@ figure{margin:14px 0 22px;text-align:center}figure img{max-width:100%;border:1px
 <div class="tbl"><table><thead><tr><th>Term</th><th>Meaning</th></tr></thead><tbody><tr><td class="k">IPT</td><td>Integrated Project Team (IPT 1–6) — the delivery team that owns a work section and its forecast lines. IPT 1 and 2 have merged; lines keep their original IPT.</td></tr><tr><td class="k">Work section (WS)</td><td>One of fifteen sections of the works (WS1–WS15). Bands overlap on the ground, so the section belongs to the forecast line.</td></tr><tr><td class="k">Discipline</td><td>Earthworks, substructure, utilities, structures, superstructure, stations or temporary works.</td></tr><tr><td class="k">Forecast line</td><td>One material on one route with one vehicle type, month by month.</td></tr><tr><td class="k">Route / baked</td><td>An origin–destination pair on the network. "Baked" for a vehicle means its geometry, distance and drive time have been fetched from the routing service for that vehicle, out and back.</td></tr><tr><td class="k">Primary / alternative</td><td>The route drawn and used for figures; the other options the routing service offered. A planner can promote an alternative.</td></tr><tr><td class="k">Gate</td><td>An access or egress point on a location where routes start and end; carries induction and gate-to-face minutes.</td></tr><tr><td class="k">Zone</td><td>A drawn area (closure, weight limit, works, other) with an optional date window; when it affects routing, routes avoid it.</td></tr><tr><td class="k">Temporary haul road</td><td>A planner-drawn road with an assigned speed, spliced into routing because the routing service does not know it exists.</td></tr><tr><td class="k">Cycle</td><td>Laden drive + empty return drive + load, unload and gate minutes. Trips per day for one truck = 10 h ÷ cycle, rounded down.</td></tr><tr><td class="k">Trip / movement / load vs vehicle</td><td>One loaded run, versus a truck that makes several runs a day. Vehicles = movements per day ÷ trips per day per truck, rounded up.</td></tr><tr><td class="k">Planning vehicle</td><td>One of the four EU-category profiles (V07, V10, V11, V12) listed first in the vehicle picker.</td></tr><tr><td class="k">Week</td><td>A calendar week, Monday to Sunday, belonging to the month that holds its Thursday.</td></tr><tr><td class="k">Account / Commit / Horizon</td><td>Last week (type actuals) · this week or next week (the plan by day, confirm, export) · the coming weeks as totals.</td></tr><tr><td class="k">Confirm / re-open</td><td>Lock the commit week as the haulier sheet; unlock it to change the plan.</td></tr><tr><td class="k">Actual</td><td>What was delivered in a week or on a day; an empty actual means "not reported".</td></tr><tr><td class="k">Spread</td><td>Carry last week's shortfall into this week over the remaining weekdays; a second press carries only the difference.</td></tr><tr><td class="k">Stockpile</td><td>A storage location with a recorded capacity and a running balance (opening + inbound − consumed).</td></tr><tr><td class="k">Clash rail</td><td>The line of flags on the Look-ahead; flags inform, never block.</td></tr><tr><td class="k">Chainage</td><td>Position along the alignment, shown on the map in metres of global chainage.</td></tr><tr><td class="k">Tark Tee</td><td>The Estonian Transport Administration's live road-restriction service.</td></tr><tr><td class="k">Access code / admin token</td><td>The shared code you sign in with; the separate token planners paste to change master data.</td></tr></tbody></table></div>
 <h1 id="appendix-c-figures">Appendix C — Figures</h1>
 <div class="tbl"><table><thead><tr><th>Fig.</th><th>Caption</th><th>File</th></tr></thead><tbody><tr><td>1</td><td>From a typed quantity to trucks on the road</td><td>fig-numbers.png</td></tr><tr><td>2</td><td>The sign-in screen</td><td>S01.png</td></tr><tr><td>3</td><td>The staff app — pages in the left rail</td><td>fig-app-map.png</td></tr><tr><td>4</td><td>The Dashboard — KPI tiles and charts</td><td>S02.png</td></tr><tr><td>5</td><td>The Stock held panel at the foot of the Dashboard</td><td>S03.png</td></tr><tr><td>6</td><td>Submit forecast — one line across a year, with the totals strip</td><td>S04.png</td></tr><tr><td>7</td><td>Forecasts — the ledger with status chips and actions (planner view)</td><td>S05.png</td></tr><tr><td>8</td><td>Calendar weeks — a month has four or five, each Monday to Sunday</td><td>fig-weeks.png</td></tr><tr><td>9</td><td>What a planner does on the Look-ahead through the week</td><td>fig-rhythm.png</td></tr><tr><td>10</td><td>Commit view — KPI strip, clash rail and the Monday–Friday grid</td><td>S06.png</td></tr><tr><td>11</td><td>A row expanded, and the map of this week's lines under the grid</td><td>S07.png</td></tr><tr><td>12</td><td>The Confirm week dialog</td><td>S10.png</td></tr><tr><td>13</td><td>The supplier PDF — one row per line, Monday to Friday, coordinates, route map</td><td>S15.png</td></tr><tr><td>14</td><td>Account view — planned, actual, variance, cost, and the Stockpiles block</td><td>S08.png</td></tr><tr><td>15</td><td>Horizon — week totals for this month and next</td><td>S09.png</td></tr><tr><td>16</td><td>Locations — the map and the edit form with gates and stockpile capacity</td><td>S11.png</td></tr><tr><td>17</td><td>Routes — a route expanded: bake status, analysis, alternatives, vehicles, planning block, Tark Tee</td><td>S12.png</td></tr><tr><td>18</td><td>Zones — a disruption zone and a haul road with speed and mode</td><td>S13.png</td></tr><tr><td>19</td><td>Config — the Vehicles tab</td><td>S14.png</td></tr><tr><td>20</td><td>The public map — corridor view with the control panel open</td><td>M01.png</td></tr><tr><td>21</td><td>The alignment popup — IPT, work section and chainage</td><td>M02.png</td></tr><tr><td>22</td><td>Sites and assets — the stockpile gauge and its popup</td><td>M03.png</td></tr><tr><td>23</td><td>The Estonia orthophoto basemap under routes and alignment</td><td>M07.png</td></tr><tr><td>24</td><td>A road restriction and its verdict for the vehicle</td><td>M05.png</td></tr><tr><td>25</td><td>The timeline playing — the KPI panel, callouts and in-use marks</td><td>M06.png</td></tr><tr><td>26</td><td>Street View from a site popup</td><td>M08.png</td></tr><tr><td>27</td><td>The haul cycle — where trips per day and vehicles come from</td><td>fig-haul-cycle.png</td></tr></tbody></table></div>
+
+<h1 id="appendix-d-technical-reference" data-role="admin">Appendix D — Technical reference (admins)</h1>
+<p>Visible to admins only. It answers &ldquo;where does that number come from?&rdquo; in a meeting.</p>
+<div class="callout warn"><div class="ct">This is a summary, not the full technical guide</div>
+<p>The complete technical guide runs to about fifty pages and is held separately as a Word document.
+What follows is the part people ask for most. Where the two disagree, the Word document is the one
+that has been reviewed.</p></div>
+
+<h2 id="d-1-how-a-number-is-made" data-role="admin">D.1 How a haulage number is made</h2>
+<pre>cycle          = drive out (laden) + drive back (tare) + turnaround
+trips per day  = floor(shift hours / cycle)
+trips needed   = ceil(tonnes / payload)
+vehicles       = ceil(movements per day / trips per day)</pre>
+<p>Both drive legs are routed <strong>separately</strong> — the return at tare weight, so the way back
+is not assumed to be the way out reversed and different weight limits can apply. Turnaround is the
+vehicle's own load and unload minutes, plus gate induction, plus either gate-to-face time or a drawn
+haul road — never both.</p>
+<div class="callout note"><div class="ct">Trips are not vehicles</div><p>A trip is one loaded run; a
+vehicle makes several a day. Any fleet figure quoted before 4 September 2026 is overstated by whatever
+that multiple is, typically three to six times.</p></div>
+
+<h2 id="d-2-where-the-figures-come-from" data-role="admin">D.2 Which figures are sourced, and which are assumed</h2>
+<div class="tbl"><table><thead><tr><th>Figure</th><th>Standing</th></tr></thead><tbody>
+<tr><td class="k">Route distance and duration</td><td><strong>Measured</strong> — returned by the routing
+service for a truck profile with that vehicle's weight and dimensions. Nothing in the platform invents a road.</td></tr>
+<tr><td class="k">Payloads</td><td><strong>Planning assumption.</strong> A typical carrying limit, not a
+plated maximum. It drives trips per tonne, so it is one of the two figures that most changes a fleet size.</td></tr>
+<tr><td class="k">Emissions (kg CO₂e per vehicle-km)</td><td><strong>Unaudited.</strong> Stated in the
+configuration as a DEFRA/BEIS basis; that provenance has never been traced to a document. If a client asks
+whether the carbon number is DEFRA's, the honest answer is that we believe so and have not checked.</td></tr>
+<tr><td class="k">Working days per month, shift hours per day</td><td><strong>Planning assumptions</strong> —
+and they decide every &ldquo;trucks per day&rdquo; figure in the platform. Check these two first when a fleet
+size looks wrong.</td></tr>
+<tr><td class="k">Diesel index</td><td><strong>Live</strong> — the EU Weekly Oil Bulletin price for Estonia,
+fetched server-side. The feed does not state whether the series is with or without taxes; it is taken as the
+taxed series and the widget says so.</td></tr>
+<tr><td class="k">Fair price</td><td><strong>A model, not a quote.</strong> Three of its coefficients have no
+public source and are labelled as assumptions. It reads as a floor for negotiation, which is what it is
+labelled as everywhere. It is never printed on a supplier's sheet.</td></tr>
+<tr><td class="k">Rail alignment and chainage</td><td><strong>Public data</strong> from the Rail Baltica GIS
+portal. Global chainage in metres, starting below zero. About sixty kilometres of main track has no geometry
+at all, so some package boundaries have no line beneath them.</td></tr>
+<tr><td class="k">Existing rail corridor</td><td><strong>Provisional</strong> — a coarse open dataset, about
+6.4 km out at Lelle. Every feature carries a note saying so.</td></tr>
+</tbody></table></div>
+
+<h2 id="d-3-live-sources" data-role="admin">D.3 The live sources, and how they fail</h2>
+<ul>
+<li><strong>Truck routing</strong> — every baked distance and drive time. Its road graph lags the physical
+road, which on this programme matters: roads are being realigned for years, and a route baked before a
+realignment can follow a road that is no longer there.</li>
+<li><strong>Road restrictions</strong> (Estonian Transport Administration) — cached, and stored per route with
+the date it was checked. Mass, height and width give a real verdict; a weak bridge gives a load
+<em>class</em>, not a tonnage, so it is reported unjudged. The whole layer is advisory. The source carries
+expired records.</li>
+<li><strong>Diesel price</strong> — refreshed in the background, never on the page read. A failed fetch keeps
+the last good figure and says when it failed.</li>
+<li><strong>Basemaps and Street View</strong> — optional. With no key the popups simply show no photo.</li>
+</ul>
+<div class="callout warn"><div class="ct">What leaves the platform</div><p>Normal operation sends site and
+route coordinates to the routing, mapping and restriction services, and a coordinate to Street View where it
+is used. No quantity, rate or forecast leaves. This is inherent to any routed map product — the alternative is
+not having routing — but it is a fair question and better answered before it is asked.</p></div>
+
+<h2 id="d-4-not-secure-yet" data-role="admin">D.4 What must not be described as finished</h2>
+<p>Access is a <strong>shared code per role</strong>, checked by the server, plus a shared password for the
+map. There is no per-person identity, no rate limit and no audit trail of who changed what. Per-person logins
+are the next security phase. <strong>Do not describe the deployment as secure until they exist.</strong></p>
+<p>Some admin actions are additionally protected by a token. While that token is unset, those actions are
+open to anyone who can reach them.</p>
+
 </main>
 <a id="top" href="#">↑ top</a>
+
+<script>
+/* 2026-09-14 — the guide adapts to who is reading it, and troubleshooting asks what you
+   are seeing rather than making you find it.
+
+   The role comes from ?role= on the link in the app's rail, and is remembered after that.
+   It is NOT a permission and is not treated as one: it chooses which paragraphs you see,
+   nothing else. Anyone can type ?role=admin, and all they get is the technical appendix —
+   which is documentation, not data. The sign-in gate decides who reads this page at all.
+
+   No network calls. No external scripts. Everything degrades to "show everything" if this
+   script does not run, and printing always shows the whole guide. */
+(function () {
+  "use strict";
+  var RANK = { submitter: 0, planner: 1, admin: 2 };
+  var KEY = "rbe_help_role";
+
+  // sections that are not for everyone, by heading id
+  var SECTION_ROLE = {
+    "5-1-for-planners-approving-and-rejecting": "planner",
+    "7-data-pages-planners-and-admins": "planner",
+    "7-1-locations": "planner",
+    "7-2-routes": "planner",
+    "7-3-zones-and-temporary-haul-roads": "planner",
+    "7-4-config": "planner"
+  };
+
+  function normalise(r) {
+    r = String(r || "").toLowerCase().trim();
+    if (r === "admin") return "admin";
+    if (r === "planner") return "planner";
+    if (r === "ipt" || r === "submitter") return "submitter";
+    return null;
+  }
+
+  var signedInAs = null;
+  try {
+    signedInAs = normalise(new URLSearchParams(window.location.search).get("role"));
+  } catch (e) { }
+
+  var role = signedInAs;
+  if (!role) { try { role = normalise(localStorage.getItem(KEY)); } catch (e) { } }
+  if (!role) role = "submitter";
+
+  var bar = document.getElementById("roles");
+  var who = document.getElementById("whoami");
+
+  function levelOf(el) {
+    var m = /^H([1-6])$/.exec(el.tagName);
+    return m ? Number(m[1]) : 99;
+  }
+
+  // a heading owns everything up to the next heading of the same or higher level
+  function blockOf(h) {
+    var out = [h], lv = levelOf(h), n = h.nextElementSibling;
+    while (n && !(/^H[1-6]$/.test(n.tagName) && levelOf(n) <= lv)) {
+      out.push(n); n = n.nextElementSibling;
+    }
+    return out;
+  }
+
+  function apply() {
+    var rank = RANK[role];
+    var hiddenIds = {};
+    var heads = document.querySelectorAll("main h1, main h2");
+    for (var i = 0; i < heads.length; i++) {
+      var h = heads[i];
+      var need = h.getAttribute("data-role") || SECTION_ROLE[h.id];
+      if (!need) continue;
+      var hide = rank < RANK[need];
+      if (hide) hiddenIds[h.id] = 1;
+      var block = blockOf(h);
+      for (var j = 0; j < block.length; j++) block[j].classList.toggle("rolehide", hide);
+    }
+    var navItems = document.querySelectorAll("#nav li");
+    for (var k = 0; k < navItems.length; k++) {
+      var li = navItems[k], a = li.querySelector("a"),
+          id = a ? decodeURIComponent((a.getAttribute("href") || "").slice(1)) : "";
+      var needNav = li.getAttribute("data-navrole");
+      var off = (needNav && rank < RANK[needNav]) || !!hiddenIds[id];
+      li.classList.toggle("rolehide", off);
+    }
+    var btns = bar.querySelectorAll("button[data-role]");
+    for (var b = 0; b < btns.length; b++) {
+      btns[b].setAttribute("aria-pressed", btns[b].getAttribute("data-role") === role ? "true" : "false");
+    }
+    who.textContent = signedInAs
+      ? (signedInAs === role ? "signed in as " + signedInAs : "signed in as " + signedInAs + " — viewing another role")
+      : "not signed in to the app — pick the view you want";
+  }
+
+  bar.hidden = false;
+  bar.addEventListener("click", function (ev) {
+    var b = ev.target.closest("button[data-role]");
+    if (!b) return;
+    role = b.getAttribute("data-role");
+    try { localStorage.setItem(KEY, role); } catch (e) { }
+    apply();
+  });
+
+  /* ---------------- troubleshooting: symptom first ---------------- */
+  var TS = [
+    ["The map says “No month on screen” and the KPI panel is empty", "fine",
+     "The timeline is not sitting on a month yet, and forecast routes may be switched off in the control panel. Turn on the forecast routes and pick a month on the timeline. <strong>An empty KPI panel is almost never missing data</strong> — check this before concluding the forecast has not loaded."],
+    ["A Look-ahead line shows trips and tonnes but no vehicle count", "fine",
+     "That route has not been baked, so there is no measured cycle to divide by — and the platform will not invent a distance to fill the gap. It is flagged, not hidden. A planner bakes the route and the vehicles appear."],
+    ["Truck-kilometres and carbon look far too low", "fine",
+     "Only baked routes contribute distance, and therefore carbon. The header says how many lines are excluded. The figure climbs as the network is baked. The older, higher number was partly invented — it doubled a headline distance — and was removed deliberately."],
+    ["A line says “rate not set”", "fine",
+     "No haulage rate has been typed on that route, and no target rate has been set. Type either and the planned cost appears. Nothing is seeded: the platform never guesses a price."],
+    ["My forecast is not on the public map", "fine",
+     "The map shows <strong>approved</strong> lines only. While a line is pending it is visible to you and to planners in the app, and nowhere else."],
+    ["I cannot see another IPT's quantities", "fine",
+     "Correct. Your access code scopes you to your own IPT everywhere — the Dashboard, the Look-ahead, the exports. Planners and admins see every IPT."],
+    ["The map is asking me for a password", "fine",
+     "Since 14 September the map is not public. Sign in to the app and the map opens with it — no second password. The separate map password exists for people outside the alliance who have no account."],
+    ["The map shows no warnings at all", "fault",
+     "Possibly correct, possibly not, and it is worth establishing which. Two of the three warning levels can only fire on routes carrying approved volume <em>in the month on screen</em>; the third needs a stockpile with a recorded capacity. If all three preconditions are met and nothing shows, report it — a warning layer that is silent when it is broken and silent when it is fine is a known weakness."],
+    ["The supplier PDF's map says “schematic”", "fault",
+     "The map service could not be reached when the PDF was built. The sheet is still correct; only the picture fell back. Worth reporting with the time you generated it."],
+    ["The diesel index says “unavailable”", "fine",
+     "The weekly bulletin could not be fetched. The last good figure is kept and the widget says when it failed. An admin can type the price on the configuration page; everything downstream then behaves normally."],
+    ["The Look-ahead takes several seconds to open", "fine",
+     "Known. The page makes a large number of small database reads, and it grows with the number of lines. Batching them is a planned improvement. If it takes longer than about ten seconds, say so — that is past what has been measured."],
+    ["A route's distance changed without anyone editing it", "fault",
+     "Re-baking can return a different road: the routing service's map lags the physical road, and on this programme roads are realigned regularly. That part is expected. A duration that drifts on a road which did not change is not, and is being investigated — report it with the route and the time."]
+  ];
+
+  var q = document.getElementById("tsq"), a = document.getElementById("tsa");
+  if (q && a) {
+    TS.forEach(function (item, i) {
+      var b = document.createElement("button");
+      b.type = "button"; b.textContent = item[0];
+      b.setAttribute("aria-expanded", "false");
+      b.setAttribute("aria-controls", "ts-a-" + i);
+      q.appendChild(b);
+      var d = document.createElement("div");
+      d.className = "ts-a"; d.id = "ts-a-" + i;
+      d.innerHTML = '<div class="verdict ' + item[1] + '">' +
+        (item[1] === "fine" ? "This is the platform working correctly." : "This one is worth reporting.") +
+        "</div><p>" + item[2] + "</p>";
+      a.appendChild(d);
+      b.addEventListener("click", function () {
+        var open = d.classList.contains("on");
+        var all = a.querySelectorAll(".ts-a");
+        for (var z = 0; z < all.length; z++) all[z].classList.remove("on");
+        var bs = q.querySelectorAll("button");
+        for (var y = 0; y < bs.length; y++) bs[y].setAttribute("aria-expanded", "false");
+        if (!open) { d.classList.add("on"); b.setAttribute("aria-expanded", "true"); a.insertBefore(d, a.firstChild); }
+      });
+    });
+  }
+
+  apply();
+})();
+</script>
 </body></html>
