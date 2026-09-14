@@ -1,170 +1,137 @@
-rbe-map-gate-0914.zip  v2  —  /map/ password, /help/ behind sign-in, + a way IN to /help/
+rbe-guide-roles-0914.zip — the user guide becomes role-aware, gains troubleshooting,
+                           and an admin technical appendix
 ================================================================================
-Delivered 2026-09-14 (second cut). Extract over the repo root. Cut against HEAD e88b58a
-(2026-09-11 11:49). SEVEN files.
+Delivered 2026-09-14 (evening). Extract over the repo root. Cut against HEAD e88b58a.
 
-*** THIS REPLACES THE FIRST CUT. DISCARD IT. ***  The first cut was never applied (I
-checked the live site: /map/ and /help/ both still served to an anonymous request from
-outside). This is a strict superset, so nothing is lost by binning the first one.
+*** THIS INCLUDES rbe-map-gate-0914-v2.zip IN FULL. ***
+If you have not applied v2 yet, apply this instead — it is a strict superset and it is
+the only one you need. If you HAVE applied v2, this adds to it cleanly.
 
-  backend/gate.py                  NEW — the whole policy, pure, no framework, no DB
-  backend/main.py                  the middleware, the refusal pages, /api/map-auth
-  frontend/index.html              ⭐ NEW IN v2 — a "User guide" link in the rail
-  backend/tests/test_gate.py       NEW — 111 assertions
-  backend/tests/parse_frontend.js  ⭐ NEW IN v2 — 4 assertions on that link
-  backend/tests/test_lookahead.py  a date-bomb assertion fixed (pre-existing failure)
-  env.example                      MAP_PASSWORD / GATE_SECRET / MAP_GATE documented
+  backend/gate.py                        (from v2) the /map/ and /help/ gate
+  backend/main.py                        (from v2) middleware, refusal pages, /api/map-auth
+  backend/tests/test_gate.py             (from v2) 111 assertions
+  backend/tests/test_lookahead.py        (from v2) the date-bomb fix
+  env.example                            (from v2) MAP_PASSWORD / GATE_SECRET / MAP_GATE
+  frontend/index.html               NEW  User guide link + hash routing (#dashboard etc.)
+  frontend/help/index.html          NEW  role switcher, troubleshooting, Appendix D
+  frontend/help/media/*.png         NEW  22 placeholder figures REGENERATED
+  backend/tests/test_help.py        NEW  39 assertions (was 17)
+  backend/tests/parse_frontend.js   NEW  +11 assertions
+  backend/tests/help_browser_check.js NEW  32 assertions in real Chromium
 
-
-⭐ WHY v2 EXISTS: THE GUIDE HAD NO WAY IN
------------------------------------------
-You asked how to open the help page. The answer was: you could not. It has been served
-at /help/ since 10 September and NOTHING in the app ever linked to it — zero occurrences
-of "/help/" anywhere in frontend/index.html. The only way in was to type the URL.
-
-That is a separate fault from the gate, and it would have survived a perfect deployment.
-v2 adds a "User guide" link at the foot of the left rail, above Collapse. It is an
-ANCHOR opening in a new tab, not a NAV entry: /help/ is a separate document, not a React
-view, and a 'help' page id would fail the allowed-page check and bounce you to the
-Dashboard.
-
-NO schema change. NO new dependency. factors.json NOT in this zip.
+NO schema change. NO new runtime dependency. factors.json NOT in this zip.
 
 
-WHAT YOU MUST DO AFTER UPLOADING
---------------------------------
-Set ONE environment variable on Render, or the map stays shut to everyone outside
-the alliance:
-
+STILL THE ONLY THING YOU MUST DO ON RENDER
+------------------------------------------
     MAP_PASSWORD = <the string you hand to stakeholders>
 
-Nothing else is required. Then restart and check the three things under "FIRST LOOK".
-
-⚠️ THIS FAILS CLOSED, AND THAT IS DELIBERATE. If you forget MAP_PASSWORD, an outside
-visitor to /map/ gets "The map is closed" — not the map. That is the opposite of how
-ADMIN_TOKEN behaves (unset = every admin endpoint open, which is open question C11 and
-is not a pattern worth copying). Your own team is never affected: a valid access code,
-or the cookie a staff sign-in sets, opens the map whether or not a password exists.
+Without it the map is closed to everyone outside the alliance. Staff are unaffected.
 
 
-HOW IT WORKS, IN FOUR LINES
----------------------------
-  /map/   opens for: a valid access code, OR the staff cookie, OR the map password.
-  /help/  opens for: a valid access code, OR the staff cookie. The map password does
-          NOT open the guide — it is staff documentation.
-  One cookie, rbe_gate, carrying a level (staff | map) and an expiry, signed with
-  HMAC-SHA256 so it can be neither forged nor extended.
-  Staff cookie lasts 12 hours; the map password cookie lasts 30 days.
+WHAT CHANGED IN THE GUIDE
+-------------------------
+1. IT ADAPTS TO WHO IS READING IT. A switcher at the top — IPT submitter / Planner /
+   Admin. The link in the app's rail passes your role, so it opens on the right view and
+   says "signed in as planner". You can still look at another role's view; useful when
+   you are talking someone through a screen you can see and they cannot.
 
-⭐ THE BIT THAT MATTERS FOR THE APP: a successful /api/auth now also sets the staff
-cookie. That is what keeps the map working INSIDE the staff dashboard. The app iframes
-/map/, and an iframe's document request carries cookies but NOT the X-Access-Code
-header — so without this, a signed-in planner would have been asked for a second
-credential to see the map on their own page. It is asserted, but only at source level
-(see WHAT IS NOT PROVEN).
+   ⚠️ THE ROLE IS NOT A PERMISSION, AND IS NOT TREATED AS ONE. It arrives in the query
+   string and anyone can type ?role=admin. All that gets them is the technical appendix,
+   which is documentation. The sign-in gate decides who reads the page at all. Making it
+   tamper-proof would mean putting the role in the signed cookie and adding an endpoint —
+   a bigger change for no security gain, so it was not done. Say if you disagree.
 
-The map's DATA is gated too, not just its page — /api/public/*, /api/zones,
-/api/restrictions/*, /api/routes/restrictions, /api/streetview. Gating the page alone
-would have been theatre; every figure on it is readable straight off those endpoints.
+   Planner and above: the Data pages (Locations, Routes, Zones, Config) and the
+   approve/reject section. Admin only: Appendix D.
 
-TWO ENDPOINTS ARE DELIBERATELY LEFT OPEN:
-  /api/meta    the staff app fetches it on mount, BEFORE anyone signs in, to build its
-               dropdowns. Gating it empties the login screen. It carries units,
-               material names and vehicle labels out of factors.json — no location, no
-               route, no forecast, nothing about the project.
-  /api/health  Render polls it.
+2. TROUBLESHOOTING ASKS WHAT YOU ARE SEEING. Twelve symptoms, each with a verdict on
+   whether it is a fault at all — because most of them are not. It leads with the one
+   that caught ME today: an empty map is almost always no month selected and forecast
+   routes switched off, not missing data.
 
+3. APPENDIX D — TECHNICAL, ADMINS ONLY. How a haulage number is made; which figures are
+   measured, which are planning assumptions and which are unaudited (the carbon factor
+   is unaudited and says so); the live sources and how each fails; what leaves the
+   platform to third parties; and that the deployment must not be called secure.
 
-ROTATING THE PASSWORD SIGNS EVERYONE OUT
-----------------------------------------
-The signing key is derived from MAP_PASSWORD, so changing it invalidates every cookie
-already issued. That is the feature, not a bug: it is how you take the map away from
-someone who should no longer have it. If you would rather rotate the password WITHOUT
-signing everyone out, set GATE_SECRET to any fixed random string and the cookie
-survives rotation.
+   ⚠️ IT IS A SUMMARY, NOT YOUR 53-PAGE TECHNICAL GUIDE. That document is not in the
+   Claude project and I have never seen it — this is written from the working notes.
+   Upload the .docx and I will fold the real thing in; until then the Word document is
+   the one that has been reviewed and Appendix D says so itself.
 
+4. THE 22 PLACEHOLDER FIGURES WERE REGENERATED. The old ones carried the line "Captured
+   from the live deployment", which was not true of the image — a dashed empty box. The
+   new ones say "Screenshot not yet captured" and name the screen. FILENAMES ARE
+   UNCHANGED on purpose: drop a real capture over S02.png and nothing else needs to
+   change. The five fig-*.png diagrams are genuine artwork and were not touched.
 
-FIRST LOOK (in this order)
---------------------------
-0. FIRST, CONFIRM IT LANDED: /map/ in a private window must NOT show the map. As of
-   14 Sep 10:30 it still did — the first cut was never applied.
-1. Open /map/ in a private window. You should get a navy password page, not the map.
-   Type the wrong password — a red line. Type the right one — the map loads.
-2. Open /help/ in that same private window. You should be told to sign in, NOT given
-   a password box.
-3. Sign in to the app normally, then look at the Dashboard. ⭐ THE MAP MUST STILL DRAW
-   INSIDE THE APP with no second prompt. If it does not, that is the iframe/cookie path
-   and it is the single most likely thing to be wrong — tell me and do not fight it.
-4. Still signed in, look at the FOOT OF THE LEFT RAIL: a "? User guide" link above
-   Collapse. Click it — the guide opens in a new tab. That link did not exist before v2,
-   which is why you could not find the guide.
-5. Sign out (or use a private window) and open /help/ directly: you should be told to
-   sign in, NOT shown the guide.
+5. EVERY FIGURE WITH A SCREEN BEHIND IT NOW LINKS INTO THE LIVE APP — 21 of the 27.
+   That needed the app to name its page in the URL, so #dashboard, #lookahead and the
+   rest now work: pages are bookmarkable, and the guide can point at one. The hash wins
+   over the remembered page on first load; an unknown hash is ignored. It REPLACES
+   rather than pushes, so Back still leaves the app instead of walking your click history.
+
+6. TWO STALE CLAIMS FIXED. The guide said the public map needs no sign-in, in two
+   places. It has not since this morning.
 
 
-WHAT IS NOT PROVEN
-------------------
-  * THE HTTP LAYER IS STUBBED IN THE SANDBOX. The middleware never executed here. No
-    real request was routed, response.set_cookie() was never called, and no Set-Cookie
-    header was ever produced. The policy (gate.decide) is exercised exhaustively as a
-    pure function; the WIRING is asserted by reading main.py as text. Step 3 above is
-    the only thing that proves the wiring.
-  * Nothing in a browser. The password page's fetch() has never run.
-  * secure=True on the cookie is asserted as a value in a dict, not observed on a wire.
-  * ⚠️ I COULD NOT DO THE FRESH-CLONE CHECK. The standing rule is to extract the zip
-    over a clean clone and re-run the suite before sending. The repo went private this
-    morning and the sandbox has no credentials, so it was verified against the clone I
-    took at 07:39 today (HEAD e88b58a) and not against a fresh one. If you have uploaded
-    anything since that time, diff before extracting.
+FIRST LOOK
+----------
+1. Open the app, sign in, click "? User guide" at the foot of the rail. It should open
+   on YOUR role and say so at the top right.
+2. Switch to Admin. Appendix D appears in the body AND in the left nav. Switch back to
+   IPT submitter — the Data pages disappear from both.
+3. Click "Something looks wrong →", then any symptom. One answer opens at a time and
+   says whether it is a fault.
+4. Click "open it in the app →" under any figure — a new tab on that screen.
+5. Sign out, open /help/ — you should be told to sign in, not shown the guide.
 
 
 ASSERTIONS
 ----------
-  3,008 passed, 1 failed, across 18 files (14 python + 4 node).
-  The 1 failure is test_help.py's "no media file is orphaned" — it is
-  frontend/help/media/placeholder.pl, which a zip cannot delete. DELETE THAT FILE in
-  the GitHub web UI and test_help goes 17 / 0. It has been outstanding since 10 Sep.
+  3,037 passed, 1 failed in the default suite (18 files).
+  PLUS 32 in real headless Chromium — backend/tests/help_browser_check.js.
 
-  Baseline for comparison: plain HEAD was 2,892 passed, 2 failed.
-  This zip adds 111 (test_gate.py) + 4 (parse_frontend.js, the guide link) and turns one
-  pre-existing failure into a pass.
+  The 1 failure is the same one as always: test_help.py's "no media file is orphaned",
+  which is frontend/help/media/placeholder.pl. A ZIP CANNOT DELETE IT — delete that one
+  file in the GitHub web UI and test_help goes 40 / 0. Outstanding since 10 Sep.
 
-⚠️ THE BABEL CHECK COULD NOT BE RUN TODAY. The standing rule is to compile the frontend
-with the browser's own compiler, because TypeScript accepts things Babel refuses — that
-is how a duplicate `function Kpi` blanked the page on 9 September. npm now answers 403
-("forbidden by your security policy") for @babel/standalone in this sandbox, so it was
-not installable. What WAS run instead: render_frontend.js (which transpiles and
-server-renders the whole block through TypeScript, so a JSX syntax error would fail), and
-an explicit AST scan for duplicate top-level declarations — 103 declarations, no
-duplicates, 0 syntactic diagnostics. The v2 change adds no new function, only markup
-inside an existing component, so the 9 Sep failure mode is not in play. The residual risk
-is a Babel-specific rejection of something TypeScript accepts. IF THE APP GOES BLANK
-AFTER APPLYING THIS, that is the cause and the rail link is the only frontend change.
+  Baseline: plain HEAD was 2,892 / 2.
 
 
-ONE THING I FIXED THAT YOU DID NOT ASK FOR
-------------------------------------------
-test_lookahead.py had an assertion that hard-coded the PDF's five day headings as
-"MON 7 SEP ... FRI 11 SEP". It is built from the CURRENT commit week, so it passed
-only during the week of 7 September and started failing on Monday 14th — today — when
-the week rolled over. It is a stale test, not a code regression, and the PDF is fine.
-
-I derived the five headings from the same week the PDF was built from (via the XLSX's
-own date column, which the test had already parsed) instead of hard-coding them. The
-assertion is not weakened: it still requires five distinct Mon-Fri columns, all present
-in the PDF text, and no collapse rule.
-
-It is one self-contained hunk. If you would rather I had left it alone, revert that
-file and the count goes to 3,003 / 2.
-
-
-STILL OPEN AFTER THIS
+⚠️ WHAT IS NOT PROVEN
 ---------------------
-  * The help page ships 22 PLACEHOLDER images under captions reading "Captured from
-    the live deployment" (open question E32). The gate stops strangers seeing them; it
-    does not make the captions true. Fix before you send anyone the link.
-  * Per-person logins (Phase 6) still replace all of this properly. A shared code per
-    role and a shared map password are shared secrets, with no identity and no audit
-    trail. Do not describe the deployment as secure on the strength of this zip.
-  * There is no rate limit on /api/map-auth. Someone who wants to brute-force a short
-    password can. Use a long one.
+  * THE GUIDE IS NOW VERIFIED IN A REAL BROWSER — role filtering, the nav, the
+    troubleshooting picker, the deep links and the ?role= handover all run in Chromium
+    and are asserted, not inferred. That is new and it is the strongest coverage any
+    page in this repo has.
+  * THE APP IS NOT. Hash routing is asserted at SOURCE level only. React cannot be
+    rendered in the harness the way the static guide can. Check #2 and #4 above.
+  * THE BABEL CHECK STILL CANNOT RUN. npm answers 403 for @babel/standalone. The app
+    was transpiled and server-rendered through TypeScript, and scanned for duplicate
+    top-level declarations (104 declarations, none duplicated). TypeScript accepts some
+    things Babel refuses. If the app goes blank, it is one of the two frontend changes.
+  * NO FRESH-CLONE CHECK. The repo is private and the sandbox has no credentials. This
+    was verified against the 07:39 clone reset to HEAD with `git clean -fdx` and the zip
+    extracted over it. If you uploaded anything after 07:39 today, diff before extracting.
+
+
+ONE MISTAKE WORTH KNOWING ABOUT
+-------------------------------
+While fixing the "map needs no sign-in" sentence in section 8, I replaced the whole
+paragraph instead of the sentence, and silently deleted the Control Panel description
+with it. I caught it and restored it from HEAD. There is now an assertion that the
+Control Panel text survives — correcting a stale sentence must not cost the paragraph
+around it.
+
+
+STILL OPEN
+----------
+  * The 22 real screenshots. I cannot take them: the browser pane returns images to me,
+    not files I can put in a zip, so my earlier offer to capture them was wrong. Either
+    you capture them (the filenames and the figure list tell you exactly what each one
+    is), or they stay as honest placeholders, which is far better than where they were.
+  * Per-person logins (Phase 6) still replace the shared codes and the shared map
+    password. Do not describe the deployment as secure.
+  * The real technical guide (.docx) to fold into Appendix D.
