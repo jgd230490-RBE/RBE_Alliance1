@@ -23,17 +23,30 @@ is written on save (forced to the caller's IPT for an IPT code, required from a
 planner) and every filter below reads it. A line with `ipt` NULL — everything written
 before this shipped — is visible to planners and admins only, until somebody sets it.
 
-THE DEMO CODES
---------------
-When NONE of the eight env vars is set, the three demo codes the frontend has always
-used still work, so a local checkout cannot lock itself out:
+THE DEMO CODES — ⚠️ OPT-IN SINCE 2026-09-15, AND THEY USED TO BE IMPLICIT
+-------------------------------------------------------------------------
+Three known strings grant access:
 
     submitter123   sees everything, cannot approve   (pre-F behaviour, no IPT)
     planner123     planner
     admin123       admin
 
-The moment any real code is set, the demo codes stop working. A known string that
-grants planner rights is not a demo any more once real codes exist beside it.
+🔴 **They are honoured only when `ALLOW_DEMO_CODES` is set truthy AND no real code is
+configured.** Both conditions, in that order.
+
+Before 15 Sep the first condition did not exist: no configured code meant the demo codes
+worked, and the sign-in box printed all three on the page. So the deployment failed OPEN
+the moment one env var was missed on Render — the opposite of the map gate, which fails
+closed with no `MAP_PASSWORD`, and the opposite of what `handover-prep-0914.md` assumes.
+"A local checkout cannot lock itself out" is still true; it now costs one env var to say
+so out loud, which is the whole difference between a fallback and a published password.
+
+`ALLOW_DEMO_CODES` is NOT set on Render and must never be. The test harnesses set it
+themselves (see the `_v` loop at the head of each `backend/tests/test_*.py`).
+
+The moment any real code is set, the demo codes stop working whatever `ALLOW_DEMO_CODES`
+says. A known string that grants planner rights is not a demo any more once real codes
+exist beside it.
 
 ⚠️ WHAT THIS IS NOT
 -------------------
@@ -52,8 +65,12 @@ HEADER = "X-Access-Code"
 
 IPT_IDS = ("IPT1", "IPT2", "IPT3", "IPT4", "IPT5", "IPT6")
 
-# the three codes the frontend has always carried, honoured ONLY when no real code
-# is configured — see resolve()
+#: The env var a deployment must set before the three demo codes below mean anything.
+#: Unset on Render, deliberately. See the module docstring.
+DEMO_ENV = "ALLOW_DEMO_CODES"
+
+# the three codes the frontend has always carried, honoured ONLY when ALLOW_DEMO_CODES
+# is set AND no real code is configured — see resolve()
 DEMO_CODES = {
     "submitter123": {"role": "submitter", "ipt": None, "label": "Submitter"},
     "planner123": {"role": "planner", "ipt": None, "label": "Planner"},
@@ -87,21 +104,44 @@ def configured_codes():
     return out
 
 
+def demo_codes_allowed():
+    """
+    Has this deployment explicitly asked for the demo codes?
+
+    Truthy values only — an empty string, "0", "false" and "no" all mean no, so a Render
+    variable created and left blank does not quietly open the door.
+    """
+    return (os.getenv(DEMO_ENV) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def demo_mode():
-    """True when no real code is configured, so the demo codes are honoured."""
-    return not configured_codes()
+    """
+    True when the demo codes are the ones in force — opted in AND nothing real configured.
+
+    ⚠️ This is also what the UI reads as `access.demo` to decide whether a planner must
+    pick an IPT on submit, so it must stay false on any real deployment.
+    """
+    return demo_codes_allowed() and not configured_codes()
 
 
 def resolve(code):
-    """The access an X-Access-Code grants, or None."""
+    """
+    The access an X-Access-Code grants, or None.
+
+    🔴 Fails CLOSED: with no configured code and no `ALLOW_DEMO_CODES`, nothing resolves
+    and nobody signs in. That is the intended state of a deployment whose env vars have
+    gone missing — the same choice `gate.py` makes for `MAP_PASSWORD`.
+    """
     code = (code or "").strip()
     if not code:
         return None
     real = configured_codes()
     if real:
         hit = real.get(code)
-    else:
+    elif demo_codes_allowed():
         hit = DEMO_CODES.get(code)
+    else:
+        hit = None
     return dict(hit) if hit else None
 
 

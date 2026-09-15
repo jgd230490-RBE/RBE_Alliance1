@@ -1347,6 +1347,26 @@ def costing_lines(from_: Optional[int] = Query(None, alias="from"), to: Optional
 
 
 # ------------------------------------------------------------------ public feed (map)
+def _working_days(factors):
+    """
+    Working days in a planning month, from factors.json.
+
+    ⭐ 2026-09-15 — ONE reader for this figure. It was read inline in
+    `public_month_kpis` and nowhere else; the map's route label now needs it too, and
+    lesson 25 ("one config value, one reader") is in the notes precisely because a
+    second inline read of MAPBOX_TOKEN hid a missing Render variable for a month.
+    Every public endpoint that divides by a day count divides by THIS.
+    """
+    plan = (factors or {}).get("planning", {}) or {}
+    try:
+        wd = float(plan.get("working_days_per_month") or 22)
+    except (TypeError, ValueError):
+        wd = 22.0
+    # a zero or negative in a hand-edited factors.json must not produce a division by
+    # zero on a public endpoint
+    return wd if wd > 0 else 22.0
+
+
 @app.get("/api/public/route-forecasts")
 def public_route_forecasts(
     from_: int = Query(1, alias="from", ge=1, le=MONTH_COUNT),
@@ -1356,7 +1376,16 @@ def public_route_forecasts(
     """
     Approved forecasts only, aggregated per route over [from, to], returned in
     the requested unit. This is what the map paints. Shape:
-        { "hr-ew-...": {"avg": .., "peak": .., "total": .., "unit": ".."}, ... }
+        { "hr-ew-...": {"avg": .., "per_day": .., "peak": .., "total": ..,
+                        "unit": .., "working_days": ..}, ... }
+
+    ⭐ 2026-09-15 — `per_day` is new and it is what the route label on the map now
+    prints. `avg` is a MONTHLY average over the window; the label read as a rate and
+    was one, just the wrong one — "2221 Two-way" on a route doing about a hundred
+    movements a day. Divided here rather than in the map so the divisor has ONE reader
+    (lesson 25, and the same reason the Dashboard's client arithmetic was retired):
+    `working_days_per_month` from factors.json, the same figure `/api/public/month-kpis`
+    already hands the KPI cards.
     """
     if unit not in conversions.UNITS:
         raise HTTPException(400, f"unit must be one of {conversions.UNITS}")
@@ -1375,14 +1404,20 @@ def public_route_forecasts(
         a["peak"] = max(a["peak"], v)
         a["months"] += 1
 
+    wd = _working_days(factors)
     out = {}
     for rid, a in agg.items():
         months = a["months"] or 1
         out[rid] = {
             "avg": conversions.round_for_unit(a["total"] / months, unit),
+            # the rate a reader of the map label is actually after: one month's worth
+            # spread over that month's working days
+            "per_day": conversions.round_for_unit(a["total"] / months / wd, unit),
             "peak": conversions.round_for_unit(a["peak"], unit),
+            "peak_per_day": conversions.round_for_unit(a["peak"] / wd, unit),
             "total": conversions.round_for_unit(a["total"], unit),
             "unit": unit,
+            "working_days": wd,
         }
     return out
 
@@ -1413,8 +1448,7 @@ def public_month_kpis(month: int = Query(..., ge=1, le=MONTH_COUNT),
     if unit not in conversions.UNITS:
         raise HTTPException(400, f"unit must be one of {conversions.UNITS}")
     factors = conversions.load_factors()
-    plan = factors.get("planning", {}) or {}
-    wd = float(plan.get("working_days_per_month") or 22)
+    wd = _working_days(factors)          # 15 Sep: shared with the two forecast feeds
     vs = factors.get("vehicles", {}) or {}
     planning = conversions.planning_vehicle_names(factors)
     fb_name = planning[0] if planning else None
@@ -1531,7 +1565,10 @@ def public_forecast_matrix(
     for g in out:
         g["total"] = conversions.round_for_unit(g["total"], unit)
     out.sort(key=lambda x: x["total"], reverse=True)
-    return {"unit": unit, "from": lo, "to": hi, "routes": out}
+    # ⭐ 2026-09-15 — `working_days` rides along so the timeline can print a DAILY rate on
+    # the route label instead of the month's total. One divisor, one source: factors.json.
+    return {"unit": unit, "from": lo, "to": hi, "working_days": _working_days(factors),
+            "routes": out}
 
 
 # ------------------------------------------------------------------ routing network (Phase 0)
