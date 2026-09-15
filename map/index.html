@@ -181,11 +181,23 @@
         /* Playable forecast timeline bar */
         #timeline-bar{ display:none; position:absolute; left:calc(50% + 150px); transform:translateX(-50%); bottom:18px; z-index:25; background:#fff; border:1px solid var(--line); border-radius:11px; box-shadow:0 8px 28px rgba(16,24,40,.16); padding:8px 12px; align-items:center; gap:11px; }
         body.sidebar-closed #timeline-bar{ left:50%; }
-        #timeline-bar input[type=range]{ width:250px; accent-color:var(--navy); cursor:pointer; }
+        /* the range is the only item allowed to give ground when the bar runs out of
+           room — everything else is flex:0 0 auto, so nothing can be overlapped again */
+        #timeline-bar input[type=range]{ width:250px; flex:1 1 250px; min-width:90px; accent-color:var(--navy); cursor:pointer; }
+        #timeline-bar{ max-width:calc(100vw - 36px); }
+        #timeline-bar .tl-btn, #timeline-bar .tl-close{ flex:0 0 auto; }
         .tl-btn{ border:none; background:var(--navy); color:#fff; width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:12px; }
         .tl-close{ border:none; background:none; color:var(--muted); cursor:pointer; font-size:15px; }
-        #tl-label{ font-size:12px; font-weight:600; color:var(--navy-deep); min-width:190px; white-space:nowrap; }
-        #tl-speed{ border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--navy-deep); font:600 11.5px Inter,system-ui,sans-serif; padding:4px 6px; cursor:pointer; }
+        /* 15 Sep — the label OVERLAPPED the speed select. It had min-width:190px and
+           white-space:nowrap but no flex sizing, so as a flex item it shrank to exactly
+           190px while its text ("Sep 2026 · 2 routes · 4444 trips") kept its natural
+           width and painted straight over the select beside it. `flex:0 0 auto` is the
+           fix: the box is now max(content, 190px) and can never be squeezed under its
+           own text. The min-width stays only to stop the bar jittering as month names
+           change length. */
+        #tl-label{ font-size:12px; font-weight:600; color:var(--navy-deep); min-width:190px; white-space:nowrap; flex:0 0 auto; }
+        /* and the select was far bigger than five two-character options need */
+        #tl-speed{ border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--navy-deep); font:600 11px Inter,system-ui,sans-serif; padding:3px 2px 3px 5px; cursor:pointer; flex:0 0 auto; width:50px; text-align:center; text-align-last:center; }
     </style>
 </head>
 <body>
@@ -610,7 +622,20 @@
     // the line, because the label sits ON a dotted route at 12 px.
     // ⚠️ It is the LABEL that changed, not the figure. f_unit is still stamped on the
     // feature and still drives the popup and the KPI cards.
-    const FORECAST_LABEL_UNIT = 'Two-way';
+    // 2026-09-15 (the human): "the route label with two-way movement should be daily
+    // average not total". It was a MONTH's worth — "2221 Two-way" on a route running
+    // about a hundred movements a day — sitting beside a KPI card reading "101
+    // MOVEMENTS / DAY". Two rates on one screen, two orders of magnitude apart.
+    // 🔴 The division is the SERVER's (`per_day` / `working_days` on both public feeds),
+    // not this file's: lesson 25, one config value one reader.
+    const FORECAST_LABEL_UNIT = 'Two-way / day';
+    //: working days in a planning month, as the public feed reports it. 22 only until
+    //: the first feed answers — never a second copy of the figure.
+    let FORECAST_WORKING_DAYS = 22;
+    function perWorkingDay(monthTotal){
+        const wd = FORECAST_WORKING_DAYS > 0 ? FORECAST_WORKING_DAYS : 22;
+        return Math.round(monthTotal / wd);
+    }
     const RAIL_COLOR = '#0F766E';
     // 2026-09-02 (§6a): a QUIET default so the corridor cannot be mistaken for a second
     // alignment - grey casing under short grey ticks with big gaps - and the reserved
@@ -3207,8 +3232,14 @@
                         let rid = (f.properties.route_id || '').toString().trim().toLowerCase();
                         let m = rid && forecastMap[rid];
                         if (m) {
+                            if (m.working_days > 0) FORECAST_WORKING_DAYS = m.working_days;
                             f.properties.is_forecast = true;
-                            f.properties.f_avg = m.avg;
+                            // 15 Sep: the label prints a DAILY rate. `per_day` is the
+                            // server's; `avg` (a monthly average over the window) is kept
+                            // on the feature because the popup and the detail table still
+                            // read a monthly figure and should go on doing so.
+                            f.properties.f_avg = (m.per_day != null) ? m.per_day : m.avg;
+                            f.properties.f_month_avg = m.avg;
                             f.properties.f_peak = m.peak;
                             f.properties.f_total = m.total;
                             f.properties.f_unit = m.unit;
@@ -3512,6 +3543,13 @@
     // 11 Sep pm: play speed. TL_STEP_MS is one month at 1×; the select multiplies it. Kept in
     // localStorage so a wall display keeps its pace across reloads. Changing it while playing
     // restarts the interval at the new pace; the month does not jump.
+    //: What a quantity in `unit` is CALLED on the timeline bar. A vehicle-load carried
+    //: one way is a trip everywhere else in the product — "vehicles" here invited exactly
+    //: the movements-are-not-lorries confusion the 04 Sep correction was about. Tonnes and
+    //: cubic metres keep their own names.
+    const TL_UNIT_WORD = { vehicles: 'trips', t: 't', m3: 'm³' };
+    function unitWord(u){ return TL_UNIT_WORD[u] || u; }
+
     const TL_STEP_MS = 750;
     const TL = { on:false, playing:false, month:1, timer:null, matrix:null, speed:1 };
     try { const sp = parseFloat(localStorage.getItem('rbe_tl_speed')); if(sp > 0){ TL.speed = sp; } } catch(e){}
@@ -3529,7 +3567,8 @@
         if(!r.ok) throw new Error('API '+r.status);
         const j = await r.json();
         const byR={}; (j.routes||[]).forEach(rt=>{ byR[(rt.route_id||'').toString().trim().toLowerCase()]=rt; });
-        TL.matrix = { byRoute:byR, unit:j.unit }; return TL.matrix;
+        if(j.working_days > 0) FORECAST_WORKING_DAYS = j.working_days;   // 15 Sep — the label's divisor
+        TL.matrix = { byRoute:byR, unit:j.unit, working_days:j.working_days }; return TL.matrix;
     }
     function renderMonthFrame(m){
         const src=map.getSource('routes-source'); if(!src||!TL.matrix) return;
@@ -3538,12 +3577,19 @@
             if(f.geometry.type==='LineString'||f.geometry.type==='MultiLineString'){
                 const rid=(f.properties.route_id||'').toString().trim().toLowerCase();
                 const rt=rid&&byR[rid]; const vol=rt?((rt.monthly||{})[m]||0):0;
-                if(vol>0){ f.properties.is_forecast=true; f.properties.f_avg=Math.round(vol); f.properties.f_unit=unit; f.properties.f_time=monthLabel(m); count++; sum+=vol; }
+                // 15 Sep: f_avg is the DAILY rate for this month, not the month's total.
+                // f_month_total keeps the month figure for the popup and detail table.
+                if(vol>0){ f.properties.is_forecast=true; f.properties.f_avg=perWorkingDay(vol); f.properties.f_month_total=Math.round(vol); f.properties.f_unit=unit; f.properties.f_time=monthLabel(m); count++; sum+=vol; }
                 else f.properties.is_forecast=false;
             }
         });
         src.setData(data); ensureForecastLayers(); ensureFlowLayer();
-        const lbl=document.getElementById('tl-label'); if(lbl) lbl.textContent = monthLabel(m)+' · '+count+' routes · '+Math.round(sum)+' '+unit;
+        // 15 Sep (the human): "the text vehicles needs to be replaced with deliveries or
+        // trips". 🔴 Not a blind string swap — `unit` comes from the API and can be t or
+        // m³, and "4 444 trips" over a tonnage would be a lie. Only the vehicle-loads
+        // unit is renamed, and it is renamed to the word the rest of the product already
+        // uses (the Dashboard's TRIPS card, the KPI card's "101 trips/d").
+        const lbl=document.getElementById('tl-label'); if(lbl) lbl.textContent = monthLabel(m)+' · '+count+' routes · '+Math.round(sum)+' '+unitWord(unit);
     }
     function openTimeline(){
         TL.on=true;
