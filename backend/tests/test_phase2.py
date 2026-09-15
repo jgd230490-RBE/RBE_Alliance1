@@ -124,6 +124,9 @@ import access  # noqa: E402
 for _v in ("IPT1_CODE", "IPT2_CODE", "IPT3_CODE", "IPT4_CODE", "IPT5_CODE", "IPT6_CODE",
            "PLANNER_CODE", "ADMIN_CODE"):
     os.environ.pop(_v, None)
+# 15 Sep: the three demo codes are opt-in on the server now (access.DEMO_ENV).
+# Every harness below signs in as planner123, so it asks for them explicitly.
+os.environ["ALLOW_DEMO_CODES"] = "1"
 access.set_current("planner123")
 
 PASS = 0
@@ -442,6 +445,34 @@ rows = [r for r in pm["routes"] if r["route_id"] == "R-Q03-C01"]
 ok("public matrix keeps disciplines as separate rows", len(rows) == 1, str(rows))
 ok("public matrix row carries discipline", rows and "discipline" in rows[0])
 ok("public matrix no longer emits split_pct", rows and "split_pct" not in rows[0])
+
+# --- 2026-09-15: the map's route label is a DAILY rate, divided server-side ---------
+# The label read "2221 Two-way" — one month's movements — on a route the KPI card beside
+# it described as ~101 a day. The division is here so there is ONE reader of
+# working_days_per_month (lesson 25); the map only prints what it is given.
+_wd = main._working_days(conversions.load_factors())
+ok("0915: the matrix feed carries working_days", pm.get("working_days") == _wd and _wd > 0)
+_rf = main.public_route_forecasts(from_=1, to=60, unit="t")
+_one = next(iter(_rf.values()), None)
+ok("0915: route-forecasts carries per_day and the divisor", bool(_one)
+   and "per_day" in _one and _one.get("working_days") == _wd, str(_one))
+ok("0915: per_day is avg ÷ working days, not avg and not the total",
+   bool(_one) and abs(_one["per_day"] - _one["avg"] / _wd) < 0.51
+   and _one["per_day"] != _one["total"], str(_one))
+ok("0915: ...and peak_per_day follows the same divisor",
+   bool(_one) and abs(_one["peak_per_day"] - _one["peak"] / _wd) < 0.51, str(_one))
+ok("0915: the old keys are still there — the popup and detail table read them",
+   bool(_one) and all(k in _one for k in ("avg", "peak", "total", "unit")))
+# a hand-edited factors.json must not divide a PUBLIC endpoint by zero
+ok("0915: a zero working_days_per_month falls back to 22, it does not crash",
+   main._working_days({"planning": {"working_days_per_month": 0}}) == 22.0
+   and main._working_days({"planning": {"working_days_per_month": "x"}}) == 22.0
+   and main._working_days({}) == 22.0 and main._working_days(None) == 22.0)
+_main_src_wd = open(os.path.join(BACKEND, "main.py"), encoding="utf-8").read()
+_code_only = "\n".join(l.split("#", 1)[0] for l in _main_src_wd.splitlines())
+ok("0915: main.py reads working_days_per_month in exactly ONE place",
+   _code_only.count('"working_days_per_month"') == 1,
+   f"{_code_only.count(chr(34) + 'working_days_per_month' + chr(34))} readers")
 
 # =========================================================================== #
 #  7. /api/meta routes off the live network                                    #

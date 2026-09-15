@@ -137,6 +137,9 @@ import access  # noqa: E402
 for _v in ("IPT1_CODE", "IPT2_CODE", "IPT3_CODE", "IPT4_CODE", "IPT5_CODE", "IPT6_CODE",
            "PLANNER_CODE", "ADMIN_CODE"):
     os.environ.pop(_v, None)
+# 15 Sep: the three demo codes are opt-in on the server now (access.DEMO_ENV).
+# Every harness below signs in as planner123, so it asks for them explicitly.
+os.environ["ALLOW_DEMO_CODES"] = "1"
 access.set_current("planner123")
 
 PASS = 0
@@ -812,6 +815,32 @@ db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L
 db.execute("INSERT INTO locations (id, name, lat, lon) VALUES (?, ?, ?, ?)", ("L2", "Site", 58.6, 24.4))
 db.execute("INSERT INTO routes (id, origin_id, dest_id, ipt) VALUES (?, ?, ?, ?)", ("R1", "L1", "L2", "IPT 3 / IPT 6"))
 db.execute("INSERT INTO routes (id, origin_id, dest_id, ipt) VALUES (?, ?, ?, ?)", ("R5", "L1", "L2", "IPT 5"))
+
+# --- 2026-09-15: the demo codes are OPT-IN, and the default is now closed ----------
+# The sign-in box used to print all three codes and the server honoured them whenever a
+# Render variable was missing — a published password on a public URL, failing OPEN.
+# ⚠️ This block runs with ALLOW_DEMO_CODES=1 (set at the head of the file), so every
+# assertion below it still exercises demo mode; these four pin the gate itself.
+_demo_saved = os.environ.pop("ALLOW_DEMO_CODES", None)
+ok("0915: 🔴 with no env codes AND no opt-in, NOTHING resolves — it fails closed",
+   all(access.resolve(c) is None for c in ("submitter123", "planner123", "admin123")))
+ok("0915: ...and demo_mode() is false, so the UI does not relax the IPT rule",
+   access.demo_mode() is False and access.demo_codes_allowed() is False)
+for _bad in ("", "0", "false", "no", "  "):
+    os.environ["ALLOW_DEMO_CODES"] = _bad
+    if access.resolve("planner123") is not None:
+        break
+else:
+    _bad = None
+ok("0915: a blank or falsy ALLOW_DEMO_CODES does not open the door",
+   _bad is None, f"opened on {_bad!r}")
+os.environ["ALLOW_DEMO_CODES"] = "1" if _demo_saved is None else _demo_saved
+ok("0915: ...and the explicit opt-in brings them back",
+   access.resolve("planner123") is not None and access.demo_mode() is True)
+_FRONTEND_SRC = open(os.path.join(BACKEND, "..", "frontend", "index.html"),
+                     encoding="utf-8").read()
+ok("0915: the sign-in box no longer names a working credential",
+   not any(c in _FRONTEND_SRC for c in ("submitter123", "planner123", "admin123")))
 
 # --- demo mode: no real code configured ----------------------------------------
 ok("F: with no env codes the three demo codes resolve",

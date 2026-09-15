@@ -128,6 +128,9 @@ import export  # noqa: E402
 for _v in ("IPT1_CODE", "IPT2_CODE", "IPT3_CODE", "IPT4_CODE", "IPT5_CODE", "IPT6_CODE",
            "PLANNER_CODE", "ADMIN_CODE"):
     os.environ.pop(_v, None)
+# 15 Sep: the three demo codes are opt-in on the server now (access.DEMO_ENV).
+# Every harness below signs in as planner123, so it asks for them explicitly.
+os.environ["ALLOW_DEMO_CODES"] = "1"
 access.set_current("planner123")
 days.START_YEAR = main.START_YEAR
 

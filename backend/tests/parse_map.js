@@ -1401,12 +1401,43 @@ ok("§E: dismissals are keyed per month, so changing month brings them back",
 // ---- §F ride-alongs, 2026-09-08 ---------------------------------------------------
 // F1: "412 vehicles" on a route was the same confusion the 04 Sep correction was about —
 // 412 is not 412 lorries, it is 412 loads out and back.
+// ⚠️ 2026-09-15 — NARROWED, NOT DELETED (lesson 1). The label is still not "vehicles";
+// it now also carries the rate, because the figure beside it became a daily one.
 ok("§F1: the forecast route label says Two-way, not vehicles",
-  /const FORECAST_LABEL_UNIT = 'Two-way';/.test(code)
+  /const FORECAST_LABEL_UNIT = 'Two-way \/ day';/.test(code)
+  && !/const FORECAST_LABEL_UNIT = '[^']*vehicles/i.test(code)
   && (code.match(/\['concat', \['get', 'f_avg'\], ' ', FORECAST_LABEL_UNIT\]/g) || []).length === 2
   && !/\['get', 'f_unit'\]\]/.test(code));
 ok("§F1: ...and the FIGURE is untouched — f_unit still rides on the feature",
   /f\.properties\.f_unit = m\.unit/.test(code) && /f\.properties\.f_unit=unit/.test(code));
+
+// ---- 2026-09-15 · the route label is a DAILY rate, and the divisor is the server's ----
+ok("§0915-1: the label's figure is per working day, never the month's total",
+  // timeline path: the month's volume goes through perWorkingDay(), not Math.round()
+  /f\.properties\.f_avg=perWorkingDay\(vol\)/.test(code)
+  && !/f\.properties\.f_avg=Math\.round\(vol\)/.test(code)
+  // window path: the server's per_day, with avg only as a fallback
+  && /f\.properties\.f_avg = \(m\.per_day != null\) \? m\.per_day : m\.avg;/.test(code));
+ok("§0915-2: the month figure is KEPT on the feature, not thrown away",
+  /f\.properties\.f_month_total=Math\.round\(vol\)/.test(code)
+  && /f\.properties\.f_month_avg = m\.avg/.test(code));
+ok("§0915-3: the divisor comes from the feed, and there is exactly one of it",
+  /let FORECAST_WORKING_DAYS = 22;/.test(code)
+  && (code.match(/FORECAST_WORKING_DAYS = (?:m|j)\.working_days/g) || []).length === 2
+  // the only place a month figure is divided by a day count
+  && (code.match(/monthTotal \/ wd/g) || []).length === 1
+  && !/\/\s*22\b/.test(code.replace(/FORECAST_WORKING_DAYS > 0 \? FORECAST_WORKING_DAYS : 22/g, "")));
+ok("§0915-4: the timeline bar says trips, not vehicles — and only for the loads unit",
+  /TL_UNIT_WORD = \{ vehicles: 'trips'/.test(code)
+  && /' routes · '\+Math\.round\(sum\)\+' '\+unitWord\(unit\)/.test(code)
+  && !/' routes · '\+Math\.round\(sum\)\+' '\+unit;/.test(code)
+  // a tonnage must NOT be called trips
+  && /t: 't', m3: 'm³'/.test(code));
+ok("§0915-5: the timeline label can no longer be overlapped by the speed select",
+  /#tl-label\{[^}]*flex:0 0 auto;[^}]*\}/.test(html)
+  && /#tl-speed\{[^}]*flex:0 0 auto;[^}]*width:50px;[^}]*\}/.test(html)
+  // the range is the one item that may shrink
+  && /#timeline-bar input\[type=range\]\{[^}]*flex:1 1 250px;[^}]*\}/.test(html));
 // F4: extruded buildings, default OFF
 ok("§F4: there is a 3D buildings control and it is NOT checked",
   /id="layer-buildings"/.test(html) && !/id="layer-buildings" checked/.test(html));

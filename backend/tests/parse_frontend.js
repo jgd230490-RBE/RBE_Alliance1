@@ -1017,8 +1017,12 @@ ok("...opening in a new tab, with rel=noopener, so the app's state is not lost",
 // ---- 2026-09-14: deep links. The guide links at a screen, so the URL names the page. ----
 ok("\u2b50 the hash names the page, and the id list is DERIVED from NAV so the two cannot drift",
    /const PAGE_IDS = new Set\(NAV\.flatMap/.test(src) && /function pageFromHash\(\)/.test(src));
+// ⚠️ 2026-09-15 — NARROWED, NOT DELETED (lesson 1). The hash gained an optional "/n"
+// screen suffix, so the id check moved into hashParts(); it is still a PAGE_IDS check and
+// an unknown id still yields null.
 ok("...an unknown hash is ignored rather than blanking the app",
-   /PAGE_IDS\.has\(h\) \? h : null/.test(src));
+   /PAGE_IDS\.has\(id\) \? \{ page: id, rest \} : \{ page: null, rest: "" \}/.test(src)
+   && /function pageFromHash\(\)\{ return hashParts\(\)\.page; \}/.test(src));
 ok("...the hash wins over the remembered page on first load, and the remembered page is "
    + "still the fallback",
    /const h = pageFromHash\(\);\s*\n\s*if\(h\) return h;[\s\S]{0,160}localStorage\.getItem\("rbe_page"\)/.test(src));
@@ -1026,6 +1030,43 @@ ok("\U0001f534 ...and it REPLACES rather than pushes \u2014 the rail is not brow
    /history\.replaceState/.test(src) && !/history\.pushState/.test(src));
 ok("...a hashchange (a second link from the guide into the same tab) moves the page",
    /addEventListener\("hashchange"/.test(src) && /removeEventListener\("hashchange"/.test(src));
+
+// ---- 2026-09-15: the big screen is four sections, three ways ------------------------
+ok("0915: four sections, named, in the page's own order",
+   /const DASH_SECTIONS = \[/.test(src)
+   && ["today", "kpis", "charts", "stock"].every(k => new RegExp(`key: "${k}"`).test(src))
+   && (src.match(/\{ key: "(?:today|kpis|charts|stock)",/g) || []).length === 4);
+ok("0915: every one of the four is wrapped, and each wraps a DIFFERENT index",
+   (src.match(/<WallSection show=\{sectionShown\(/g) || []).length === 4
+   && [0, 1, 2, 3].every(i => new RegExp(`sectionShown\\(${i}\\)`).test(src)));
+ok("0915: 🔴 a hidden section is HIDDEN, not unmounted — the Mapbox instance survives",
+   // the wrapper renders its children unconditionally and toggles `hidden`
+   /<div ref=\{ref\} hidden=\{!show\} data-wall-section/.test(src)
+   && !/\{show && <DashboardToday/.test(src) && !/sectionShown\(0\) && </.test(src)
+   // and [hidden] is forced in the STYLESHEET (not the script block), because a Tailwind
+   // utility on the same element would otherwise win
+   && /\[hidden\]\{display:none !important;\}/.test(html));
+ok("0915: ...and a section coming back into view is told to re-measure",
+   /requestAnimationFrame\(\(\) => \{ try \{ window\.dispatchEvent\(new Event\("resize"\)\)/.test(src)
+   && /cancelAnimationFrame\(id\)/.test(src));
+ok("0915: the WORKING view always shows all four, whatever the big screen remembered",
+   /const sectionShown = \(i\) => !wall \|\| wallLayout === "all" \|\| wallSection === i;/.test(src));
+ok("0915: the rotate timer runs only on the big screen, and is cleared",
+   /if\(!wall \|\| wallLayout !== "rotate"\) return;/.test(src)
+   && /setInterval\(\(\) => setWallSection\(s => \(s \+ 1\) % DASH_SECTIONS\.length\), rotateSecs \* 1000\)/.test(src)
+   && /return \(\) => clearInterval\(id\);/.test(src));
+ok("0915: a screen can be pinned by URL, 1-based, and a bad number is ignored not clamped",
+   /function screenFromHash\(max\)/.test(src)
+   && /return \(n >= 1 && n <= max\) \? n : null;/.test(src)
+   && /const pinned = screenFromHash\(DASH_SECTIONS\.length\);/.test(src));
+ok("0915: ...and a pinned URL wins over what this browser remembered",
+   /if\(pinned\) return "single";\s*\/\/ a pinned URL wins on first load/.test(src)
+   && /if\(pinned\) return pinned - 1;/.test(src));
+ok("0915: the three layouts are all offered, and every localStorage read is guarded",
+   ['"all"', '"rotate"', '"single"'].every(v => src.includes(`pickLayout(${v.replace(/"/g, '"')})`) || src.includes(v))
+   && (src.match(/localStorage\.(get|set)Item\("rbe_dash_/g) || []).length === 6
+   // every one of the six sits inside a try — a private window must not blank the page
+   && !/[^ ]localStorage\.getItem\("rbe_dash_[^)]*\)[^;]*;\s*\n(?![\s\S]{0,40}catch)/.test(src));
 ok("...and it collapses with the rail like every other item (label behind railOpen)",
    /\/help\/\?role=[\s\S]{0,460}?\{railOpen && <span className="truncate">User guide<\/span>\}/.test(src));
 
