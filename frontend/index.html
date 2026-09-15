@@ -27,6 +27,24 @@
   /* Dashboard big-screen mode (11 Sep): larger labels; the figures scale with clamp() */
   .dash-wall .fig-label{font-size:13px;} .dash-wall .fig-sub{font-size:12px;} .dash-wall .fig-group{font-size:12px;}
   .dash-wall .chart-title{font-size:16px;} .dash-wall .text-xs{font-size:13px;} .dash-wall table.text-xs{font-size:13px;}
+  /* 15 Sep — the big screen's four sections: the control bar, and the divider that
+     labels each section when all four share one screen. A hidden section keeps its DOM
+     (see WallSection) so [hidden] must actually hide: Tailwind's preflight sets
+     display:none on [hidden], but a utility class on the same element would win, so it
+     is forced here. */
+  [hidden]{display:none !important;}
+  .dash-wallbar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 12px;}
+  .dash-wallbar-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#9aa1ac;}
+  .dash-wallbar-btn{font:600 13px Inter,system-ui,sans-serif;color:var(--navy-deep);background:#f3f4f6;border:1px solid transparent;border-radius:8px;padding:5px 11px;cursor:pointer;}
+  .dash-wallbar-btn:hover{background:#e8eaed;}
+  .dash-wallbar-btn.is-on{background:var(--navy);color:#fff;}
+  .dash-wallbar-sel{font:600 13px Inter,system-ui,sans-serif;color:var(--navy-deep);background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px 7px;cursor:pointer;}
+  .dash-wallbar-sep{width:1px;height:20px;background:var(--line);margin:0 3px;}
+  .dash-wallbar-note{font-size:12px;color:var(--muted);}
+  .dash-wallbar-note code{background:#f3f4f6;border-radius:4px;padding:1px 5px;font-size:11.5px;}
+  .dash-divider{font:700 12px Inter,system-ui,sans-serif;text-transform:uppercase;letter-spacing:.06em;color:#9aa1ac;
+                border-top:2px solid var(--line);padding-top:9px;margin-bottom:10px;}
+  .dash-wall .dash-divider{font-size:14px;}
   input[type=number]::-webkit-outer-spin-button,
   input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
   input[type=number]{-moz-appearance:textfield;}
@@ -140,6 +158,56 @@ const unitTriple = (u, opts) => {
   return parts.length ? parts.join(o.sep || " · ") : null;
 };
 const REFRESH_MS = 5 * 60 * 1000;
+
+// 2026-09-15 — the big screen splits into FOUR sections (the human's ask). The cut is the
+// page's own order, so nothing moves relative to the working view:
+//   1 Today      the today strip and this week's lines on the map
+//   2 Figures    Delivered to date · Volume · Cost · Carbon
+//   3 Charts     demand, delivered, cost, trips, fleet, carbon, split, top routes
+//   4 Stockpiles the capacity chart
+// Three ways to show them, all reachable from the big-screen bar:
+//   all      every section on one screen, divided and labelled  (what it did before)
+//   rotate   one at a time, advancing on a timer
+//   single   one, chosen — and "#dashboard/3" pins a screen to it, so four displays are
+//            four URLs and nothing has to be configured on each machine
+//
+// 🔴 HIDDEN, NEVER UNMOUNTED. Section 1 holds a `CommitMap`, which is a real
+// `mapboxgl.Map`. Unmounting it on every rotation would destroy and rebuild a WebGL
+// context every few seconds on a display left running all day — browsers cap those at
+// about sixteen, and the tiles would be re-fetched each time. The standing rule ("one
+// Mapbox instance, never unmounted") applies here exactly. So a hidden section keeps its
+// DOM and its instances, and `WallSection` fires one window resize when it comes back
+// into view, because Mapbox and Chart.js both measure zero inside `display:none`.
+const DASH_SECTIONS = [
+  { key: "today",  title: "Today" },
+  { key: "kpis",   title: "Figures" },
+  { key: "charts", title: "Charts" },
+  { key: "stock",  title: "Stockpiles" },
+];
+const DASH_ROTATE_CHOICES = [10, 15, 20, 30, 45, 60, 120];
+
+function WallSection({ show, divider, title, children }){
+  const ref = useRef(null);
+  const was = useRef(show);
+  useEffect(() => {
+    if(show && !was.current && ref.current){
+      // one frame after the section is laid out again, tell everything inside it to
+      // re-measure. Mapbox (trackResize, on by default) and Chart.js (responsive) both
+      // listen to the window; a map that was display:none has width 0 until this fires.
+      const id = requestAnimationFrame(() => { try { window.dispatchEvent(new Event("resize")); } catch(e){} });
+      was.current = show;
+      return () => cancelAnimationFrame(id);
+    }
+    was.current = show;
+  }, [show]);
+  return (
+    <div ref={ref} hidden={!show} data-wall-section={title || ""}>
+      {divider && title && <div className="dash-divider">{title}</div>}
+      {children}
+    </div>
+  );
+}
+
 function Dashboard({ meta, initialData, initialWeek, onWall }){
   const { materials, vehicles, units, months, factors } = meta;
   const [data, setData] = useState(initialData || null);
@@ -160,6 +228,32 @@ function Dashboard({ meta, initialData, initialWeek, onWall }){
   const [wall, setWall] = useState(false);           // big-screen mode
   const [tick, setTick] = useState(0);               // bumps every 5 min in big-screen mode
   const [stamp, setStamp] = useState(null);
+  // --- 15 Sep: how the big screen is divided ---------------------------------------
+  const pinned = screenFromHash(DASH_SECTIONS.length);   // "#dashboard/3" → 3
+  const [wallLayout, setWallLayout] = useState(() => {
+    if(pinned) return "single";                          // a pinned URL wins on first load
+    try { const v = localStorage.getItem("rbe_dash_wall_layout"); return ["all","rotate","single"].includes(v) ? v : "all"; } catch(e){ return "all"; }
+  });
+  const [wallSection, setWallSection] = useState(() => {
+    if(pinned) return pinned - 1;
+    try { const n = parseInt(localStorage.getItem("rbe_dash_wall_section"), 10); return (n >= 0 && n < DASH_SECTIONS.length) ? n : 0; } catch(e){ return 0; }
+  });
+  const [rotateSecs, setRotateSecs] = useState(() => {
+    try { const n = parseInt(localStorage.getItem("rbe_dash_rotate_s"), 10); return DASH_ROTATE_CHOICES.includes(n) ? n : 20; } catch(e){ return 20; }
+  });
+  const pickLayout = (v) => { setWallLayout(v); try { localStorage.setItem("rbe_dash_wall_layout", v); } catch(e){} };
+  const pickSection = (i) => { setWallSection(i); try { localStorage.setItem("rbe_dash_wall_section", String(i)); } catch(e){} };
+  const pickRotate = (n) => { setRotateSecs(n); try { localStorage.setItem("rbe_dash_rotate_s", String(n)); } catch(e){} };
+  // the timer exists only while rotating ON the big screen — never on the working view,
+  // where a section quietly changing under the reader would be a fault, not a feature
+  useEffect(() => {
+    if(!wall || wallLayout !== "rotate") return;
+    const id = setInterval(() => setWallSection(s => (s + 1) % DASH_SECTIONS.length), rotateSecs * 1000);
+    return () => clearInterval(id);
+  }, [wall, wallLayout, rotateSecs]);
+  // ⚠️ `all` is the only layout that shows everything; the working view ALWAYS does,
+  // whatever is remembered, so leaving the big screen can never hide half the page.
+  const sectionShown = (i) => !wall || wallLayout === "all" || wallSection === i;
 
   useEffect(() => {
     if(initialData) return;
@@ -392,8 +486,35 @@ function Dashboard({ meta, initialData, initialWeek, onWall }){
           <select className={sel} value={toM} onChange={e => setToM(+e.target.value)}>{Array.from({ length: months.count }, (_, i) => i + 1).map(i => <option key={i} value={i}>{monthLabelAbs(i, months.start_year)}</option>)}</select>
                 </div>}
 
-      <DashboardToday meta={meta} week={week} err={weekErr} wall={wall} />
+      {wall && <div className="dash-wallbar">
+        <span className="dash-wallbar-lbl">Big screen</span>
+        {[["all", "All four"], ["rotate", "Rotate"], ["single", "One section"]].map(([v, t]) =>
+          <button key={v} type="button" onClick={() => pickLayout(v)}
+                  className={"dash-wallbar-btn" + (wallLayout === v ? " is-on" : "")}
+                  title={v === "all" ? "Every section on this screen, divided and labelled"
+                       : v === "rotate" ? "One section at a time, advancing on a timer"
+                       : "One section, chosen here — or pin a display to it with #dashboard/1 … /4 in the address bar"}>{t}</button>)}
+        {wallLayout !== "all" && <span className="dash-wallbar-sep" />}
+        {wallLayout !== "all" && DASH_SECTIONS.map((s, i) =>
+          <button key={s.key} type="button" onClick={() => { pickSection(i); }}
+                  className={"dash-wallbar-btn" + (wallSection === i ? " is-on" : "")}
+                  title={`Section ${i + 1} · ${s.title} · pin a screen to it with #dashboard/${i + 1}`}>{i + 1}. {s.title}</button>)}
+        {wallLayout === "rotate" && <React.Fragment>
+          <span className="dash-wallbar-sep" />
+          <span className="dash-wallbar-lbl">every</span>
+          <select className="dash-wallbar-sel" value={rotateSecs} onChange={e => pickRotate(+e.target.value)}
+                  title="How long each section stays on screen">
+            {DASH_ROTATE_CHOICES.map(n => <option key={n} value={n}>{n < 60 ? `${n} s` : `${n / 60} min`}</option>)}
+          </select>
+        </React.Fragment>}
+        {wallLayout === "single" && <span className="dash-wallbar-note">this screen is showing section {wallSection + 1} of {DASH_SECTIONS.length} · open <code>#dashboard/{wallSection + 1}</code> on another display to pin it there</span>}
+      </div>}
 
+      <WallSection show={sectionShown(0)} divider={wall && wallLayout === "all"} title={DASH_SECTIONS[0].title}>
+        <DashboardToday meta={meta} week={week} err={weekErr} wall={wall} />
+      </WallSection>
+
+      <WallSection show={sectionShown(1)} divider={wall && wallLayout === "all"} title={DASH_SECTIONS[1].title}>
       <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-3">
         <Group title="Delivered to date" tone="var(--green)">
           <Fig value={K.actualT == null ? "—" : bigNum(K.actualT)} label="tonnes moved" sub={K.actualT == null ? "nothing reported yet" : `${K.reportedN} of ${D.lines} line-months reported`} tone="var(--green)"
@@ -428,9 +549,11 @@ function Dashboard({ meta, initialData, initialWeek, onWall }){
           <Fig value={K.peakMonth} label="peak month" sub={K.peakMonthT ? `${bigNum(K.peakMonthT)} t` : "by tonnage"} title={K.peakMonthT ? `${K.peakMonth}: ${grp(K.peakMonthT)} t planned — the busiest month in view` : "The month with the most planned tonnes"} />
         </Group>
       </div>
+      </WallSection>
 
       {D.empty && <div className="card p-6 text-center text-slate-500 text-sm">No forecasts match these filters.</div>}
 
+      <WallSection show={sectionShown(2)} divider={wall && wallLayout === "all"} title={DASH_SECTIONS[2].title}>
       <div className="grid lg:grid-cols-3 gap-4">
         <div className="card p-4 lg:col-span-2">
           <div className="text-sm font-semibold text-slate-700 mb-1 chart-title">Material demand over time <span className="text-slate-400 font-normal">({unitLabel})</span></div>
@@ -465,8 +588,11 @@ function Dashboard({ meta, initialData, initialWeek, onWall }){
           <ChartCanvas config={topCfg} height={wall ? 280 : 240} />
         </div>
       </div>
+      </WallSection>
 
-      <DashboardStockChart meta={meta} weekNow={week && week.today_week} wall={wall} tick={tick} />
+      <WallSection show={sectionShown(3)} divider={wall && wallLayout === "all"} title={DASH_SECTIONS[3].title}>
+        <DashboardStockChart meta={meta} weekNow={week && week.today_week} wall={wall} tick={tick} />
+      </WallSection>
 
       {!wall && <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-700">Route planning detail <span className="text-slate-400 font-normal">· click a row to focus the charts on that line · click a column to sort · € as total, and €/t · €/trip · €/km on hover</span></div>
@@ -890,10 +1016,12 @@ function Login({ onSignIn, onBack, savedName }){
         <button onClick={onBack} className="w-full mt-2 py-2 text-sm text-slate-500 hover:text-slate-700">
           Back to public map
         </button>
+        {/* 15 Sep — the three demo codes were printed here in full. They are opt-in on the
+            server now (ALLOW_DEMO_CODES, never set on Render) and this box no longer names
+            them. Nothing here should tell a reader a credential that works. */}
         <p className="text-[11px] text-slate-400 mt-5 leading-relaxed">
           Your IPT's code shows only your IPT's forecast lines. The planner code sees every IPT and can
-          approve. Codes are checked by the server; with none configured, the three demo codes
-          (<code>submitter123</code> / <code>planner123</code> / <code>admin123</code>) still work.
+          approve. Codes are checked by the server — ask your planner if you do not have one.
         </p>
       </div>
     </div>
@@ -940,11 +1068,28 @@ const DATA_PAGES = ["locations", "routes", "zones"];
 // 2026-09-14 — deep links. Derived from NAV so a new page cannot be linkable-but-unknown
 // or known-but-unlinkable; the two lists cannot drift.
 const PAGE_IDS = new Set(NAV.flatMap(g => g.items.map(i => i.id)));
-function pageFromHash(){
+// 2026-09-15 — a hash may now carry ONE trailing "/n" after the page id, for a screen
+// number: "#dashboard/3". That is how four wall displays each show a different quarter
+// of the Dashboard — four browsers, four URLs, no per-screen configuration to keep in
+// step. The page-id check is unchanged and still comes from NAV, so a bad suffix degrades
+// to the plain page rather than to nothing.
+function hashParts(){
   try {
-    const h = decodeURIComponent((window.location.hash || "").replace(/^#\/?/, "")).trim();
-    return PAGE_IDS.has(h) ? h : null;
-  } catch(e){ return null; }
+    const raw = decodeURIComponent((window.location.hash || "").replace(/^#\/?/, "")).trim();
+    const cut = raw.indexOf("/");
+    const id = cut === -1 ? raw : raw.slice(0, cut);
+    const rest = cut === -1 ? "" : raw.slice(cut + 1);
+    return PAGE_IDS.has(id) ? { page: id, rest } : { page: null, rest: "" };
+  } catch(e){ return { page: null, rest: "" }; }
+}
+function pageFromHash(){ return hashParts().page; }
+//: 1-based screen number from "#dashboard/3", or null. Out of range is null, not a clamp:
+//: a typo should show the whole board, not silently a different quarter of it.
+function screenFromHash(max){
+  const { page, rest } = hashParts();
+  if(!page || !/^[0-9]+$/.test(rest)) return null;
+  const n = parseInt(rest, 10);
+  return (n >= 1 && n <= max) ? n : null;
 }
 
 // One header for every page: title, one line of purpose, actions on the right.
