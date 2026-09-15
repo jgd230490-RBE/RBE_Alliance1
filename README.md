@@ -56,18 +56,27 @@ route IDs baked into the map, so add/edit here if the route network changes.
 
 ## Who can do what
 
-Open the app and use an access code on the **Staff sign in** screen:
+Open the app and use an access code on the **Staff sign in** screen. The codes are set
+on the server — `IPT1_CODE` … `IPT6_CODE`, `PLANNER_CODE`, `ADMIN_CODE` (see
+`env.example`):
 
 | Code | Role | Can do |
 |------|------|--------|
-| `submitter123` | Submitter | Enter & save forecasts |
-| `planner123` | Planner | + Approve / reject |
-| `admin123` | Admin | + Approve / reject |
+| an IPT code | IPT | Enter & save forecasts, sees only that IPT's lines |
+| `PLANNER_CODE` | Planner | Every IPT, + approve / reject |
+| `ADMIN_CODE` | Admin | + the admin surface (which still needs `ADMIN_TOKEN`) |
 
-The public map needs no login.
+**2026-09-15 — the three demo codes are opt-in.** `submitter123` / `planner123` /
+`admin123` used to work whenever no real code was configured, and the sign-in box named
+all three. They are no longer printed anywhere in the app and the server honours them
+only when `ALLOW_DEMO_CODES=1` is set **and** no real code exists — a local checkout, not
+a deployment. With neither, nobody signs in: it fails closed.
 
-> These codes are demo-only and live in the frontend. **Replace them with real
-> authentication before this is exposed to anyone outside the team.**
+The public map needs the shared `MAP_PASSWORD` (or a staff sign-in). The user guide at
+`/help/` needs a staff sign-in.
+
+> This is an access filter, not authentication. The codes are shared secrets typed into a
+> browser and there is no rate limit. **Phase 6 replaces them with real logins.**
 
 ---
 

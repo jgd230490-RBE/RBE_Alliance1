@@ -1,137 +1,164 @@
-rbe-guide-roles-0914.zip — the user guide becomes role-aware, gains troubleshooting,
-                           and an admin technical appendix
-================================================================================
-Delivered 2026-09-14 (evening). Extract over the repo root. Cut against HEAD e88b58a.
+RBE Alliance 1 — rbe-tighten-0915.zip
+=====================================
+Cut 2026-09-15 against repo HEAD ca6ee38 ("Add files via upload", 14 Sep 13:50).
+Fifteen files. No schema change. No new pip or CDN dependency. factors.json NOT included.
 
-*** THIS INCLUDES rbe-map-gate-0914-v2.zip IN FULL. ***
-If you have not applied v2 yet, apply this instead — it is a strict superset and it is
-the only one you need. If you HAVE applied v2, this adds to it cleanly.
-
-  backend/gate.py                        (from v2) the /map/ and /help/ gate
-  backend/main.py                        (from v2) middleware, refusal pages, /api/map-auth
-  backend/tests/test_gate.py             (from v2) 111 assertions
-  backend/tests/test_lookahead.py        (from v2) the date-bomb fix
-  env.example                            (from v2) MAP_PASSWORD / GATE_SECRET / MAP_GATE
-  frontend/index.html               NEW  User guide link + hash routing (#dashboard etc.)
-  frontend/help/index.html          NEW  role switcher, troubleshooting, Appendix D
-  frontend/help/media/*.png         NEW  22 placeholder figures REGENERATED
-  backend/tests/test_help.py        NEW  39 assertions (was 17)
-  backend/tests/parse_frontend.js   NEW  +11 assertions
-  backend/tests/help_browser_check.js NEW  32 assertions in real Chromium
-
-NO schema change. NO new runtime dependency. factors.json NOT in this zip.
+VERIFIED: extracted over a FRESH clone of ca6ee38 and the suite run there —
+3,063 passed / 1 failed. Plain HEAD before this zip was 3,037 / 1. The one failure is
+the same one it has been since 10 Sep: frontend/help/media/placeholder.pl. See ACTIONS.
 
 
-STILL THE ONLY THING YOU MUST DO ON RENDER
-------------------------------------------
-    MAP_PASSWORD = <the string you hand to stakeholders>
+WHAT IS IN IT — five of your seven items
+========================================
 
-Without it the map is closed to everyone outside the alliance. Staff are unaffected.
+2. THE DEMO CODES ARE GONE FROM THE SIGN-IN BOX — AND FROM THE SERVER'S DEFAULT
+   You chose "remove the hint and the fallback".
 
+   Before: with none of the eight *_CODE variables set, submitter123 / planner123 /
+   admin123 worked, and the sign-in box printed all three. One missed Render variable
+   silently reopened the whole app to anyone with the URL.
 
-WHAT CHANGED IN THE GUIDE
--------------------------
-1. IT ADAPTS TO WHO IS READING IT. A switcher at the top — IPT submitter / Planner /
-   Admin. The link in the app's rail passes your role, so it opens on the right view and
-   says "signed in as planner". You can still look at another role's view; useful when
-   you are talking someone through a screen you can see and they cannot.
+   Now: backend/access.py honours them only when ALLOW_DEMO_CODES is truthy AND no real
+   code is configured. With neither, resolve() returns None and nobody signs in — it
+   fails closed, like MAP_PASSWORD, unlike ADMIN_TOKEN.
 
-   ⚠️ THE ROLE IS NOT A PERMISSION, AND IS NOT TREATED AS ONE. It arrives in the query
-   string and anyone can type ?role=admin. All that gets them is the technical appendix,
-   which is documentation. The sign-in gate decides who reads the page at all. Making it
-   tamper-proof would mean putting the role in the signed cookie and adding an endpoint —
-   a bigger change for no security gain, so it was not done. Say if you disagree.
+   >> DO NOT SET ALLOW_DEMO_CODES ON RENDER. <<
+   Your eight access codes are already set there, so this changes nothing for your team.
+   A blank variable counts as off, deliberately.
 
-   Planner and above: the Data pages (Locations, Routes, Zones, Config) and the
-   approve/reject section. Admin only: Appendix D.
+   The seven Python harnesses that sign in as planner123 now set the variable themselves
+   (one line each, at the head, beside the existing env-var pop loop).
 
-2. TROUBLESHOOTING ASKS WHAT YOU ARE SEEING. Twelve symptoms, each with a verdict on
-   whether it is a fault at all — because most of them are not. It leads with the one
-   that caught ME today: an empty map is almost always no month selected and forecast
-   routes switched off, not missing data.
+   Also updated: env.example (new section), README.md (its "Who can do what" table still
+   listed the three codes as the way in).
 
-3. APPENDIX D — TECHNICAL, ADMINS ONLY. How a haulage number is made; which figures are
-   measured, which are planning assumptions and which are unaudited (the carbon factor
-   is unaudited and says so); the live sources and how each fails; what leaves the
-   platform to third parties; and that the deployment must not be called secure.
+4. THE ROUTE LABEL IS A DAILY AVERAGE
+   It read "2221 Two-way" — one month's movements — while the KPI card beside it read
+   "101 MOVEMENTS / DAY". Two rates on one screen, two orders of magnitude apart.
 
-   ⚠️ IT IS A SUMMARY, NOT YOUR 53-PAGE TECHNICAL GUIDE. That document is not in the
-   Claude project and I have never seen it — this is written from the working notes.
-   Upload the .docx and I will fold the real thing in; until then the Word document is
-   the one that has been reviewed and Appendix D says so itself.
+   The division is the SERVER's, not the map's:
+     /api/public/route-forecasts  each route gains  per_day, peak_per_day, working_days
+     /api/public/forecast-matrix  the response gains  working_days
+   Both from main._working_days(), which is now the ONLY reader of
+   factors.planning.working_days_per_month — public_month_kpis was refactored onto it.
+   A zero or non-numeric value in a hand-edited factors.json falls back to 22 rather
+   than dividing a public endpoint by zero.
 
-4. THE 22 PLACEHOLDER FIGURES WERE REGENERATED. The old ones carried the line "Captured
-   from the live deployment", which was not true of the image — a dashed empty box. The
-   new ones say "Screenshot not yet captured" and name the screen. FILENAMES ARE
-   UNCHANGED on purpose: drop a real capture over S02.png and nothing else needs to
-   change. The five fig-*.png diagrams are genuine artwork and were not touched.
+   The label now reads "101 Two-way / day". The month figure is NOT thrown away: it
+   rides on the feature as f_month_total (timeline) / f_month_avg (window) so the popup
+   and the Forecast detail table go on showing a monthly number.
 
-5. EVERY FIGURE WITH A SCREEN BEHIND IT NOW LINKS INTO THE LIVE APP — 21 of the 27.
-   That needed the app to name its page in the URL, so #dashboard, #lookahead and the
-   rest now work: pages are bookmarkable, and the guide can point at one. The hash wins
-   over the remembered page on first load; an unknown hash is ignored. It REPLACES
-   rather than pushes, so Back still leaves the app instead of walking your click history.
+6. THE TIMELINE BAR
+   (a) "vehicles" -> "trips". NOT a blind string swap: the word comes from the API and
+       can be t or m3, and "4444 trips" over a tonnage would be a lie. Only the
+       vehicle-loads unit is renamed, via TL_UNIT_WORD, and it is renamed to the word
+       the rest of the product already uses (the Dashboard's TRIPS card, the map KPI
+       card's "101 trips/d").
+   (b) The overlap. #tl-label had min-width:190px and white-space:nowrap but no flex
+       sizing, so as a flex item it shrank to exactly 190px while its text kept its
+       natural width and painted straight over the select. flex:0 0 auto fixes it: the
+       box is max(content, 190px) and can never be squeezed under its own text.
+   (c) The speed select is half the width it was (50px, centred, smaller type) — five
+       two-character options did not need what it had.
+   The range slider is now the only item in the bar allowed to give ground.
 
-6. TWO STALE CLAIMS FIXED. The guide said the public map needs no sign-in, in two
-   places. It has not since this morning.
+3. THE BIG SCREEN SPLITS INTO FOUR
+   Sections, in the page's own order so nothing moves relative to the working view:
+     1 Today       the today strip + this week's lines on the map
+     2 Figures     Delivered to date / Volume / Cost / Carbon
+     3 Charts      demand, delivered, cost, trips, fleet, carbon, split, top routes
+     4 Stockpiles  the capacity chart
 
+   Three ways to show them, from a new bar that appears only in big-screen mode:
+     All four    every section on one screen, divided and labelled (what it did before)
+     Rotate      one at a time, advancing on a timer (10 s … 2 min, remembered)
+     One section chosen here — or pinned per display by URL
 
-FIRST LOOK
-----------
-1. Open the app, sign in, click "? User guide" at the foot of the rail. It should open
-   on YOUR role and say so at the top right.
-2. Switch to Admin. Appendix D appears in the body AND in the left nav. Switch back to
-   IPT submitter — the Data pages disappear from both.
-3. Click "Something looks wrong →", then any symptom. One answer opens at a time and
-   says whether it is a fault.
-4. Click "open it in the app →" under any figure — a new tab on that screen.
-5. Sign out, open /help/ — you should be told to sign in, not shown the guide.
+   >> FOUR SCREENS: open #dashboard/1 on the first, #dashboard/2 on the second, and so
+      on. Each browser shows that section and nothing else. Nothing to configure on the
+      machines themselves, and a pinned URL wins over whatever that browser remembered.
+      A number outside 1–4 is ignored and you get the whole board, not a silent guess.
 
+   HIDDEN, NEVER UNMOUNTED — and this is the part worth knowing. Section 1 holds a
+   CommitMap, which is a real mapboxgl.Map. Rotating by unmounting would destroy and
+   rebuild a WebGL context every few seconds on a display left running all day; browsers
+   cap those at about sixteen and the tiles would be re-fetched each time. So a hidden
+   section keeps its DOM and its instances, and fires one window resize when it comes
+   back into view, because Mapbox and Chart.js both measure zero inside display:none.
+   The working view always shows all four whatever the big screen remembered.
 
-ASSERTIONS
-----------
-  3,037 passed, 1 failed in the default suite (18 files).
-  PLUS 32 in real headless Chromium — backend/tests/help_browser_check.js.
+5. STREET VIEW — NOT A BUG. THE KEY IS NOT SET ON RENDER.
+   Nothing in this zip. Measured on the live deployment, 15 Sep:
 
-  The 1 failure is the same one as always: test_help.py's "no media file is orphaned",
-  which is frontend/help/media/placeholder.pl. A ZIP CANNOT DELETE IT — delete that one
-  file in the GitHub web UI and test_help goes 40 / 0. Outstanding since 10 Sep.
+     GET /api/streetview/meta?lat=59.4207&lon=24.8890
+     -> 200 {"available":false,"status":"NO_KEY",
+             "error":"GOOGLE_MAPS_API_KEY is not set on the server"}
 
-  Baseline: plain HEAD was 2,892 / 2.
+   Set GOOGLE_MAPS_API_KEY on Render (Google Maps Platform — a separate key and separate
+   billing from HERE) and Street View starts working with no code change.
+   GOOGLE_MAPS_URL_SIGNING_SECRET is optional and recommended.
 
+   Same shape as E23, where MAPBOX_TOKEN was never on Render either.
 
-⚠️ WHAT IS NOT PROVEN
----------------------
-  * THE GUIDE IS NOW VERIFIED IN A REAL BROWSER — role filtering, the nav, the
-    troubleshooting picker, the deep links and the ?role= handover all run in Chromium
-    and are asserted, not inferred. That is new and it is the strongest coverage any
-    page in this repo has.
-  * THE APP IS NOT. Hash routing is asserted at SOURCE level only. React cannot be
-    rendered in the harness the way the static guide can. Check #2 and #4 above.
-  * THE BABEL CHECK STILL CANNOT RUN. npm answers 403 for @babel/standalone. The app
-    was transpiled and server-rendered through TypeScript, and scanned for duplicate
-    top-level declarations (104 declarations, none duplicated). TypeScript accepts some
-    things Babel refuses. If the app goes blank, it is one of the two frontend changes.
-  * NO FRESH-CLONE CHECK. The repo is private and the sandbox has no credentials. This
-    was verified against the 07:39 clone reset to HEAD with `git clean -fdx` and the zip
-    extracted over it. If you uploaded anything after 07:39 today, diff before extracting.
-
-
-ONE MISTAKE WORTH KNOWING ABOUT
--------------------------------
-While fixing the "map needs no sign-in" sentence in section 8, I replaced the whole
-paragraph instead of the sentence, and silently deleted the Control Panel description
-with it. I caught it and restored it from HEAD. There is now an assertion that the
-Control Panel text survives — correcting a stale sentence must not cost the paragraph
-around it.
+   >> A SECOND, SEPARATE DEFECT, NOT FIXED HERE: the map asks /streetview/meta first and,
+      when available is false, renders NOTHING and says nothing. So a missing key, a
+      Google outage and "there is genuinely no imagery down this quarry track" all look
+      identical to the reader — which is exactly the Tark Tee complaint already logged as
+      E16. Say the word and the popup gets one line naming which of the three it is.
 
 
-STILL OPEN
-----------
-  * The 22 real screenshots. I cannot take them: the browser pane returns images to me,
-    not files I can put in a zip, so my earlier offer to capture them was wrong. Either
-    you capture them (the filenames and the figure list tell you exactly what each one
-    is), or they stay as honest placeholders, which is far better than where they were.
-  * Per-person logins (Phase 6) still replace the shared codes and the shared map
-    password. Do not describe the deployment as secure.
-  * The real technical guide (.docx) to fold into Appendix D.
+WHAT IS NOT IN IT
+=================
+1. THE HELP-GUIDE SCREENSHOTS. Eleven arrived; the guide has 23 slots. Nothing has been
+   put into frontend/help/media/ yet — the catalogue and the list of what is still
+   missing is in the chat and in claude/help-screenshots-0915.md.
+
+7. SORTING AND COLUMN RESIZE ON ALL TABLES. Deliberately left out. There are seventeen
+   tables; four of them (the Look-ahead day grid and the month matrices) are grids, not
+   row lists, where sorting rows means nothing. Doing it properly is one shared
+   component applied to twelve call sites, not seventeen one-off patches, and it is a
+   slice rather than a tighten-up. Scoped in the chat with the one decision it needs.
+
+
+ACTIONS FOR YOU
+===============
+[ ] Extract over the repo root. Nothing is renamed; nothing needs deleting.
+[ ] Do NOT add ALLOW_DEMO_CODES to Render. Check your eight access codes are still set
+    there BEFORE deploying this — with them unset and no opt-in, nobody can sign in.
+    That is the intended behaviour, but find out now rather than at the sign-in screen.
+[ ] Set GOOGLE_MAPS_API_KEY on Render to turn Street View on.
+[ ] Still outstanding from 10 Sep: delete frontend/help/media/placeholder.pl in the
+    GitHub web UI. A zip cannot delete a file. test_help goes 39/1 -> 40/0.
+
+FIRST LOOK, once deployed
+  1. Sign in. The box under the button must no longer name any code.
+  2. Public map -> Play the timeline. The bar reads "... N routes · N trips", the month
+     label no longer sits under the speed box, and the label on each route reads a
+     two-or-three-figure daily rate, not a four-figure monthly one.
+  3. Dashboard -> Big screen. The new bar appears. Try Rotate; watch the map in section 1
+     survive a full cycle and still draw. Then open #dashboard/4 in a second window.
+  4. Leave the working view and come back: all four sections are there.
+
+
+WHAT IS NOT TESTED
+==================
+- The Babel compile check still cannot be run (npm returns 403 for @babel/standalone).
+  The substitute is render_frontend.js plus an AST duplicate-declaration scan. TypeScript
+  accepts what Babel refuses — that is how a duplicate function blanked the page on
+  9 Sep. This delivery adds one new top-level component (WallSection) and three new
+  top-level functions (hashParts, pageFromHash, screenFromHash); the scan sees no
+  duplicate, but a real Babel compile has not run.
+- Nothing in this zip has been seen in a browser. The staff app cannot be rendered in the
+  sandbox at all — the CDNs it loads (Tailwind, React, Babel, Chart.js, Mapbox) are all
+  blocked by the egress proxy. Every frontend claim above is source-level plus the
+  TypeScript render harness.
+- The rotate timer, the resize nudge, and Mapbox surviving a hide/show cycle: asserted at
+  source level only. Item 3 of FIRST LOOK is the one that actually proves them.
+- /api/public/route-forecasts and /forecast-matrix were exercised against SQLite with the
+  test scaffold's data, not against Postgres with your 8 routes.
+
+26 new assertions. Each was broken on purpose and the right one was seen to fail
+(11 mutations: per_day back to avg, the demo fallback reopened, the label back to the
+month total, the flex fix removed, the unit word un-mapped, the codes back in the box,
+unmount instead of hide, the resize nudge dropped, the working view inheriting the wall
+layout, a clamped screen number, and the rotate timer left running).
