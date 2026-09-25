@@ -5,7 +5,7 @@
 window.CONFIG = {
   // Mapbox public token. This is a browser (pk.) token and is safe to expose,
   // but you SHOULD restrict it by URL in your Mapbox account, and can rotate it here.
-  MAPBOX_TOKEN: "pk.eyJ1IjoiamdkMjMwNDE5OTAiLCJhIjoiY21xbnJzaTRrMDYyOTJxcXowczRxNTlxdyJ9.xujuSc3O8RcgKIitWNGIWg",
+  MAPBOX_TOKEN: "pk.eyJ1IjoiamdkMjMwNDE5OTAiLCJhIjoiY211aDB1YTJtMHF3YzJ4cnpodTlsb2czOSJ9.B1oY8QnGB2YRBz0rV1klfg",
 
   // Where the forecast API lives. "/api" = same server that serves this map.
   API_BASE: "/api",
